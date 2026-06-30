@@ -137,15 +137,26 @@ void BasicEffect::SetMaterial(const Material& material)
     TextureManager& tm = TextureManager::Get();
 
     PhongMaterial phongMat{};
-    phongMat.ambient = material.Get<XMFLOAT4>("$AmbientColor");
     phongMat.diffuse = material.Get<XMFLOAT4>("$DiffuseColor");
     phongMat.diffuse.w = material.Get<float>("$Opacity");
     phongMat.specular = material.Get<XMFLOAT4>("$SpecularColor");
     phongMat.specular.w = material.Has<float>("$SpecularFactor") ? material.Get<float>("$SpecularFactor") : 1.0f;
-    pImpl->m_pEffectHelper->GetConstantBufferVariable("g_Material")->SetRaw(&phongMat);
 
     auto pStr = material.TryGet<std::string>("$Diffuse");
-    pImpl->m_pEffectHelper->SetShaderResourceByName("g_DiffuseMap", pStr ? tm.GetTexture(*pStr) : tm.GetNullTexture());
+    if (pStr)
+    {
+        phongMat.ambient = material.Get<XMFLOAT4>("$AmbientColor");
+        pImpl->m_pEffectHelper->SetShaderResourceByName("g_DiffuseMap", tm.GetTexture(*pStr));
+    }
+    else
+    {
+        // No texture: derive ambient from diffuse so solid-color materials show correctly
+        phongMat.ambient = XMFLOAT4(phongMat.diffuse.x * 0.4f, phongMat.diffuse.y * 0.4f,
+                                     phongMat.diffuse.z * 0.4f, 1.0f);
+        pImpl->m_pEffectHelper->SetShaderResourceByName("g_DiffuseMap", tm.GetNullTexture());
+    }
+
+    pImpl->m_pEffectHelper->GetConstantBufferVariable("g_Material")->SetRaw(&phongMat);
 }
 
 MeshDataInput BasicEffect::GetInputData(const MeshData& meshData)

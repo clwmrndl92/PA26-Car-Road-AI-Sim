@@ -60,23 +60,25 @@ void GameApp::UpdateScene(float dt)
     {
         Ray ray = Ray::ScreenToRay(*m_pCamera, io.MousePos.x, io.MousePos.y);
 
-        float distHouse = FLT_MAX, distGround = FLT_MAX;
-        bool hitHouse  = ray.Hit(m_House.GetBoundingBox(),  &distHouse);
-        bool hitGround = ray.Hit(m_Ground.GetBoundingBox(), &distGround);
-
         XMFLOAT3 target;
         bool switchToThird = false;
 
-        if (hitHouse && (!hitGround || distHouse <= distGround))
+        float distCar = FLT_MAX;
+        int hitCarIdx = -1;
+        for (int i = 0; i < CAR_COUNT; i++)
         {
-            m_PickedObjectName = "House";
-            target = m_House.GetBoundingBox().Center;
-            switchToThird = true;
+            float d = FLT_MAX;
+            if (ray.Hit(m_Cars[i].GetBoundingBox(), &d) && d < distCar)
+            {
+                distCar = d;
+                hitCarIdx = i;
+            }
         }
-        else if (hitGround)
+
+        if (hitCarIdx >= 0)
         {
-            m_PickedObjectName = "Ground";
-            target = m_Ground.GetBoundingBox().Center;
+            m_PickedObjectName = "Car_" + std::to_string(hitCarIdx);
+            target = m_Cars[hitCarIdx].GetBoundingBox().Center;
             switchToThird = true;
         }
         else
@@ -205,8 +207,11 @@ void GameApp::DrawScene()
     m_pd3dImmediateContext->RSSetViewports(1, &viewport);
 
     m_BasicEffect.SetRenderDefault();
-    m_Ground.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
-    m_House.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
+    m_Road.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
+    for (int i = 0; i < ROAD_DASH_COUNT; i++)
+        m_RoadDashes[i].Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
+    for (int i = 0; i < CAR_COUNT; i++)
+        m_Cars[i].Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
@@ -221,24 +226,46 @@ bool GameApp::InitResource()
     // Initialize game objects
     //
 
-    // Initialize ground
-    Model* pModel = m_ModelManager.CreateFromFile("Model\\ground_19.obj");
-    m_Ground.SetModel(pModel);
-    pModel->SetDebugObjectName("ground_19");
+    // Road surface - gray plane (8m wide, 100m long, runs along Z)
+    {
+        Model* pRoad = m_ModelManager.CreateFromGeometry("road", Geometry::CreatePlane(8.0f, 100.0f));
+        pRoad->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.22f, 0.22f, 0.22f, 1.0f));
+        pRoad->materials[0].Set<float>("$Opacity", 1.0f);
+        m_Road.SetModel(pRoad);
+        m_Road.GetTransform().SetPosition(0.0f, 0.02f, 0.0f);
+    }
 
-    // Initialize house model
-    pModel = m_ModelManager.CreateFromFile("Model\\house.obj");
-    m_House.SetModel(pModel);
-    pModel->SetDebugObjectName("house");
+    // White dashed center line (3m dash / 3m gap)
+    {
+        Model* pDash = m_ModelManager.CreateFromGeometry("road_dash", Geometry::CreatePlane(0.2f, 3.0f));
+        pDash->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f));
+        pDash->materials[0].Set<float>("$Opacity", 1.0f);
+        for (int i = 0; i < ROAD_DASH_COUNT; i++)
+        {
+            m_RoadDashes[i].SetModel(pDash);
+            float z = -45.0f + i * 6.0f;
+            m_RoadDashes[i].GetTransform().SetPosition(0.0f, 0.03f, z);
+        }
+    }
 
-    // Get house bounding box
-    XMMATRIX S = XMMatrixScaling(0.015f, 0.015f, 0.015f);
-    BoundingBox houseBox = m_House.GetModel()->boundingbox;
-    houseBox.Transform(houseBox, S);
-    // Place house flush with the ground
-    Transform& houseTransform = m_House.GetTransform();
-    houseTransform.SetScale(0.015f, 0.015f, 0.015f);
-    houseTransform.SetPosition(0.0f, -(houseBox.Center.y - houseBox.Extents.y + 1.0f), 0.0f);
+    // Initialize car models
+    static const char* carFiles[CAR_COUNT] = {
+        "Model\\car_1.obj",
+        "Model\\car_2.obj",
+        "Model\\car_jeep.obj",
+        "Model\\car_littletruck.obj",
+        "Model\\car_truck.obj",
+        "Model\\car_tsal.obj",
+        "Model\\car_van.obj"
+    };
+    for (int i = 0; i < CAR_COUNT; i++)
+    {
+        Model* pModel = m_ModelManager.CreateFromFile(carFiles[i]);
+        m_Cars[i].SetModel(pModel);
+        m_Cars[i].GetTransform().SetScale(1.0f, 1.0f, 1.0f);
+
+        m_Cars[i].GetTransform().SetPosition((i - 3) * 8.0f, 0.0f, 0.0f);
+    }
     
     // ******************
     // Initialize camera

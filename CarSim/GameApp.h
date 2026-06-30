@@ -39,8 +39,13 @@ private:
 
     std::unique_ptr<Depth2D> m_pDepthTexture;                   // Depth buffer
 
-    GameObject m_House;										    // House object
-    GameObject m_Ground;										// Ground object
+    GameObject m_Road;
+
+    static constexpr int CAR_COUNT = 7;
+    GameObject m_Cars[CAR_COUNT];
+
+    static constexpr int ROAD_DASH_COUNT = 16;
+    GameObject m_RoadDashes[ROAD_DASH_COUNT];
 
     std::shared_ptr<Camera> m_pCamera;							// Active camera
     CameraMode m_CameraMode = CameraMode::ThirdPerson;
