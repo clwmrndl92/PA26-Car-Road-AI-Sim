@@ -45,24 +45,24 @@ foreach(HLSL_FILE ${HLSL_FILES})
                                 VS_SHADER_ENABLE_DEBUG $<$<CONFIG:Debug>:true>)
 endforeach()
 
-add_executable(PA26_CarSim WIN32 ${DIR_SRCS} ${HEADER_FILES} ${HLSL_FILES})
-target_link_libraries(PA26_CarSim d3d11.lib dxgi.lib dxguid.lib D3DCompiler.lib winmm.lib)
+add_executable(CarSim WIN32 ${DIR_SRCS} ${HEADER_FILES} ${HLSL_FILES})
+target_link_libraries(CarSim d3d11.lib dxgi.lib dxguid.lib D3DCompiler.lib winmm.lib)
 
 # ImGui
-target_link_libraries(PA26_CarSim ImGui)
+target_link_libraries(CarSim ImGui)
 file(COPY imgui.ini DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
 
 # Assimp
-target_link_libraries(PA26_CarSim assimp)
-set_target_properties(PA26_CarSim PROPERTIES VS_DEBUGGER_ENVIRONMENT "PATH=${ASSIMP_LIBRARY_OUTPUT_DIRECTORY}/$<IF:$<CONFIG:Debug>,Debug,Release>")
-add_custom_command(TARGET PA26_CarSim POST_BUILD
+target_link_libraries(CarSim assimp)
+set_target_properties(CarSim PROPERTIES VS_DEBUGGER_ENVIRONMENT "PATH=${ASSIMP_LIBRARY_OUTPUT_DIRECTORY}/$<IF:$<CONFIG:Debug>,Debug,Release>")
+add_custom_command(TARGET CarSim POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         $<TARGET_FILE:assimp>
-        $<TARGET_FILE_DIR:PA26_CarSim>
+        $<TARGET_FILE_DIR:CarSim>
 )
 
 # Common
-target_link_libraries(PA26_CarSim Common)
+target_link_libraries(CarSim Common)
 
 # Assets
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/Texture)
@@ -73,8 +73,8 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/Model)
 endif()
 
 source_group("Shaders" FILES ${HLSL_FILES})
-set_target_properties(PA26_CarSim PROPERTIES OUTPUT_NAME "PA26 Car Sim")
+set_target_properties(CarSim PROPERTIES OUTPUT_NAME "CarSim")
 
-set_target_properties(PA26_CarSim PROPERTIES RUNTIME_OUTPUT_DIRECTORY_DEBUG ${CMAKE_CURRENT_BINARY_DIR})
-set_target_properties(PA26_CarSim PROPERTIES RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_CURRENT_BINARY_DIR})
-set_target_properties(PA26_CarSim PROPERTIES FOLDER "PA26 Car Sim")
+set_target_properties(CarSim PROPERTIES RUNTIME_OUTPUT_DIRECTORY_DEBUG ${CMAKE_CURRENT_BINARY_DIR})
+set_target_properties(CarSim PROPERTIES RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_CURRENT_BINARY_DIR})
+set_target_properties(CarSim PROPERTIES FOLDER "CarSim")

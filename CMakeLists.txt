@@ -63,7 +63,7 @@ add_subdirectory("ImGui")
 set_target_properties(ImGui PROPERTIES FOLDER "ImGui")
 
 add_subdirectory("Common")
-add_subdirectory("PA26 Car Sim")
+add_subdirectory("CarSim")
 
 
 
