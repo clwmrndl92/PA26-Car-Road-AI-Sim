@@ -2,7 +2,6 @@
 // Vertex.h by X_Jun(MKXJun) (C) 2018-2022 All Rights Reserved.
 // Licensed under the MIT License.
 //
-// 定义了一些顶点结构体和输入布局
 // Defines vertex structures and input layouts.
 //***************************************************************************************
 

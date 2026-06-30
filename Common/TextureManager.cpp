@@ -11,7 +11,7 @@ using namespace Microsoft::WRL;
 
 namespace
 {
-    // TextureManager单例
+    // TextureManager singleton
     TextureManager* s_pInstance = nullptr;
 }
 
@@ -38,7 +38,7 @@ void TextureManager::Init(ID3D11Device* device)
     m_pDevice = device;
     m_pDevice->GetImmediateContext(m_pDeviceContext.ReleaseAndGetAddressOf());
 
-    // 加一张1x1的空纹理
+    // Add a 1x1 null texture
     ComPtr<ID3D11Texture2D> pTex;
     CD3D11_TEXTURE2D_DESC nullTexDesc(DXGI_FORMAT_R8G8B8A8_UNORM, 1, 1, 1);
     D3D11_SUBRESOURCE_DATA initData{};
@@ -80,13 +80,13 @@ ID3D11ShaderResourceView* TextureManager::CreateFromFile(std::string_view filena
                 enableMips ? D3D11_RESOURCE_MISC_GENERATE_MIPS : 0);
             Microsoft::WRL::ComPtr<ID3D11Texture2D> tex;
             HR(m_pDevice->CreateTexture2D(&texDesc, nullptr, tex.GetAddressOf()));
-            // 上传纹理数据
+            // Upload texture data
             m_pDeviceContext->UpdateSubresource(tex.Get(), 0, nullptr, img_data, width * sizeof(uint32_t), 0);
             CD3D11_SHADER_RESOURCE_VIEW_DESC srvDesc(D3D11_SRV_DIMENSION_TEXTURE2D, 
                 forceSRGB ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM);
-            // 创建SRV
+            // Create SRV
             HR(m_pDevice->CreateShaderResourceView(tex.Get(), &srvDesc, res.ReleaseAndGetAddressOf()));
-            // 生成mipmap
+            // Generate mipmaps
             if (enableMips)
                 m_pDeviceContext->GenerateMips(res.Get());
             stbi_image_free(img_data);
@@ -134,13 +134,13 @@ ID3D11ShaderResourceView* TextureManager::CreateFromMemory(std::string_view name
             enableMips ? D3D11_RESOURCE_MISC_GENERATE_MIPS : 0);
         Microsoft::WRL::ComPtr<ID3D11Texture2D> tex;
         HR(m_pDevice->CreateTexture2D(&texDesc, nullptr, tex.GetAddressOf()));
-        // 上传纹理数据
+        // Upload texture data
         m_pDeviceContext->UpdateSubresource(tex.Get(), 0, nullptr, img_data, width * sizeof(uint32_t), 0);
         CD3D11_SHADER_RESOURCE_VIEW_DESC srvDesc(D3D11_SRV_DIMENSION_TEXTURE2D,
             forceSRGB ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM);
-        // 创建SRV
+        // Create SRV
         HR(m_pDevice->CreateShaderResourceView(tex.Get(), &srvDesc, res.ReleaseAndGetAddressOf()));
-        // 生成mipmap
+        // Generate mipmaps
         if (enableMips)
             m_pDeviceContext->GenerateMips(res.Get());
         stbi_image_free(img_data);

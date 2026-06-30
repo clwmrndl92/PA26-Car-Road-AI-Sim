@@ -2,7 +2,6 @@
 // GameObject.h by X_Jun(MKXJun) (C) 2018-2022 All Rights Reserved.
 // Licensed under the MIT License.
 //
-// 管理纹理资源
 // Simple game object.
 //***************************************************************************************
 

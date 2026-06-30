@@ -116,9 +116,9 @@ TextureCube::TextureCube(ID3D11Device* device, uint32_t width, uint32_t height,
         device->CreateRenderTargetView(m_pTexture.Get(), &rtvDesc, m_pTextureArrayRTV.GetAddressOf());
     }
 
-    if (bindFlags & D3D11_BIND_UNORDERED_ACCESS) 
+    if (bindFlags & D3D11_BIND_UNORDERED_ACCESS)
     {
-        // 单个子资源
+        // Individual subresources
         for (uint32_t i = 0; i < 6; ++i) {
             CD3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc(
                 D3D11_UAV_DIMENSION_TEXTURE2DARRAY,
@@ -133,9 +133,9 @@ TextureCube::TextureCube(ID3D11Device* device, uint32_t width, uint32_t height,
         }
     }
 
-    if (bindFlags & D3D11_BIND_SHADER_RESOURCE) 
+    if (bindFlags & D3D11_BIND_SHADER_RESOURCE)
     {
-        // 单个子资源
+        // Individual subresources
         for (uint32_t i = 0; i < 6; ++i) {
             CD3D11_SHADER_RESOURCE_VIEW_DESC srvElementDesc(
                 D3D11_SRV_DIMENSION_TEXTURE2DARRAY,
@@ -211,7 +211,7 @@ Texture2DArray::Texture2DArray(ID3D11Device* device, uint32_t width, uint32_t he
 
     if (bindFlags & D3D11_BIND_SHADER_RESOURCE)
     {
-        // 单个子资源
+        // Individual subresources
         for (uint32_t i = 0; i < arraySize; ++i) {
             CD3D11_SHADER_RESOURCE_VIEW_DESC srvElementDesc(
                 D3D11_SRV_DIMENSION_TEXTURE2DARRAY,
@@ -252,7 +252,7 @@ Texture2DMSArray::Texture2DMSArray(ID3D11Device* device, uint32_t width, uint32_
 {
     if (bindFlags & D3D11_BIND_RENDER_TARGET)
     {
-        // 单个子资源
+        // Individual subresources
         for (uint32_t i = 0; i < arraySize; ++i) {
             CD3D11_RENDER_TARGET_VIEW_DESC rtvDesc(
                 D3D11_RTV_DIMENSION_TEXTURE2DMSARRAY,
@@ -266,14 +266,14 @@ Texture2DMSArray::Texture2DMSArray(ID3D11Device* device, uint32_t width, uint32_
             m_pRenderTargetElements.push_back(pRTV);
         }
 
-        // 完整资源
+        // Full resource
         CD3D11_RENDER_TARGET_VIEW_DESC rtvDesc(D3D11_RTV_DIMENSION_TEXTURE2DMSARRAY, format, 0);
         device->CreateRenderTargetView(m_pTexture.Get(), &rtvDesc, m_pTextureArrayRTV.GetAddressOf());
     }
 
     if (bindFlags & D3D11_BIND_SHADER_RESOURCE)
     {
-        // 单个子资源
+        // Individual subresources
         for (uint32_t i = 0; i < arraySize; ++i) {
             CD3D11_SHADER_RESOURCE_VIEW_DESC srvElementDesc(
                 D3D11_SRV_DIMENSION_TEXTURE2DMSARRAY,
@@ -390,7 +390,7 @@ Depth2DArray::Depth2DArray(ID3D11Device* device, uint32_t width, uint32_t height
 {
     if (bindFlags & D3D11_BIND_DEPTH_STENCIL)
     {
-        // 单个子资源
+        // Individual subresources
         for (uint32_t i = 0; i < arraySize; ++i) {
             CD3D11_DEPTH_STENCIL_VIEW_DESC dsvElementDesc(
                 D3D11_DSV_DIMENSION_TEXTURE2DARRAY,
@@ -402,7 +402,7 @@ Depth2DArray::Depth2DArray(ID3D11Device* device, uint32_t width, uint32_t height
             m_pDepthStencilElements.push_back(pDSV);
         }
 
-        // 完整子资源
+        // Full resource
         CD3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc(
             D3D11_DSV_DIMENSION_TEXTURE2DARRAY,
             GetDepthDSVFormat(depthStencilBitsFlag), 0);
@@ -411,7 +411,7 @@ Depth2DArray::Depth2DArray(ID3D11Device* device, uint32_t width, uint32_t height
 
     if (bindFlags & D3D11_BIND_SHADER_RESOURCE)
     {
-        // 单个子资源
+        // Individual subresources
         for (uint32_t i = 0; i < arraySize; ++i) {
             CD3D11_SHADER_RESOURCE_VIEW_DESC srvElementDesc(
                 D3D11_SRV_DIMENSION_TEXTURE2DARRAY,
@@ -449,7 +449,7 @@ Depth2DMSArray::Depth2DMSArray(ID3D11Device* device, uint32_t width, uint32_t he
 {
     if (bindFlags & D3D11_BIND_DEPTH_STENCIL)
     {
-        // 单个子资源
+        // Individual subresources
         for (uint32_t i = 0; i < arraySize; ++i) {
             CD3D11_DEPTH_STENCIL_VIEW_DESC dsvElementDesc(
                 D3D11_DSV_DIMENSION_TEXTURE2DMSARRAY,
@@ -461,7 +461,7 @@ Depth2DMSArray::Depth2DMSArray(ID3D11Device* device, uint32_t width, uint32_t he
             m_pDepthStencilElements.push_back(pDSV);
         }
 
-        // 完整子资源
+        // Full resource
         CD3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc(
             D3D11_DSV_DIMENSION_TEXTURE2DMSARRAY,
             GetDepthDSVFormat(depthStencilBitsFlag), 0);
@@ -470,7 +470,7 @@ Depth2DMSArray::Depth2DMSArray(ID3D11Device* device, uint32_t width, uint32_t he
 
     if (bindFlags & D3D11_BIND_SHADER_RESOURCE)
     {
-        // 单个子资源
+        // Individual subresources
         for (uint32_t i = 0; i < arraySize; ++i) {
             CD3D11_SHADER_RESOURCE_VIEW_DESC srvElementDesc(
                 D3D11_SRV_DIMENSION_TEXTURE2DMSARRAY,

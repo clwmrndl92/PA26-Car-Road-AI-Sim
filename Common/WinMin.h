@@ -4,7 +4,7 @@
 #ifndef WINMAIN_H
 #define WINMAIN_H
 
-// 定义下面这些宏以去掉Windows中那些没用的组件
+// Define the following macros to strip unused components from Windows
 
 #ifndef FULL_WINTARD
 #define WIN32_LEAN_AND_MEAN

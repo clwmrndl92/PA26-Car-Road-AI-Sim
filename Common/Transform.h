@@ -2,7 +2,6 @@
 // Transform.h by X_Jun(MKXJun) (C) 2018-2022 All Rights Reserved.
 // Licensed under the MIT License.
 //
-// 描述对象缩放、旋转(四元数为基础)、平移
 // Describe object scale, rotation(quaternion-based) and translation
 //***************************************************************************************
 
@@ -30,13 +29,13 @@ public:
     Transform(Transform&&) = default;
     Transform& operator=(Transform&&) = default;
 
-    // 获取对象缩放比例
+    // Get the object scale
     DirectX::XMFLOAT3 GetScale() const { return m_Scale; }
-    // 获取对象缩放比例
+    // Get the object scale (XMVECTOR)
     DirectX::XMVECTOR GetScaleXM() const { return XMLoadFloat3(&m_Scale); }
 
-    // 获取对象欧拉角(弧度制)
-    // 对象以Z-X-Y轴顺序旋转
+    // Get the object Euler angles (radians)
+    // The object rotates in Z-X-Y axis order
     DirectX::XMFLOAT3 GetRotation() const 
     {
         float sinX = 2 * (m_Rotation.w * m_Rotation.x - m_Rotation.y * m_Rotation.z);
@@ -46,7 +45,7 @@ public:
         float cosZ_cosX = 1 - 2 * (m_Rotation.x * m_Rotation.x + m_Rotation.z * m_Rotation.z);
 
         DirectX::XMFLOAT3 rotation;
-        // 死锁特殊处理
+        // Special handling for gimbal lock
         if (fabs(fabs(sinX) - 1.0f) < 1e-5f)
         {
             rotation.x = copysignf(DirectX::XM_PI / 2, sinX);
@@ -62,20 +61,20 @@ public:
 
         return rotation;
     }
-    // 获取对象旋转四元数
+    // Get the object rotation quaternion
     DirectX::XMFLOAT4 GetRotationQuat() const { return m_Rotation; }
-    // 获取对象欧拉角(弧度制)
-    // 对象以Z-X-Y轴顺序旋转
+    // Get the object Euler angles (radians, XMVECTOR)
+    // The object rotates in Z-X-Y axis order
     DirectX::XMVECTOR GetRotationXM() const { auto rot = GetRotation(); return XMLoadFloat3(&rot); }
-    // 获取对象旋转四元数
+    // Get the object rotation quaternion (XMVECTOR)
     DirectX::XMVECTOR GetRotationQuatXM() const { return XMLoadFloat4(&m_Rotation); }
 
-    // 获取对象位置
+    // Get the object position
     DirectX::XMFLOAT3 GetPosition() const { return m_Position; }
-    // 获取对象位置
+    // Get the object position (XMVECTOR)
     DirectX::XMVECTOR GetPositionXM() const { return XMLoadFloat3(&m_Position); }
 
-    // 获取右方向轴
+    // Get the right direction axis
     DirectX::XMFLOAT3 GetRightAxis() const 
     {
         using namespace DirectX;
@@ -84,14 +83,14 @@ public:
         XMStoreFloat3(&right, R.r[0]);
         return right;
     }
-    // 获取右方向轴
+    // Get the right direction axis (XMVECTOR)
     DirectX::XMVECTOR GetRightAxisXM() const 
     { 
         DirectX::XMFLOAT3 right = GetRightAxis(); 
         return DirectX::XMLoadFloat3(&right);
     }
 
-    // 获取上方向轴
+    // Get the up direction axis
     DirectX::XMFLOAT3 GetUpAxis() const
     {
         using namespace DirectX;
@@ -100,14 +99,14 @@ public:
         XMStoreFloat3(&up, R.r[1]);
         return up;
     }
-    // 获取上方向轴
+    // Get the up direction axis (XMVECTOR)
     DirectX::XMVECTOR GetUpAxisXM() const 
     {
         DirectX::XMFLOAT3 up = GetUpAxis();
         return DirectX::XMLoadFloat3(&up);
     }
 
-    // 获取前方向轴
+    // Get the forward direction axis
     DirectX::XMFLOAT3 GetForwardAxis() const
     {
         using namespace DirectX;
@@ -116,21 +115,21 @@ public:
         XMStoreFloat3(&forward, R.r[2]);
         return forward;
     }
-    // 获取前方向轴
+    // Get the forward direction axis (XMVECTOR)
     DirectX::XMVECTOR GetForwardAxisXM() const
     {
         DirectX::XMFLOAT3 forward = GetForwardAxis();
         return DirectX::XMLoadFloat3(&forward);
     }
 
-    // 获取世界变换矩阵
+    // Get the local-to-world transform matrix
     DirectX::XMFLOAT4X4 GetLocalToWorldMatrix() const
     {
         DirectX::XMFLOAT4X4 res;
         DirectX::XMStoreFloat4x4(&res, GetLocalToWorldMatrixXM());
         return res;
     }
-    // 获取世界变换矩阵
+    // Get the local-to-world transform matrix (XMMATRIX)
     DirectX::XMMATRIX GetLocalToWorldMatrixXM() const
     {
         using namespace DirectX;
@@ -141,46 +140,46 @@ public:
         return World;
     }
 
-    // 获取逆世界变换矩阵
+    // Get the world-to-local transform matrix
     DirectX::XMFLOAT4X4 GetWorldToLocalMatrix() const
     {
         DirectX::XMFLOAT4X4 res;
         DirectX::XMStoreFloat4x4(&res, GetWorldToLocalMatrixXM());
         return res;
     }
-    // 获取逆世界变换矩阵
+    // Get the world-to-local transform matrix (XMMATRIX)
     DirectX::XMMATRIX GetWorldToLocalMatrixXM() const
     {
         DirectX::XMMATRIX InvWorld = DirectX::XMMatrixInverse(nullptr, GetLocalToWorldMatrixXM());
         return InvWorld;
     }
 
-    // 设置对象缩放比例
+    // Set the object scale
     void SetScale(const DirectX::XMFLOAT3& scale) { m_Scale = scale; }
-    // 设置对象缩放比例
+    // Set the object scale
     void SetScale(float x, float y, float z) { m_Scale = DirectX::XMFLOAT3(x, y, z); }
 
-    // 设置对象欧拉角(弧度制)
-    // 对象将以Z-X-Y轴顺序旋转
+    // Set the object Euler angles (radians)
+    // The object will rotate in Z-X-Y axis order
     void SetRotation(const DirectX::XMFLOAT3& eulerAnglesInRadian)
     {
         auto quat = DirectX::XMQuaternionRotationRollPitchYawFromVector(DirectX::XMLoadFloat3(&eulerAnglesInRadian));
         DirectX::XMStoreFloat4(&m_Rotation, quat);
     }
-    // 设置对象欧拉角(弧度制)
-    // 对象将以Z-X-Y轴顺序旋转
+    // Set the object Euler angles (radians)
+    // The object will rotate in Z-X-Y axis order
     void SetRotation(float x, float y, float z)
     {
         auto quat = DirectX::XMQuaternionRotationRollPitchYaw(x, y, z);
         DirectX::XMStoreFloat4(&m_Rotation, quat);
     }
 
-    // 设置对象位置
+    // Set the object position
     void SetPosition(const DirectX::XMFLOAT3& position) { m_Position = position; }
-    // 设置对象位置
+    // Set the object position
     void SetPosition(float x, float y, float z) { m_Position = DirectX::XMFLOAT3(x, y, z); }
 
-    // 指定欧拉角旋转对象
+    // Rotate the object by the given Euler angles
     void Rotate(const DirectX::XMFLOAT3& eulerAnglesInRadian)
     {
         using namespace DirectX;
@@ -188,7 +187,7 @@ public:
         auto quat = XMLoadFloat4(&m_Rotation);
         XMStoreFloat4(&m_Rotation, XMQuaternionMultiply(quat, newQuat));
     }
-    // 指定以原点为中心绕轴旋转
+    // Rotate around an axis with the origin as the pivot
     void RotateAxis(const DirectX::XMFLOAT3& axis, float radian)
     {
         using namespace DirectX;
@@ -196,7 +195,7 @@ public:
         auto quat = XMLoadFloat4(&m_Rotation);
         XMStoreFloat4(&m_Rotation, XMQuaternionMultiply(quat, newQuat));
     }
-    // 指定以point为旋转中心绕轴旋转
+    // Rotate around an axis with the given point as the pivot
     void RotateAround(const DirectX::XMFLOAT3& point, const DirectX::XMFLOAT3& axis, float radian)
     {
         using namespace DirectX;
@@ -204,14 +203,14 @@ public:
         XMVECTOR positionVec = XMLoadFloat3(&m_Position);
         XMVECTOR centerVec = XMLoadFloat3(&point);
 
-        // 以point作为原点进行旋转
+        // Rotate using point as the origin
         XMMATRIX RT = XMMatrixRotationQuaternion(quat) * XMMatrixTranslationFromVector(positionVec - centerVec);
         RT *= XMMatrixRotationAxis(XMLoadFloat3(&axis), radian);
         RT *= XMMatrixTranslationFromVector(centerVec);
         XMStoreFloat4(&m_Rotation, XMQuaternionRotationMatrix(RT));
         XMStoreFloat3(&m_Position, RT.r[3]);
     }
-    // 沿着某一方向平移
+    // Translate along a given direction
     void Translate(const DirectX::XMFLOAT3& direction, float magnitude)
     {
         using namespace DirectX;
@@ -220,7 +219,7 @@ public:
         XMStoreFloat3(&m_Position, newPosition);
     }
 
-    // 观察某一点
+    // Look at a target point
     void LookAt(const DirectX::XMFLOAT3& target, const DirectX::XMFLOAT3& up = { 0.0f, 1.0f, 0.0f })
     {
         using namespace DirectX;
@@ -228,7 +227,7 @@ public:
         XMMATRIX InvView = XMMatrixInverse(nullptr, View);
         XMStoreFloat4(&m_Rotation, XMQuaternionRotationMatrix(InvView));
     }
-    // 沿着某一方向观察
+    // Look along a given direction
     void LookTo(const DirectX::XMFLOAT3& direction, const DirectX::XMFLOAT3& up = { 0.0f, 1.0f, 0.0f })
     {
         using namespace DirectX;
@@ -237,11 +236,11 @@ public:
         XMStoreFloat4(&m_Rotation, XMQuaternionRotationMatrix(InvView));
     }
 
-    // 从旋转矩阵获取旋转欧拉角
+    // Get Euler angles from a rotation matrix
     static DirectX::XMFLOAT3 GetEulerAnglesFromRotationMatrix(const DirectX::XMFLOAT4X4& rotationMatrix)
     {
         DirectX::XMFLOAT3 rotation{};
-        // 死锁特殊处理
+        // Special handling for gimbal lock
         if (fabs(1.0f - fabs(rotationMatrix(2, 1))) < 1e-5f)
         {
             rotation.x = copysignf(DirectX::XM_PIDIV2, -rotationMatrix(2, 1));
@@ -249,9 +248,9 @@ public:
             return rotation;
         }
 
-        // 通过旋转矩阵反求欧拉角
+        // Solve for Euler angles from the rotation matrix
         float c = sqrtf(1.0f - rotationMatrix(2, 1) * rotationMatrix(2, 1));
-        // 防止r[2][1]出现大于1的情况
+        // Guard against r[2][1] exceeding 1
         if (isnan(c))
             c = 0.0f;
         
@@ -262,9 +261,9 @@ public:
     }
 
 private:
-    DirectX::XMFLOAT3 m_Scale = { 1.0f, 1.0f, 1.0f };				// 缩放
-    DirectX::XMFLOAT4 m_Rotation = { 0.0f, 0.0f, 0.0f, 1.0f };		// 旋转四元数
-    DirectX::XMFLOAT3 m_Position = {};								// 位置
+    DirectX::XMFLOAT3 m_Scale = { 1.0f, 1.0f, 1.0f };				// Scale
+    DirectX::XMFLOAT4 m_Rotation = { 0.0f, 0.0f, 0.0f, 1.0f };		// Rotation quaternion
+    DirectX::XMFLOAT3 m_Position = {};								// Position
 };
 
 #endif

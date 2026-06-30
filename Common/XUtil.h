@@ -2,7 +2,6 @@
 // XUtil.h by X_Jun(MKXJun) (C) 2018-2022 All Rights Reserved.
 // Licensed under the MIT License.
 //
-// 实用工具集
 // utility tools.
 //***************************************************************************************
 
@@ -18,18 +17,18 @@
 #include <algorithm>
 
 //
-// 宏定义
+// Macro definitions
 //
 
 #define LEN_AND_STR(STR) ((UINT)(sizeof(STR) - 1)), (STR)
 
-// 是否开启图形调试对象名称
+// Whether to enable graphics debugger object names
 #if (defined(DEBUG) || defined(_DEBUG)) && !defined(GRAPHICS_DEBUGGER_OBJECT_NAME)
 #define GRAPHICS_DEBUGGER_OBJECT_NAME 1
 #endif
 
 //
-// 设置调试对象名称
+// Set debug object name
 //
 
 template<class IObject>
@@ -39,10 +38,10 @@ inline void SetDebugObjectName(IObject* pObject, std::string_view name)
 }
 
 //
-// 文本转换函数
+// Text conversion functions
 //
 
-// 以下不可删除
+// Do not delete the following
 #pragma warning(push)
 #pragma warning(disable: 28251)
 extern "C" __declspec(dllimport) int __stdcall MultiByteToWideChar(unsigned int cp, unsigned long flags, const char* str, int cbmb, wchar_t* widestr, int cchwide);
@@ -70,7 +69,7 @@ inline std::string WStringToUTF8(std::wstring_view wstr)
 }
 
 //
-// 字符串转hash ID
+// String to hash ID
 //
 
 using XID = size_t;
@@ -81,20 +80,23 @@ inline XID StringToID(std::string_view str)
 }
 
 //
-// 数学相关函数
+// Math utility functions
 //
 
 namespace XMath
 {
     // ------------------------------
-    // InverseTranspose函数
+    // InverseTranspose function
     // ------------------------------
     inline DirectX::XMMATRIX XM_CALLCONV InverseTranspose(DirectX::FXMMATRIX M)
     {
         using namespace DirectX;
 
-        // 世界矩阵的逆的转置仅针对法向量，我们也不需要世界矩阵的平移分量
-        // 而且不去掉的话，后续再乘上观察矩阵之类的就会产生错误的变换结果
+        // The inverse-transpose of the world matrix applies only to normals;
+        // we also don't need the translation component of the world matrix,
+        // because leaving it in would produce incorrect results when later
+        // multiplied by the view matrix or similar transforms
+
         XMMATRIX A = M;
         A.r[3] = g_XMIdentityR3;
 
