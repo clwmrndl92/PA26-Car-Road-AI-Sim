@@ -62,9 +62,8 @@ set_target_properties(zlibstatic PROPERTIES FOLDER "Assimp")
 add_subdirectory("ImGui")
 set_target_properties(ImGui PROPERTIES FOLDER "ImGui")
 
-add_subdirectory("Project 01-09")
-add_subdirectory("Project 10-17")
-add_subdirectory("Project 19-")
+add_subdirectory("Common")
+add_subdirectory("PA26 Car Sim")
 
 
 
