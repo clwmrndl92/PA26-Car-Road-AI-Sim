@@ -1,0 +1,35 @@
+Debug/
+Release/
+x64/
+.vs/
+bin/
+build/
+backup/
+lib/
+vsxmake2022/
+*.cso
+*.mbo
+*.inc
+*.ilk
+*.lib
+*.iobj
+*.ipdb
+*.pdb
+*.exp
+*.lastcodeanalysissucceeded
+!dxtex.exe
+*.exe
+compile_commands.json
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+_deps/
+
+# Visual Studio
+*.user
+*.suo
+*.VC.db
+*.VC.opendb
+ipch/
