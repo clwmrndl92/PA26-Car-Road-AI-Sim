@@ -263,9 +263,8 @@ bool GameApp::InitResource()
     {
         auto car = std::make_shared<Car>();
         car->SetName("Car_0");
-        car->GetRender().SetModel(m_ModelManager.CreateFromFile("Model\\car_1.obj"));
         car->GetRender().GetTransform().SetPosition(-2.0f, 5.0f, 0.0f);
-        car->Init(JPH::Vec3(0.9919f, 0.9674f, 2.1204f));
+        car->Init(GetCarSpec(CarType::Sedan));
         car->SetDrawCollider(true);
         m_GameObjects.push_back(car);
     }

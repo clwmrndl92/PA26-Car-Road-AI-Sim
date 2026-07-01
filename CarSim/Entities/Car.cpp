@@ -1,5 +1,15 @@
 #include "Car.h"
+#include <ModelManager.h>
 #include <algorithm>
+
+void Car::Init(const CarSpec& spec)
+{
+    GetRender().SetModel(ModelManager::Get().CreateFromFile(spec.modelPath));
+    GameObject::Init(spec.halfExtents, Rigidbody::Type::Dynamic);
+
+    m_maxSpeed     = spec.maxSpeed;
+    m_acceleration = spec.acceleration;
+}
 
 void Car::Update(float dt)
 {
