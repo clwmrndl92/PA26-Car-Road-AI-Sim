@@ -46,6 +46,11 @@ JPH::Quat Rigidbody::GetRotation() const
     return m_bodyInterface->GetRotation(m_bodyId);
 }
 
+JPH::Vec3 Rigidbody::GetLinearVelocity() const
+{
+    return m_bodyInterface->GetLinearVelocity(m_bodyId);
+}
+
 void Rigidbody::SetLinearVelocity(JPH::Vec3 velocity)
 {
     m_bodyInterface->SetLinearVelocity(m_bodyId, velocity);

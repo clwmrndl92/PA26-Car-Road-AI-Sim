@@ -16,6 +16,7 @@ public:
 
     JPH::Vec3   GetPosition() const;
     JPH::Quat   GetRotation() const;
+    JPH::Vec3   GetLinearVelocity() const;
     void        SetLinearVelocity(JPH::Vec3 velocity);
     void        AddForce(JPH::Vec3 force);
 

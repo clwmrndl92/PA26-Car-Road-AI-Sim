@@ -1,6 +1,7 @@
 #include "GameApp.h"
 #include <XUtil.h>
 #include <DXTrace.h>
+#include <Entities/Car.h>
 
 using namespace DirectX;
 
@@ -63,6 +64,12 @@ void GameApp::UpdateScene(float dt)
     for (auto& obj : m_GameObjects) obj->UpdateRender();
 
     // Step 4. Update camera by Input
+    if (auto picked = m_pPickedObject.lock())
+    {
+        if (auto cam3rd = std::dynamic_pointer_cast<ThirdPersonCamera>(m_pCamera))
+            cam3rd->SetTarget(picked->GetRender().GetBoundingBox().Center);
+    }
+
     auto cam3rd = std::dynamic_pointer_cast<ThirdPersonCamera>(m_pCamera);
     auto cam1st = std::dynamic_pointer_cast<FirstPersonCamera>(m_pCamera);
 
@@ -88,6 +95,7 @@ void GameApp::UpdateScene(float dt)
         if (hitObj)
         {
             m_PickedObjectName = hitObj->GetName();
+            m_pPickedObject = hitObj;
             XMFLOAT3 target = hitObj->GetRender().GetBoundingBox().Center;
 
             auto newCam = std::make_shared<ThirdPersonCamera>();
@@ -103,6 +111,7 @@ void GameApp::UpdateScene(float dt)
         else
         {
             m_PickedObjectName = "";
+            m_pPickedObject.reset();
             // Switch to free camera from current position
             if (m_CameraMode != CameraMode::Free)
             {
@@ -252,7 +261,7 @@ bool GameApp::InitResource()
 
     // Car 1
     {
-        auto car = std::make_shared<GameObject>();
+        auto car = std::make_shared<Car>();
         car->SetName("Car_0");
         car->GetRender().SetModel(m_ModelManager.CreateFromFile("Model\\car_1.obj"));
         car->GetRender().GetTransform().SetPosition(-2.0f, 5.0f, 0.0f);

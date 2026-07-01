@@ -44,9 +44,10 @@ private:
 
     PhysicsSystem m_Physics;
 
-    std::shared_ptr<Camera> m_pCamera;
-    CameraMode m_CameraMode = CameraMode::ThirdPerson;
-    std::string m_PickedObjectName;
+    std::shared_ptr<Camera>     m_pCamera;
+    CameraMode                  m_CameraMode = CameraMode::ThirdPerson;
+    std::string                 m_PickedObjectName;
+    std::weak_ptr<GameObject>   m_pPickedObject;
 };
 
 #endif
