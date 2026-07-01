@@ -13,6 +13,7 @@
 #include <ModelManager.h>
 #include <TextureManager.h>
 #include <string>
+#include "PhysicsWorld.h"
 
 class GameApp : public D3DApp
 {
@@ -46,6 +47,8 @@ private:
 
     static constexpr int ROAD_DASH_COUNT = 16;
     GameObject m_RoadDashes[ROAD_DASH_COUNT];
+
+    PhysicsWorld m_Physics;
 
     std::shared_ptr<Camera> m_pCamera;							// Active camera
     CameraMode m_CameraMode = CameraMode::ThirdPerson;

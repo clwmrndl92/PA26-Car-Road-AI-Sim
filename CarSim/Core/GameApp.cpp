@@ -11,12 +11,15 @@ GameApp::GameApp(HINSTANCE hInstance, const std::wstring& windowName, int initWi
 
 GameApp::~GameApp()
 {
+    m_Physics.Shutdown();
 }
 
 bool GameApp::Init()
 {
     if (!D3DApp::Init())
         return false;
+
+    m_Physics.Init();
 
     m_TextureManager.Init(m_pd3dDevice.Get());
     m_ModelManager.Init(m_pd3dDevice.Get());
@@ -50,6 +53,8 @@ void GameApp::OnResize()
 
 void GameApp::UpdateScene(float dt)
 {
+    m_Physics.Update(dt);
+
     auto cam3rd = std::dynamic_pointer_cast<ThirdPersonCamera>(m_pCamera);
     auto cam1st = std::dynamic_pointer_cast<FirstPersonCamera>(m_pCamera);
 
