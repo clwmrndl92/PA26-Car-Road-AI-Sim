@@ -159,6 +159,10 @@ public:
     // Set the object scale
     void SetScale(float x, float y, float z) { m_Scale = DirectX::XMFLOAT3(x, y, z); }
 
+    void SetRotation(const DirectX::XMFLOAT4& quaternion)
+    {
+        m_Rotation = quaternion;
+    }
     // Set the object Euler angles (radians)
     // The object will rotate in Z-X-Y axis order
     void SetRotation(const DirectX::XMFLOAT3& eulerAnglesInRadian)

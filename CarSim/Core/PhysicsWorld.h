@@ -8,20 +8,7 @@
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
-
-// Object layers
-namespace Layers {
-    static constexpr JPH::ObjectLayer STATIC  = 0;
-    static constexpr JPH::ObjectLayer DYNAMIC = 1;
-    static constexpr JPH::uint NUM_LAYERS     = 2;
-}
-
-// Broad phase layers
-namespace BPLayers {
-    static constexpr JPH::BroadPhaseLayer STATIC  { 0 };
-    static constexpr JPH::BroadPhaseLayer DYNAMIC { 1 };
-    static constexpr JPH::uint NUM_LAYERS = 2;
-}
+#include "PhysicsLayers.h"
 
 class BPLayerInterfaceImpl final : public JPH::BroadPhaseLayerInterface
 {

@@ -18,21 +18,21 @@
 
 struct Model;
 
-class GameObject
+class RenderObject
 {
 public:
     template <class T>
     using ComPtr = Microsoft::WRL::ComPtr<T>;
 
 
-    GameObject() = default;
-    ~GameObject() = default;
+    RenderObject() = default;
+    ~RenderObject() = default;
 
-    GameObject(const GameObject&) = default;
-    GameObject& operator=(const GameObject&) = default;
+    RenderObject(const RenderObject&) = default;
+    RenderObject& operator=(const RenderObject&) = default;
 
-    GameObject(GameObject&&) = default;
-    GameObject& operator=(GameObject&&) = default;
+    RenderObject(RenderObject&&) = default;
+    RenderObject& operator=(RenderObject&&) = default;
 
     // Get the object transform
     Transform& GetTransform();

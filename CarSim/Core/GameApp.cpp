@@ -24,7 +24,6 @@ bool GameApp::Init()
     m_TextureManager.Init(m_pd3dDevice.Get());
     m_ModelManager.Init(m_pd3dDevice.Get());
 
-    // Initialize all render states first before effects
     RenderStates::InitAll(m_pd3dDevice.Get());
 
     if (!m_BasicEffect.InitAll(m_pd3dDevice.Get()))
@@ -42,7 +41,7 @@ void GameApp::OnResize()
 
     m_pDepthTexture = std::make_unique<Depth2D>(m_pd3dDevice.Get(), m_ClientWidth, m_ClientHeight);
     m_pDepthTexture->SetDebugObjectName("DepthTexture");
-    
+
     if (m_pCamera != nullptr)
     {
         m_pCamera->SetFrustum(XM_PI / 3, AspectRatio(), 1.0f, 1000.0f);
@@ -55,6 +54,9 @@ void GameApp::UpdateScene(float dt)
 {
     m_Physics.Update(dt);
 
+    for (int i = 0; i < CAR_COUNT; i++)
+        m_Cars[i].Update(dt);
+
     auto cam3rd = std::dynamic_pointer_cast<ThirdPersonCamera>(m_pCamera);
     auto cam1st = std::dynamic_pointer_cast<FirstPersonCamera>(m_pCamera);
 
@@ -65,15 +67,12 @@ void GameApp::UpdateScene(float dt)
     {
         Ray ray = Ray::ScreenToRay(*m_pCamera, io.MousePos.x, io.MousePos.y);
 
-        XMFLOAT3 target;
-        bool switchToThird = false;
-
         float distCar = FLT_MAX;
         int hitCarIdx = -1;
         for (int i = 0; i < CAR_COUNT; i++)
         {
             float d = FLT_MAX;
-            if (ray.Hit(m_Cars[i].GetBoundingBox(), &d) && d < distCar)
+            if (ray.Hit(m_Cars[i].GetRender().GetBoundingBox(), &d) && d < distCar)
             {
                 distCar = d;
                 hitCarIdx = i;
@@ -83,8 +82,17 @@ void GameApp::UpdateScene(float dt)
         if (hitCarIdx >= 0)
         {
             m_PickedObjectName = "Car_" + std::to_string(hitCarIdx);
-            target = m_Cars[hitCarIdx].GetBoundingBox().Center;
-            switchToThird = true;
+            XMFLOAT3 target = m_Cars[hitCarIdx].GetRender().GetBoundingBox().Center;
+
+            auto newCam = std::make_shared<ThirdPersonCamera>();
+            newCam->SetViewPort(0.0f, 0.0f, (float)m_ClientWidth, (float)m_ClientHeight);
+            newCam->SetFrustum(XM_PI / 3, AspectRatio(), 1.0f, 1000.0f);
+            newCam->SetTarget(target);
+            newCam->SetDistance(15.0f);
+            newCam->SetDistanceMinMax(3.0f, 100.0f);
+            newCam->SetRotationX(XM_PIDIV4);
+            m_pCamera = newCam;
+            m_CameraMode = CameraMode::ThirdPerson;
         }
         else
         {
@@ -100,19 +108,6 @@ void GameApp::UpdateScene(float dt)
                 m_CameraMode = CameraMode::Free;
             }
         }
-
-        if (switchToThird)
-        {
-            auto newCam = std::make_shared<ThirdPersonCamera>();
-            newCam->SetViewPort(0.0f, 0.0f, (float)m_ClientWidth, (float)m_ClientHeight);
-            newCam->SetFrustum(XM_PI / 3, AspectRatio(), 1.0f, 1000.0f);
-            newCam->SetTarget(target);
-            newCam->SetDistance(15.0f);
-            newCam->SetDistanceMinMax(3.0f, 100.0f);
-            newCam->SetRotationX(XM_PIDIV4);
-            m_pCamera = newCam;
-            m_CameraMode = CameraMode::ThirdPerson;
-        }
     }
 
     if (m_CameraMode == CameraMode::ThirdPerson && cam3rd)
@@ -126,7 +121,6 @@ void GameApp::UpdateScene(float dt)
     }
     else if (m_CameraMode == CameraMode::Free && cam1st)
     {
-        // WASD movement
         if (ImGui::IsKeyDown(ImGuiKey_W)) cam1st->MoveForward(dt * 10.0f);
         if (ImGui::IsKeyDown(ImGuiKey_S)) cam1st->MoveForward(-dt * 10.0f);
         if (ImGui::IsKeyDown(ImGuiKey_A)) cam1st->Strafe(-dt * 10.0f);
@@ -164,12 +158,12 @@ void GameApp::UpdateScene(float dt)
                 auto newCam = std::make_shared<FirstPersonCamera>();
                 newCam->SetViewPort(0.0f, 0.0f, (float)m_ClientWidth, (float)m_ClientHeight);
                 newCam->SetFrustum(XM_PI / 3, AspectRatio(), 1.0f, 1000.0f);
-                XMFLOAT3 pos = m_pCamera->GetPosition();
-                newCam->LookTo(pos, XMFLOAT3(0.0f, 0.0f, 1.0f), XMFLOAT3(0.0f, 1.0f, 0.0f));
+                newCam->LookTo(m_pCamera->GetPosition(), XMFLOAT3(0.0f, 0.0f, 1.0f), XMFLOAT3(0.0f, 1.0f, 0.0f));
                 m_pCamera = newCam;
                 m_CameraMode = CameraMode::Free;
             }
         }
+
         if (m_CameraMode == CameraMode::Free)
             ImGui::Text("WASD: Move  Q/E: Down/Up\nRight drag: Look");
         else
@@ -202,7 +196,6 @@ void GameApp::DrawScene()
         m_pd3dDevice->CreateRenderTargetView(pBackBuffer.Get(), &rtvDesc, m_pRenderTargetViews[m_FrameCount].ReleaseAndGetAddressOf());
     }
 
-
     float black[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
     m_pd3dImmediateContext->ClearRenderTargetView(GetBackBufferRTV(), black);
     m_pd3dImmediateContext->ClearDepthStencilView(m_pDepthTexture->GetDepthStencil(), D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
@@ -213,43 +206,40 @@ void GameApp::DrawScene()
 
     m_BasicEffect.SetRenderDefault();
     m_Road.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
-    for (int i = 0; i < ROAD_DASH_COUNT; i++)
-        m_RoadDashes[i].Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
+    for (int i = 0; i < DASH_COUNT; i++)
+        m_Dashes[i].Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     for (int i = 0; i < CAR_COUNT; i++)
         m_Cars[i].Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
-    
+
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
     HR(m_pSwapChain->Present(0, m_IsDxgiFlipModel ? DXGI_PRESENT_ALLOW_TEARING : 0));
 }
-
-
 
 bool GameApp::InitResource()
 {
     // ******************
     // Initialize game objects
     //
-
-    // Road surface - gray plane (8m wide, 100m long, runs along Z)
+    // Road: gray ground (physics) + white center dashes (render only)
     {
-        Model* pRoad = m_ModelManager.CreateFromGeometry("road", Geometry::CreatePlane(8.0f, 100.0f));
-        pRoad->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.22f, 0.22f, 0.22f, 1.0f));
-        pRoad->materials[0].Set<float>("$Opacity", 1.0f);
-        m_Road.SetModel(pRoad);
-        m_Road.GetTransform().SetPosition(0.0f, 0.02f, 0.0f);
-    }
+        constexpr float ROAD_SIZE = 50.0f;
 
-    // White dashed center line (3m dash / 3m gap)
-    {
-        Model* pDash = m_ModelManager.CreateFromGeometry("road_dash", Geometry::CreatePlane(0.2f, 3.0f));
+        Model* pGround = m_ModelManager.CreateFromGeometry("road_ground", Geometry::CreatePlane(ROAD_SIZE, ROAD_SIZE));
+        pGround->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.22f, 0.22f, 0.22f, 1.0f));
+        pGround->materials[0].Set<float>("$Opacity", 1.0f);
+        m_Road.GetRender().SetModel(pGround);
+        m_Road.GetRender().GetTransform().SetPosition(0.0f, 0.0f, 0.0f);
+        m_Road.Init(m_Physics, m_ModelManager, JPH::Vec3(ROAD_SIZE * 0.5f, 0.05f, ROAD_SIZE * 0.5f), Rigidbody::Type::Static);
+
+        Model* pDash = m_ModelManager.CreateFromGeometry("road_dash", Geometry::CreatePlane(0.3f, 3.0f));
         pDash->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f));
         pDash->materials[0].Set<float>("$Opacity", 1.0f);
-        for (int i = 0; i < ROAD_DASH_COUNT; i++)
+        for (int i = 0; i < DASH_COUNT; i++)
         {
-            m_RoadDashes[i].SetModel(pDash);
-            float z = -45.0f + i * 6.0f;
-            m_RoadDashes[i].GetTransform().SetPosition(0.0f, 0.03f, z);
+            m_Dashes[i].SetModel(pDash);
+            float z = -24.0f + i * 6.0f;
+            m_Dashes[i].GetTransform().SetPosition(0.0f, 0.01f, z);
         }
     }
 
@@ -257,21 +247,18 @@ bool GameApp::InitResource()
     static const char* carFiles[CAR_COUNT] = {
         "Model\\car_1.obj",
         "Model\\car_2.obj",
-        "Model\\car_jeep.obj",
-        "Model\\car_littletruck.obj",
-        "Model\\car_truck.obj",
-        "Model\\car_tsal.obj",
-        "Model\\car_van.obj"
     };
-    for (int i = 0; i < CAR_COUNT; i++)
-    {
-        Model* pModel = m_ModelManager.CreateFromFile(carFiles[i]);
-        m_Cars[i].SetModel(pModel);
-        m_Cars[i].GetTransform().SetScale(1.0f, 1.0f, 1.0f);
+    Model* pModel = m_ModelManager.CreateFromFile(carFiles[0]);
+    m_Cars[0].GetRender().SetModel(pModel);
+    m_Cars[0].GetRender().GetTransform().SetPosition(-2.0f, 5.0f, 0.0f);
+    m_Cars[0].Init(m_Physics, m_ModelManager, JPH::Vec3(0.9919f, 0.9674f, 2.1204f));
+    m_Cars[0].SetDrawCollider(true);
 
-        m_Cars[i].GetTransform().SetPosition((i - 3) * 8.0f, 0.0f, 0.0f);
-    }
-    
+    pModel = m_ModelManager.CreateFromFile(carFiles[1]);
+    m_Cars[1].GetRender().SetModel(pModel);
+    m_Cars[1].GetRender().GetTransform().SetPosition(2.0f, 0.0f, 0.0f);
+    m_Cars[1].Init(m_Physics, m_ModelManager, JPH::Vec3(1.3421f, 0.9073f, 2.8342f), Rigidbody::Type::Static);
+
     // ******************
     // Initialize camera
     //
@@ -291,29 +278,27 @@ bool GameApp::InitResource()
     m_BasicEffect.SetViewMatrix(camera->GetViewMatrixXM());
     m_BasicEffect.SetProjMatrix(camera->GetProjMatrixXM());
     m_BasicEffect.SetEyePos(camera->GetPosition());
-    
+
     // ******************
     // Initialize constant values
     //
 
     // Directional light (ambient)
     DirectionalLight dirLight{};
-    dirLight.ambient = XMFLOAT4(0.5f, 0.5f, 0.5f, 1.0f);
-    dirLight.diffuse = XMFLOAT4(0.8f, 0.8f, 0.8f, 1.0f);
-    dirLight.specular = XMFLOAT4(0.5f, 0.5f, 0.5f, 1.0f);
+    dirLight.ambient   = XMFLOAT4(0.5f, 0.5f, 0.5f, 1.0f);
+    dirLight.diffuse   = XMFLOAT4(0.8f, 0.8f, 0.8f, 1.0f);
+    dirLight.specular  = XMFLOAT4(0.5f, 0.5f, 0.5f, 1.0f);
     dirLight.direction = XMFLOAT3(0.0f, -1.0f, 0.0f);
     m_BasicEffect.SetDirLight(0, dirLight);
     // Point light
     PointLight pointLight{};
     pointLight.position = XMFLOAT3(0.0f, 20.0f, 0.0f);
-    pointLight.ambient = XMFLOAT4(0.3f, 0.3f, 0.3f, 1.0f);
-    pointLight.diffuse = XMFLOAT4(0.7f, 0.7f, 0.7f, 1.0f);
+    pointLight.ambient  = XMFLOAT4(0.3f, 0.3f, 0.3f, 1.0f);
+    pointLight.diffuse  = XMFLOAT4(0.7f, 0.7f, 0.7f, 1.0f);
     pointLight.specular = XMFLOAT4(0.2f, 0.2f, 0.2f, 1.0f);
-    pointLight.att = XMFLOAT3(0.0f, 0.1f, 0.0f);
-    pointLight.range = 30.0f;	
+    pointLight.att      = XMFLOAT3(0.0f, 0.1f, 0.0f);
+    pointLight.range    = 30.0f;
     m_BasicEffect.SetPointLight(0, pointLight);
 
     return true;
 }
-
-

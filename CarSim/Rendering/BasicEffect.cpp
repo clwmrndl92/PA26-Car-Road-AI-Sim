@@ -34,6 +34,7 @@ public:
     std::shared_ptr<IEffectPass> m_pCurrEffectPass;
     ComPtr<ID3D11InputLayout> m_pCurrInputLayout;
     D3D11_PRIMITIVE_TOPOLOGY m_CurrTopology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    bool m_bWireframe = false;
 
     XMFLOAT4X4 m_World{}, m_View{}, m_Proj{};
 };
@@ -142,18 +143,28 @@ void BasicEffect::SetMaterial(const Material& material)
     phongMat.specular = material.Get<XMFLOAT4>("$SpecularColor");
     phongMat.specular.w = material.Has<float>("$SpecularFactor") ? material.Get<float>("$SpecularFactor") : 1.0f;
 
-    auto pStr = material.TryGet<std::string>("$Diffuse");
-    if (pStr)
+    if (pImpl->m_bWireframe)
     {
-        phongMat.ambient = material.Get<XMFLOAT4>("$AmbientColor");
-        pImpl->m_pEffectHelper->SetShaderResourceByName("g_DiffuseMap", tm.GetTexture(*pStr));
+        // No lighting in wireframe mode: ambient = diffuse color, diffuse/specular zeroed
+        phongMat.ambient = phongMat.diffuse;
+        phongMat.diffuse = XMFLOAT4(0.0f, 0.0f, 0.0f, 0.0f);
+        phongMat.specular = XMFLOAT4(0.0f, 0.0f, 0.0f, 0.0f);
+        pImpl->m_pEffectHelper->SetShaderResourceByName("g_DiffuseMap", tm.GetNullTexture());
     }
     else
     {
-        // No texture: derive ambient from diffuse so solid-color materials show correctly
-        phongMat.ambient = XMFLOAT4(phongMat.diffuse.x * 0.4f, phongMat.diffuse.y * 0.4f,
-                                     phongMat.diffuse.z * 0.4f, 1.0f);
-        pImpl->m_pEffectHelper->SetShaderResourceByName("g_DiffuseMap", tm.GetNullTexture());
+        auto pStr = material.TryGet<std::string>("$Diffuse");
+        if (pStr)
+        {
+            phongMat.ambient = material.Get<XMFLOAT4>("$AmbientColor");
+            pImpl->m_pEffectHelper->SetShaderResourceByName("g_DiffuseMap", tm.GetTexture(*pStr));
+        }
+        else
+        {
+            phongMat.ambient = XMFLOAT4(phongMat.diffuse.x * 0.4f, phongMat.diffuse.y * 0.4f,
+                                         phongMat.diffuse.z * 0.4f, 1.0f);
+            pImpl->m_pEffectHelper->SetShaderResourceByName("g_DiffuseMap", tm.GetNullTexture());
+        }
     }
 
     pImpl->m_pEffectHelper->GetConstantBufferVariable("g_Material")->SetRaw(&phongMat);
@@ -202,8 +213,19 @@ void BasicEffect::SetEyePos(const DirectX::XMFLOAT3& eyePos)
 void BasicEffect::SetRenderDefault()
 {
     pImpl->m_pCurrEffectPass = pImpl->m_pEffectHelper->GetEffectPass("Basic");
+    pImpl->m_pCurrEffectPass->SetRasterizerState(nullptr);
     pImpl->m_pCurrInputLayout = pImpl->m_pVertexPosNormalTexLayout;
     pImpl->m_CurrTopology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    pImpl->m_bWireframe = false;
+}
+
+void BasicEffect::SetRenderWireframe()
+{
+    pImpl->m_pCurrEffectPass = pImpl->m_pEffectHelper->GetEffectPass("Basic");
+    pImpl->m_pCurrEffectPass->SetRasterizerState(RenderStates::RSWireframe.Get());
+    pImpl->m_pCurrInputLayout = pImpl->m_pVertexPosNormalTexLayout;
+    pImpl->m_CurrTopology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    pImpl->m_bWireframe = true;
 }
 
 void BasicEffect::Apply(ID3D11DeviceContext* deviceContext)

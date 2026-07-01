@@ -56,6 +56,8 @@ public:
 
     // Draw with default render state
     void SetRenderDefault();
+    // Draw with wireframe render state (for debug collider visualization)
+    void SetRenderWireframe();
 
     // Maximum number of lights per type
     static const int maxLights = 5;
