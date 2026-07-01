@@ -1,19 +1,19 @@
 #include "Basic.hlsli"
 
-// 像素着色器(3D)
+// Pixel shader (3D)
 float4 PS(VertexPosHWNormalTex pIn) : SV_Target
 {
     float4 texColor = g_DiffuseMap.Sample(g_Sam, pIn.tex);
-    // 提前进行Alpha裁剪，对不符合要求的像素可以避免后续运算
+    // Early alpha clip to skip lighting for fully transparent pixels
     clip(texColor.a - 0.1f);
-    
-    // 标准化法向量
+
+    // Normalize the interpolated normal
     pIn.normalW = normalize(pIn.normalW);
 
-    // 顶点指向眼睛的向量
+    // Vector from surface to eye
     float3 toEyeW = normalize(g_EyePosW - pIn.posW);
 
-    // 初始化为0 
+    // Initialize to zero
     float4 ambient = float4(0.0f, 0.0f, 0.0f, 0.0f);
     float4 diffuse = float4(0.0f, 0.0f, 0.0f, 0.0f);
     float4 spec = float4(0.0f, 0.0f, 0.0f, 0.0f);

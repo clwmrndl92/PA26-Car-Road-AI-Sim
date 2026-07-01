@@ -5,7 +5,7 @@
 #include <DXTrace.h>
 #include <Vertex.h>
 #include <TextureManager.h>
-#include "LightHelper.h"
+#include <LightHelper.h>
 
 using namespace DirectX;
 

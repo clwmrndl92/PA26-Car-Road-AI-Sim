@@ -3,7 +3,7 @@
 
 #include <WinMin.h>
 #include "d3dApp.h"
-#include "Effects.h"
+#include "Rendering/Effects.h"
 #include <Camera.h>
 #include <Collision.h>
 #include <RenderStates.h>

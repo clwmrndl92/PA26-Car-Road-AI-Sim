@@ -8,9 +8,9 @@ endif()
 
 add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
 
-aux_source_directory(. DIR_SRCS)
+file(GLOB_RECURSE DIR_SRCS "*.cpp")
+file(GLOB_RECURSE HEADER_FILES "*.h")
 file(GLOB HLSL_FILES Shaders/*.hlsl Shaders/*.hlsli)
-file(GLOB HEADER_FILES ./*.h)
 
 foreach(HLSL_FILE ${HLSL_FILES})
 
@@ -46,6 +46,7 @@ foreach(HLSL_FILE ${HLSL_FILES})
 endforeach()
 
 add_executable(CarSim WIN32 ${DIR_SRCS} ${HEADER_FILES} ${HLSL_FILES})
+target_include_directories(CarSim PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(CarSim d3d11.lib dxgi.lib dxguid.lib D3DCompiler.lib winmm.lib)
 
 # ImGui
