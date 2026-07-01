@@ -11,6 +11,7 @@ GameApp::GameApp(HINSTANCE hInstance, const std::wstring& windowName, int initWi
 
 GameApp::~GameApp()
 {
+    m_GameObjects.clear();
     m_Physics.Shutdown();
 }
 
@@ -52,11 +53,16 @@ void GameApp::OnResize()
 
 void GameApp::UpdateScene(float dt)
 {
+    // Step 1. Update game objects
+    for (auto& obj : m_GameObjects) obj->Update(dt);
+
+    // Step 2. Calculate physics System
     m_Physics.Update(dt);
 
-    for (int i = 0; i < CAR_COUNT; i++)
-        m_Cars[i].Update(dt);
+    // Step 3. Update RenderObject
+    for (auto& obj : m_GameObjects) obj->UpdateRender();
 
+    // Step 4. Update camera by Input
     auto cam3rd = std::dynamic_pointer_cast<ThirdPersonCamera>(m_pCamera);
     auto cam1st = std::dynamic_pointer_cast<FirstPersonCamera>(m_pCamera);
 
@@ -67,22 +73,22 @@ void GameApp::UpdateScene(float dt)
     {
         Ray ray = Ray::ScreenToRay(*m_pCamera, io.MousePos.x, io.MousePos.y);
 
-        float distCar = FLT_MAX;
-        int hitCarIdx = -1;
-        for (int i = 0; i < CAR_COUNT; i++)
+        float distObj = FLT_MAX;
+        std::shared_ptr<GameObject> hitObj;
+        for (auto& obj : m_GameObjects)
         {
             float d = FLT_MAX;
-            if (ray.Hit(m_Cars[i].GetRender().GetBoundingBox(), &d) && d < distCar)
+            if (ray.Hit(obj->GetRender().GetBoundingBox(), &d) && d < distObj)
             {
-                distCar = d;
-                hitCarIdx = i;
+                distObj = d;
+                hitObj = obj;
             }
         }
 
-        if (hitCarIdx >= 0)
+        if (hitObj)
         {
-            m_PickedObjectName = "Car_" + std::to_string(hitCarIdx);
-            XMFLOAT3 target = m_Cars[hitCarIdx].GetRender().GetBoundingBox().Center;
+            m_PickedObjectName = hitObj->GetName();
+            XMFLOAT3 target = hitObj->GetRender().GetBoundingBox().Center;
 
             auto newCam = std::make_shared<ThirdPersonCamera>();
             newCam->SetViewPort(0.0f, 0.0f, (float)m_ClientWidth, (float)m_ClientHeight);
@@ -135,6 +141,7 @@ void GameApp::UpdateScene(float dt)
         }
     }
 
+    // Step 5. Set UI Window
     if (ImGui::Begin("Camera"))
     {
         int curr_item = (m_CameraMode == CameraMode::Free) ? 1 : 0;
@@ -205,11 +212,8 @@ void GameApp::DrawScene()
     m_pd3dImmediateContext->RSSetViewports(1, &viewport);
 
     m_BasicEffect.SetRenderDefault();
-    m_Road.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
-    for (int i = 0; i < DASH_COUNT; i++)
-        m_Dashes[i].Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
-    for (int i = 0; i < CAR_COUNT; i++)
-        m_Cars[i].Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
+    for (auto& obj : m_GameObjects)
+        obj->Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
 
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
@@ -221,43 +225,51 @@ bool GameApp::InitResource()
     // ******************
     // Initialize game objects
     //
-    // Road: gray ground (physics) + white center dashes (render only)
+    // Road
     {
         constexpr float ROAD_SIZE = 50.0f;
 
+        auto road = std::make_shared<GameObject>();
+        road->SetName("Road");
         Model* pGround = m_ModelManager.CreateFromGeometry("road_ground", Geometry::CreatePlane(ROAD_SIZE, ROAD_SIZE));
         pGround->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.22f, 0.22f, 0.22f, 1.0f));
         pGround->materials[0].Set<float>("$Opacity", 1.0f);
-        m_Road.GetRender().SetModel(pGround);
-        m_Road.GetRender().GetTransform().SetPosition(0.0f, 0.0f, 0.0f);
-        m_Road.Init(m_Physics, m_ModelManager, JPH::Vec3(ROAD_SIZE * 0.5f, 0.05f, ROAD_SIZE * 0.5f), Rigidbody::Type::Static);
+        road->GetRender().SetModel(pGround);
+        road->GetRender().GetTransform().SetPosition(0.0f, -5.0f, 0.0f);
+        road->Init(JPH::Vec3(ROAD_SIZE * 0.5f, 0.05f, ROAD_SIZE * 0.5f), Rigidbody::Type::Static);
+        m_GameObjects.push_back(road);
 
         Model* pDash = m_ModelManager.CreateFromGeometry("road_dash", Geometry::CreatePlane(0.3f, 3.0f));
         pDash->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f));
         pDash->materials[0].Set<float>("$Opacity", 1.0f);
-        for (int i = 0; i < DASH_COUNT; i++)
+        for (int i = 0; i < 9; i++)
         {
-            m_Dashes[i].SetModel(pDash);
-            float z = -24.0f + i * 6.0f;
-            m_Dashes[i].GetTransform().SetPosition(0.0f, 0.01f, z);
+            RenderObject& dash = road->AddSubRender();
+            dash.SetModel(pDash);
+            dash.GetTransform().SetPosition(0.0f, -4.99f, -24.0f + i * 6.0f);
         }
     }
 
-    // Initialize car models
-    static const char* carFiles[CAR_COUNT] = {
-        "Model\\car_1.obj",
-        "Model\\car_2.obj",
-    };
-    Model* pModel = m_ModelManager.CreateFromFile(carFiles[0]);
-    m_Cars[0].GetRender().SetModel(pModel);
-    m_Cars[0].GetRender().GetTransform().SetPosition(-2.0f, 5.0f, 0.0f);
-    m_Cars[0].Init(m_Physics, m_ModelManager, JPH::Vec3(0.9919f, 0.9674f, 2.1204f));
-    m_Cars[0].SetDrawCollider(true);
+    // Car 1
+    {
+        auto car = std::make_shared<GameObject>();
+        car->SetName("Car_0");
+        car->GetRender().SetModel(m_ModelManager.CreateFromFile("Model\\car_1.obj"));
+        car->GetRender().GetTransform().SetPosition(-2.0f, 5.0f, 0.0f);
+        car->Init(JPH::Vec3(0.9919f, 0.9674f, 2.1204f));
+        car->SetDrawCollider(true);
+        m_GameObjects.push_back(car);
+    }
 
-    pModel = m_ModelManager.CreateFromFile(carFiles[1]);
-    m_Cars[1].GetRender().SetModel(pModel);
-    m_Cars[1].GetRender().GetTransform().SetPosition(2.0f, 0.0f, 0.0f);
-    m_Cars[1].Init(m_Physics, m_ModelManager, JPH::Vec3(1.3421f, 0.9073f, 2.8342f), Rigidbody::Type::Static);
+    // Car 2
+    {
+        auto car = std::make_shared<GameObject>();
+        car->SetName("Car_1");
+        car->GetRender().SetModel(m_ModelManager.CreateFromFile("Model\\car_2.obj"));
+        car->GetRender().GetTransform().SetPosition(2.0f, 0.0f, 0.0f);
+        car->Init(JPH::Vec3(1.3421f, 0.9073f, 2.8342f), Rigidbody::Type::Static);
+        m_GameObjects.push_back(car);
+    }
 
     // ******************
     // Initialize camera

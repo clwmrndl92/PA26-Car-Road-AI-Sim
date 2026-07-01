@@ -1,23 +1,23 @@
 #include "GameObject.h"
-#include "PhysicsWorld.h"
+#include "PhysicsSystem.h"
 #include "Rendering/Effects.h"
+#include <ModelManager.h>
 #include <DirectXMath.h>
 
 JPH_SUPPRESS_WARNINGS
 
-void GameObject::Init(PhysicsWorld& physics, ModelManager& modelManager, JPH::Vec3 halfExtents, Rigidbody::Type type)
+void GameObject::Init(JPH::Vec3 halfExtents, Rigidbody::Type type)
 {
     DirectX::XMFLOAT3 pos = m_render.GetTransform().GetPosition();
-    m_rigidbody.Init(physics.GetBodyInterface(),
+    m_rigidbody.Init(PhysicsSystem::Get().GetBodyInterface(),
                      halfExtents,
                      JPH::Vec3(pos.x, pos.y, pos.z),
                      type);
 
-    // Create wireframe debug box matching collider size (halfExtents * 2 = full size)
     float w = halfExtents.GetX() * 2.0f;
     float h = halfExtents.GetY() * 2.0f;
     float d = halfExtents.GetZ() * 2.0f;
-    Model* pBox = modelManager.CreateFromGeometry("__collider__", Geometry::CreateBox(w, h, d));
+    Model* pBox = ModelManager::Get().CreateFromGeometry("__collider__", Geometry::CreateBox(w, h, d));
     pBox->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f));
     pBox->materials[0].Set<float>("$Opacity", 1.0f);
     m_debugBox.SetModel(pBox);
@@ -26,6 +26,8 @@ void GameObject::Init(PhysicsWorld& physics, ModelManager& modelManager, JPH::Ve
 void GameObject::Draw(ID3D11DeviceContext* context, IEffect& effect)
 {
     m_render.Draw(context, effect);
+    for (auto& sub : m_subRenders)
+        sub.Draw(context, effect);
 
     if (m_drawCollider && m_debugBox.GetModel())
     {

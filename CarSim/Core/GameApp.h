@@ -12,7 +12,7 @@
 #include <ModelManager.h>
 #include <TextureManager.h>
 #include <string>
-#include "PhysicsWorld.h"
+#include "PhysicsSystem.h"
 #include "GameObject.h"
 
 class GameApp : public D3DApp
@@ -40,14 +40,9 @@ private:
 
     std::unique_ptr<Depth2D> m_pDepthTexture;
 
-    static constexpr int CAR_COUNT = 2;
-    GameObject m_Cars[CAR_COUNT];
-    GameObject m_Road;
+    std::vector<std::shared_ptr<GameObject>> m_GameObjects;
 
-    static constexpr int DASH_COUNT = 9;
-    RenderObject m_Dashes[DASH_COUNT];
-
-    PhysicsWorld m_Physics;
+    PhysicsSystem m_Physics;
 
     std::shared_ptr<Camera> m_pCamera;
     CameraMode m_CameraMode = CameraMode::ThirdPerson;

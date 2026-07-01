@@ -47,9 +47,14 @@ public:
         return false;
     }
 };
-class PhysicsWorld
+class PhysicsSystem
 {
 public:
+    PhysicsSystem();
+    ~PhysicsSystem();
+
+    static PhysicsSystem& Get();
+
     void Init();
     void Update(float dt);
     void Shutdown();
