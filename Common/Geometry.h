@@ -42,6 +42,13 @@ namespace Geometry
         const std::function<DirectX::XMFLOAT3(float, float)>& normalFunc = [](float x, float z) { return DirectX::XMFLOAT3(0.0f, 1.0f, 0.0f); },
         const std::function<DirectX::XMFLOAT4(float, float)>& colorFunc = [](float x, float z) { return DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f); });
 
+    // Create a single line segment. Draw with a line-list topology (see BasicEffect::SetRenderLines).
+    GeometryData CreateLine(const DirectX::XMFLOAT3& from, const DirectX::XMFLOAT3& to);
+
+    // Create a grid of unit-spaced lines lying flat in the local XZ plane (y = 0), centered at the origin.
+    // Draw with a line-list topology (see BasicEffect::SetRenderLines).
+    GeometryData CreateLineGrid(float size = 500.0f, float spacing = 1.0f);
+
 }
 
 

@@ -20,8 +20,11 @@ public:
 
     JPH::Vec3   GetPosition() const;
     JPH::Quat   GetRotation() const;
+    void        SetPositionAndRotation(JPH::Vec3 position, JPH::Quat rotation);
     JPH::Vec3   GetLinearVelocity() const;
     void        SetLinearVelocity(JPH::Vec3 velocity);
+    JPH::Vec3   GetAngularVelocity() const;
+    void        SetAngularVelocity(JPH::Vec3 angularVelocity);
     void        AddForce(JPH::Vec3 force);
 
     bool IsValid() const { return !m_bodyId.IsInvalid(); }

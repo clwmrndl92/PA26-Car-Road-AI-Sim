@@ -20,7 +20,7 @@ public:
     virtual void Update(float dt) { }
     void UpdateRender() { SyncPhysicsToRender(); }
 
-    void Draw(ID3D11DeviceContext* context, IEffect& effect);
+    virtual void Draw(ID3D11DeviceContext* context, IEffect& effect);
 
     void SetDrawCollider(bool draw) { m_drawCollider = draw; }
     void SetName(std::string name)        { m_name = std::move(name); }

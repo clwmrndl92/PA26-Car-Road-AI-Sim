@@ -631,4 +631,55 @@ namespace Geometry
         return geoData;
     }
 
+    GeometryData CreateLine(const DirectX::XMFLOAT3& from, const DirectX::XMFLOAT3& to)
+    {
+        using namespace DirectX;
+
+        GeometryData geoData;
+        geoData.vertices = { from, to };
+        geoData.normals = { XMFLOAT3(0.0f, 1.0f, 0.0f), XMFLOAT3(0.0f, 1.0f, 0.0f) };
+        geoData.texcoords = { XMFLOAT2(0.0f, 0.0f), XMFLOAT2(0.0f, 0.0f) };
+        geoData.indices16 = { 0, 1 };
+        return geoData;
+    }
+
+    GeometryData CreateLineGrid(float size, float spacing)
+    {
+        using namespace DirectX;
+
+        GeometryData geoData;
+        int lineCount = static_cast<int>(size / spacing) + 1;
+        float half = size / 2.0f;
+
+        std::vector<uint32_t> indices;
+        for (int i = 0; i < lineCount; ++i)
+        {
+            float offset = -half + i * spacing;
+
+            uint32_t base = static_cast<uint32_t>(geoData.vertices.size());
+            geoData.vertices.push_back(XMFLOAT3(-half, 0.0f, offset)); // line parallel to X axis
+            geoData.vertices.push_back(XMFLOAT3(half, 0.0f, offset));
+            indices.push_back(base);
+            indices.push_back(base + 1);
+
+            base = static_cast<uint32_t>(geoData.vertices.size());
+            geoData.vertices.push_back(XMFLOAT3(offset, 0.0f, -half)); // line parallel to Z axis
+            geoData.vertices.push_back(XMFLOAT3(offset, 0.0f, half));
+            indices.push_back(base);
+            indices.push_back(base + 1);
+        }
+
+        // RenderObject::Draw() picks the index buffer format (16 vs 32-bit) from indexCount alone,
+        // so the populated array must match that same 65535 threshold or the GPU misreads the buffer.
+        if (indices.size() > 65535)
+            geoData.indices32 = std::move(indices);
+        else
+            geoData.indices16.assign(indices.begin(), indices.end());
+
+        geoData.normals.resize(geoData.vertices.size(), XMFLOAT3(0.0f, 1.0f, 0.0f));
+        geoData.texcoords.resize(geoData.vertices.size(), XMFLOAT2(0.0f, 0.0f));
+
+        return geoData;
+    }
+
 }

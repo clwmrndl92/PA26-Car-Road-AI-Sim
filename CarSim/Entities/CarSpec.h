@@ -9,6 +9,7 @@ struct CarSpec
     JPH::Vec3   halfExtents;
     JPH::Vec3   renderOffset;    // where the model is drawn, relative to the car's transform
     JPH::Vec3   colliderOffset;  // where the collider is placed, relative to the car's transform
+    float       wheelbase;       // distance between front and rear axle centers, for the bicycle model
 };
 
 enum class CarType

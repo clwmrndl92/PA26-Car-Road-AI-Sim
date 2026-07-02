@@ -49,6 +49,11 @@ JPH::Quat Rigidbody::GetRotation() const
     return m_bodyInterface->GetRotation(m_bodyId);
 }
 
+void Rigidbody::SetPositionAndRotation(JPH::Vec3 position, JPH::Quat rotation)
+{
+    m_bodyInterface->SetPositionAndRotation(m_bodyId, JPH::RVec3(position), rotation, JPH::EActivation::Activate);
+}
+
 JPH::Vec3 Rigidbody::GetLinearVelocity() const
 {
     return m_bodyInterface->GetLinearVelocity(m_bodyId);
@@ -57,6 +62,16 @@ JPH::Vec3 Rigidbody::GetLinearVelocity() const
 void Rigidbody::SetLinearVelocity(JPH::Vec3 velocity)
 {
     m_bodyInterface->SetLinearVelocity(m_bodyId, velocity);
+}
+
+JPH::Vec3 Rigidbody::GetAngularVelocity() const
+{
+    return m_bodyInterface->GetAngularVelocity(m_bodyId);
+}
+
+void Rigidbody::SetAngularVelocity(JPH::Vec3 angularVelocity)
+{
+    m_bodyInterface->SetAngularVelocity(m_bodyId, angularVelocity);
 }
 
 void Rigidbody::AddForce(JPH::Vec3 force)

@@ -48,6 +48,13 @@ private:
     CameraMode                  m_CameraMode = CameraMode::ThirdPerson;
     std::string                 m_PickedObjectName;
     std::weak_ptr<GameObject>   m_pPickedObject;
+
+    RenderObject m_GridXZ;
+    RenderObject m_GridXY;
+    RenderObject m_GridYZ;
+    bool m_ShowGridXZ = true;
+    bool m_ShowGridXY = false;
+    bool m_ShowGridYZ = false;
 };
 
 #endif

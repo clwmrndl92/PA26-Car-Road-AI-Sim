@@ -1,4 +1,5 @@
 #include "Car.h"
+#include "Rendering/Effects.h"
 #include <ModelManager.h>
 #include <algorithm>
 #include <imgui.h>
@@ -8,25 +9,136 @@ void Car::Init(const CarSpec &spec)
     GetRender().SetModel(ModelManager::Get().CreateFromFile(spec.modelPath));
     SetRenderOffset(ToXMFLOAT3(spec.renderOffset));
     GameObject::Init(spec.halfExtents, Rigidbody::Type::Dynamic, spec.colliderOffset);
+
+    m_spawnPosition = GetTransform().GetPosition();
+    m_spawnRotation = GetTransform().GetRotationQuat();
+    m_wheelbase = spec.wheelbase;
+
+    // Line sticking out the front of the car, showing the current steering direction
+    Model *pLine = ModelManager::Get().CreateFromGeometry("__steer_line__:" + GetName(),
+                                                          Geometry::CreateLine(DirectX::XMFLOAT3(0.0f, 0.0f, 2.0f), DirectX::XMFLOAT3(0.0f, 0.0f, 8.0f)));
+    pLine->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f));
+    pLine->materials[0].Set<float>("$Opacity", 1.0f);
+    m_steerLine.SetModel(pLine);
 }
 
 void Car::Update(float dt)
 {
-    constexpr float ACCEL_RAMP_RATE = 10.0f; // acceleration change per second held
-    constexpr float BRAKE_RAMP_RATE = 50.0f; // braking ramps up faster than accelerating
+    UpdateReset();
+    UpdateGear();
+    UpdateAcceleration(dt);
+    float maxSteerAngle = UpdateSteering(dt);
+    UpdateDebugWindow(maxSteerAngle);
+    ApplyMotion();
+}
 
-    if (ImGui::IsKeyDown(ImGuiKey_X)) // Brake
-        m_acceleration = std::min(m_acceleration, 0.0f) - BRAKE_RAMP_RATE * dt;
-    else if (ImGui::IsKeyDown(ImGuiKey_Z)) // Accelerate
-        m_acceleration = std::max(m_acceleration, 0.0f) + ACCEL_RAMP_RATE * dt;
+void Car::UpdateGear()
+{
+    if (m_speed == 0.0f && ImGui::IsKeyPressed(ImGuiKey_Z, false)) // Toggle Drive / Reverse gear
+        m_isReverse = !m_isReverse;
+}
+
+void Car::UpdateReset()
+{
+    if (!ImGui::IsKeyPressed(ImGuiKey_Space, false))
+        return;
+
+    m_rigidbody.SetPositionAndRotation(
+        JPH::Vec3(m_spawnPosition.x, m_spawnPosition.y, m_spawnPosition.z),
+        JPH::Quat(m_spawnRotation.x, m_spawnRotation.y, m_spawnRotation.z, m_spawnRotation.w));
+    m_rigidbody.SetLinearVelocity(JPH::Vec3::sZero());
+    m_rigidbody.SetAngularVelocity(JPH::Vec3::sZero());
+    m_speed = 0.0f;
+    m_acceleration = 0.0f;
+}
+
+void Car::UpdateAcceleration(float dt)
+{
+    constexpr float ACCEL_RAMP_RATE = 11.1f; // reaches m_maxAcceleration in ~0.25s
+    constexpr float BRAKE_RAMP_RATE = 55.6f; // reaches m_maxBrakeDeceleration in ~0.17s
+
+    if (ImGui::IsKeyDown(ImGuiKey_DownArrow)) // Brake
+        m_acceleration = std::max(std::min(m_acceleration, 0.0f) - BRAKE_RAMP_RATE * dt, -m_maxBrakeDeceleration);
+    else if (ImGui::IsKeyDown(ImGuiKey_UpArrow)) // Accelerate
+        m_acceleration = std::min(std::max(m_acceleration, 0.0f) + ACCEL_RAMP_RATE * dt, m_maxAcceleration);
     else
         m_acceleration = 0.0f;
-    m_acceleration = std::clamp(m_acceleration, -m_maxAcceleration, m_maxAcceleration);
 
     m_speed += m_acceleration * dt;
     m_speed = std::clamp(m_speed, 0.0f, m_maxSpeed);
+}
+
+float Car::UpdateSteering(float dt)
+{
+    constexpr float STEER_RAMP_RATE = 0.4f;           // todo : 추후 편안 핸들돌리기 0.3, 급회전 1.0
+    constexpr float LOW_SPEED_CUTOFF = 18.26f / 3.6f; // 시속 18키로 미만은 최대 조향각 사용
+
+    if (ImGui::IsKeyDown(ImGuiKey_LeftArrow))
+        m_steerAngle = std::min(m_steerAngle, 0.0f) - STEER_RAMP_RATE * dt;
+    else if (ImGui::IsKeyDown(ImGuiKey_RightArrow))
+        m_steerAngle = std::max(m_steerAngle, 0.0f) + STEER_RAMP_RATE * dt;
+    else if (m_steerAngle > 0.0f) // Return to center
+        m_steerAngle = std::max(m_steerAngle - STEER_RAMP_RATE * dt, 0.0f);
+    else
+        m_steerAngle = std::min(m_steerAngle + STEER_RAMP_RATE * dt, 0.0f);
+
+    float maxSteerAngle = (m_speed <= LOW_SPEED_CUTOFF) ? m_maxSteerAngle : 20.2f / (m_speed * m_speed);
+    m_steerAngle = std::clamp(m_steerAngle, -maxSteerAngle, maxSteerAngle);
+    return maxSteerAngle;
+}
+
+void Car::UpdateDebugWindow(float maxSteerAngle)
+{
+    if (!m_drawCollider)
+        return;
+
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x, 0.0f), ImGuiCond_FirstUseEver, ImVec2(1.0f, 0.0f));
+    if (ImGui::Begin(("Car: " + GetName()).c_str()))
+    {
+        ImGui::Text("Speed: %.1f km/h", m_speed * 3.6f);
+        ImGui::Text("Accel: %.1f km/h/s", m_acceleration * 3.6f);
+        ImGui::Text("Steer: %.2f / %.2f", m_steerAngle, maxSteerAngle);
+    }
+    ImGui::End();
+}
+
+void Car::ApplyMotion()
+{
+    float signedSpeed = m_speed * (m_isReverse ? -1.0f : 1.0f);
+
+    float angularVelocity = signedSpeed * tan(m_steerAngle) / m_wheelbase; // bicycle model
+    m_rigidbody.SetAngularVelocity(JPH::Vec3(0.0f, angularVelocity, 0.0f));
 
     DirectX::XMFLOAT3 fwd = GetTransform().GetForwardAxis();
     float vy = m_rigidbody.GetLinearVelocity().GetY();
-    m_rigidbody.SetLinearVelocity(JPH::Vec3(fwd.x * m_speed, vy, fwd.z * m_speed));
+    m_rigidbody.SetLinearVelocity(JPH::Vec3(fwd.x * signedSpeed, vy, fwd.z * signedSpeed));
+}
+
+void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
+{
+    GameObject::Draw(context, effect);
+
+    if (!m_drawCollider || !m_steerLine.GetModel())
+        return;
+
+    using namespace DirectX;
+
+    // Car only ever yaws around world Y, so the steer-angle offset and the car's own
+    // rotation share an axis and can be combined in either order.
+    XMFLOAT4 carRotF = GetTransform().GetRotationQuat();
+    XMVECTOR carRot = XMLoadFloat4(&carRotF);
+    XMVECTOR steerYaw = XMQuaternionRotationAxis(g_XMIdentityR1, m_steerAngle);
+    XMVECTOR lineRot = XMQuaternionNormalize(XMQuaternionMultiply(carRot, steerYaw));
+
+    XMFLOAT4 lineRotF;
+    XMStoreFloat4(&lineRotF, lineRot);
+    m_steerLine.GetTransform().SetPosition(GetTransform().GetPosition());
+    m_steerLine.GetTransform().SetRotation(lineRotF);
+
+    if (auto *pBasic = dynamic_cast<BasicEffect *>(&effect))
+    {
+        pBasic->SetRenderLines();
+        m_steerLine.Draw(context, effect);
+        pBasic->SetRenderDefault();
+    }
 }

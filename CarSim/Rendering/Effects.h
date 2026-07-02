@@ -60,6 +60,8 @@ public:
     void SetRenderWireframe();
     // Draw with depth testing disabled (so debug markers show through other geometry)
     void SetRenderNoDepthTest();
+    // Draw with line-list topology (for debug lines)
+    void SetRenderLines();
 
     // Maximum number of lights per type
     static const int maxLights = 5;

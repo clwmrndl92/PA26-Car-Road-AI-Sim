@@ -151,6 +151,15 @@ void GameApp::UpdateScene(float dt)
     }
 
     // Step 5. Set UI Window
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+    if (ImGui::Begin("Debug Grid"))
+    {
+        ImGui::Checkbox("XZ Plane", &m_ShowGridXZ);
+        ImGui::Checkbox("XY Plane", &m_ShowGridXY);
+        ImGui::Checkbox("YZ Plane", &m_ShowGridYZ);
+    }
+    ImGui::End();
+
     if (ImGui::Begin("Camera"))
     {
         int curr_item = (m_CameraMode == CameraMode::Free) ? 1 : 0;
@@ -191,12 +200,6 @@ void GameApp::UpdateScene(float dt)
         else
             ImGui::Text("Picked: %s", m_PickedObjectName.c_str());
 
-        if (auto pickedCar = std::dynamic_pointer_cast<Car>(m_pPickedObject.lock()))
-        {
-            ImGui::Text("Speed: %.2f", pickedCar->GetSpeed());
-            ImGui::Text("Accel: %.2f", pickedCar->GetAcceleration());
-        }
-
         auto pos = m_pCamera->GetPosition();
         ImGui::Text("Pos: %.1f %.1f %.1f", pos.x, pos.y, pos.z);
     }
@@ -229,6 +232,12 @@ void GameApp::DrawScene()
     m_BasicEffect.SetRenderDefault();
     for (auto& obj : m_GameObjects)
         obj->Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
+
+    m_BasicEffect.SetRenderLines();
+    if (m_ShowGridXZ) m_GridXZ.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
+    if (m_ShowGridXY) m_GridXY.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
+    if (m_ShowGridYZ) m_GridYZ.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
+    m_BasicEffect.SetRenderDefault();
 
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
@@ -268,6 +277,25 @@ bool GameApp::InitResource()
             dash.SetModel(pDash);
             dash.GetTransform().SetPosition(0.0f, 0.01f, startZ + i * DASH_SPACING);
         }
+    }
+
+    // Debug grid (XZ plane, rotated copies for XY / YZ)
+    {
+        Model* pGrid = m_ModelManager.CreateFromGeometry("debug_grid", Geometry::CreateLineGrid(500.0f, 1.0f));
+        pGrid->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.4f, 0.4f, 0.4f, 1.0f));
+        pGrid->materials[0].Set<float>("$Opacity", 1.0f);
+
+        m_GridXZ.SetModel(pGrid);
+
+        XMFLOAT4 rotXY, rotYZ;
+        XMStoreFloat4(&rotXY, XMQuaternionRotationAxis(g_XMIdentityR0, XM_PIDIV2)); // XZ -> XY
+        XMStoreFloat4(&rotYZ, XMQuaternionRotationAxis(g_XMIdentityR2, XM_PIDIV2)); // XZ -> YZ
+
+        m_GridXY.SetModel(pGrid);
+        m_GridXY.GetTransform().SetRotation(rotXY);
+
+        m_GridYZ.SetModel(pGrid);
+        m_GridYZ.GetTransform().SetRotation(rotYZ);
     }
 
     // Car 1
