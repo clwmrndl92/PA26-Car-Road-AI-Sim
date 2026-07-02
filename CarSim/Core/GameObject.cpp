@@ -6,14 +6,15 @@
 
 JPH_SUPPRESS_WARNINGS
 
-void GameObject::Init(JPH::Vec3 halfExtents, Rigidbody::Type type, JPH::Vec3 colliderOffset)
+void GameObject::Init(JPH::Vec3 halfExtents, Rigidbody::Type type, JPH::Vec3 colliderOffset, float mass)
 {
     DirectX::XMFLOAT3 pos = m_transform.GetPosition();
     m_rigidbody.Init(PhysicsSystem::Get().GetBodyInterface(),
                      halfExtents,
                      JPH::Vec3(pos.x, pos.y, pos.z),
                      type,
-                     colliderOffset);
+                     colliderOffset,
+                     mass);
 
     m_colliderOffset = ToXMFLOAT3(colliderOffset);
 

@@ -25,7 +25,6 @@ float Camera::GetRotationY() const
     return m_Transform.GetRotation().y;
 }
 
-
 XMVECTOR Camera::GetRightAxisXM() const
 {
     return m_Transform.GetRightAxisXM();
@@ -112,7 +111,7 @@ void Camera::SetFrustum(float fovY, float aspect, float nearZ, float farZ)
     m_FarZ = farZ;
 }
 
-void Camera::SetViewPort(const D3D11_VIEWPORT & viewPort)
+void Camera::SetViewPort(const D3D11_VIEWPORT &viewPort)
 {
     m_ViewPort = viewPort;
 }
@@ -127,7 +126,6 @@ void Camera::SetViewPort(float topLeftX, float topLeftY, float width, float heig
     m_ViewPort.MaxDepth = maxDepth;
 }
 
-
 // ******************
 // First-person / free-view camera
 //
@@ -141,18 +139,18 @@ void FirstPersonCamera::SetPosition(float x, float y, float z)
     SetPosition(XMFLOAT3(x, y, z));
 }
 
-void FirstPersonCamera::SetPosition(const XMFLOAT3& pos)
+void FirstPersonCamera::SetPosition(const XMFLOAT3 &pos)
 {
     m_Transform.SetPosition(pos);
 }
 
-void FirstPersonCamera::LookAt(const XMFLOAT3 & pos, const XMFLOAT3 & target,const XMFLOAT3 & up)
+void FirstPersonCamera::LookAt(const XMFLOAT3 &pos, const XMFLOAT3 &target, const XMFLOAT3 &up)
 {
     m_Transform.SetPosition(pos);
     m_Transform.LookAt(target, up);
 }
 
-void FirstPersonCamera::LookTo(const XMFLOAT3 & pos, const XMFLOAT3 & to, const XMFLOAT3 & up)
+void FirstPersonCamera::LookTo(const XMFLOAT3 &pos, const XMFLOAT3 &to, const XMFLOAT3 &up)
 {
     m_Transform.SetPosition(pos);
     m_Transform.LookTo(to, up);
@@ -177,7 +175,7 @@ void FirstPersonCamera::MoveForward(float d)
     m_Transform.Translate(m_Transform.GetForwardAxis(), d);
 }
 
-void FirstPersonCamera::Translate(const DirectX::XMFLOAT3& dir, float magnitude)
+void FirstPersonCamera::Translate(const DirectX::XMFLOAT3 &dir, float magnitude)
 {
     m_Transform.Translate(dir, magnitude);
 }
@@ -202,27 +200,25 @@ void FirstPersonCamera::RotateY(float rad)
     m_Transform.SetRotation(rotation);
 }
 
-
-
 // ******************
 // Third-person camera
 //
 
-ThirdPersonCamera::~ThirdPersonCamera()
+FocusCamera::~FocusCamera()
 {
 }
 
-XMFLOAT3 ThirdPersonCamera::GetTargetPosition() const
+XMFLOAT3 FocusCamera::GetTargetPosition() const
 {
     return m_Target;
 }
 
-float ThirdPersonCamera::GetDistance() const
+float FocusCamera::GetDistance() const
 {
     return m_Distance;
 }
 
-void ThirdPersonCamera::RotateX(float rad)
+void FocusCamera::RotateX(float rad)
 {
     XMFLOAT3 rotation = m_Transform.GetRotation();
     // Clamp the rotation around the x axis to [0, pi/3]
@@ -237,7 +233,7 @@ void ThirdPersonCamera::RotateX(float rad)
     m_Transform.Translate(m_Transform.GetForwardAxis(), -m_Distance);
 }
 
-void ThirdPersonCamera::RotateY(float rad)
+void FocusCamera::RotateY(float rad)
 {
     XMFLOAT3 rotation = m_Transform.GetRotation();
     rotation.y = XMScalarModAngle(rotation.y + rad);
@@ -247,7 +243,7 @@ void ThirdPersonCamera::RotateY(float rad)
     m_Transform.Translate(m_Transform.GetForwardAxis(), -m_Distance);
 }
 
-void ThirdPersonCamera::Approach(float dist)
+void FocusCamera::Approach(float dist)
 {
     m_Distance += dist;
     // Clamp the distance to [m_MinDist, m_MaxDist]
@@ -260,7 +256,7 @@ void ThirdPersonCamera::Approach(float dist)
     m_Transform.Translate(m_Transform.GetForwardAxis(), -m_Distance);
 }
 
-void ThirdPersonCamera::SetRotationX(float rad)
+void FocusCamera::SetRotationX(float rad)
 {
     XMFLOAT3 rotation = m_Transform.GetRotation();
     // Clamp the rotation around the x axis to [0, pi/3]
@@ -275,7 +271,7 @@ void ThirdPersonCamera::SetRotationX(float rad)
     m_Transform.Translate(m_Transform.GetForwardAxis(), -m_Distance);
 }
 
-void ThirdPersonCamera::SetRotationY(float rad)
+void FocusCamera::SetRotationY(float rad)
 {
     XMFLOAT3 rotation = m_Transform.GetRotation();
     rotation.y = XMScalarModAngle(rad);
@@ -284,19 +280,18 @@ void ThirdPersonCamera::SetRotationY(float rad)
     m_Transform.Translate(m_Transform.GetForwardAxis(), -m_Distance);
 }
 
-void ThirdPersonCamera::SetTarget(const XMFLOAT3 & target)
+void FocusCamera::SetTarget(const XMFLOAT3 &target)
 {
     m_Target = target;
 }
 
-void ThirdPersonCamera::SetDistance(float dist)
+void FocusCamera::SetDistance(float dist)
 {
     m_Distance = dist;
 }
 
-void ThirdPersonCamera::SetDistanceMinMax(float minDist, float maxDist)
+void FocusCamera::SetDistanceMinMax(float minDist, float maxDist)
 {
     m_MinDist = minDist;
     m_MaxDist = maxDist;
 }
-

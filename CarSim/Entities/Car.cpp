@@ -2,17 +2,19 @@
 #include "Rendering/Effects.h"
 #include <ModelManager.h>
 #include <algorithm>
+#include <cmath>
 #include <imgui.h>
 
 void Car::Init(const CarSpec &spec)
 {
     GetRender().SetModel(ModelManager::Get().CreateFromFile(spec.modelPath));
     SetRenderOffset(ToXMFLOAT3(spec.renderOffset));
-    GameObject::Init(spec.halfExtents, Rigidbody::Type::Dynamic, spec.colliderOffset);
+    GameObject::Init(spec.halfExtents, Rigidbody::Type::Dynamic, spec.colliderOffset, spec.mass);
 
     m_spawnPosition = GetTransform().GetPosition();
     m_spawnRotation = GetTransform().GetRotationQuat();
     m_wheelbase = spec.wheelbase;
+    m_mass = spec.mass;
 
     // Line sticking out the front of the car, showing the current steering direction
     Model *pLine = ModelManager::Get().CreateFromGeometry("__steer_line__:" + GetName(),
@@ -34,13 +36,13 @@ void Car::Update(float dt)
 
 void Car::UpdateGear()
 {
-    if (m_speed == 0.0f && ImGui::IsKeyPressed(ImGuiKey_Z, false)) // Toggle Drive / Reverse gear
+    if (m_isControlled && m_speed == 0.0f && ImGui::IsKeyPressed(ImGuiKey_Z, false)) // Toggle Drive / Reverse gear
         m_isReverse = !m_isReverse;
 }
 
 void Car::UpdateReset()
 {
-    if (!ImGui::IsKeyPressed(ImGuiKey_Space, false))
+    if (!m_isControlled || !ImGui::IsKeyPressed(ImGuiKey_Space, false))
         return;
 
     m_rigidbody.SetPositionAndRotation(
@@ -57,14 +59,24 @@ void Car::UpdateAcceleration(float dt)
     constexpr float ACCEL_RAMP_RATE = 11.1f; // reaches m_maxAcceleration in ~0.25s
     constexpr float BRAKE_RAMP_RATE = 55.6f; // reaches m_maxBrakeDeceleration in ~0.17s
 
-    if (ImGui::IsKeyDown(ImGuiKey_DownArrow)) // Brake
+    if (m_isControlled && ImGui::IsKeyDown(ImGuiKey_DownArrow)) // Brake
         m_acceleration = std::max(std::min(m_acceleration, 0.0f) - BRAKE_RAMP_RATE * dt, -m_maxBrakeDeceleration);
-    else if (ImGui::IsKeyDown(ImGuiKey_UpArrow)) // Accelerate
+    else if (m_isControlled && ImGui::IsKeyDown(ImGuiKey_UpArrow)) // Accelerate
         m_acceleration = std::min(std::max(m_acceleration, 0.0f) + ACCEL_RAMP_RATE * dt, m_maxAcceleration);
     else
         m_acceleration = 0.0f;
 
-    m_speed += m_acceleration * dt;
+    if (m_acceleration == 0.0f)
+    {
+        // 자연 감속
+        m_speed -= m_speed * 0.1f * dt;
+
+        if (m_speed < 0.1f)
+            m_speed = 0.0f;
+    }
+    else
+        m_speed += m_acceleration * dt;
+
     m_speed = std::clamp(m_speed, 0.0f, m_maxSpeed);
 }
 
@@ -73,9 +85,9 @@ float Car::UpdateSteering(float dt)
     constexpr float STEER_RAMP_RATE = 0.4f;           // todo : 추후 편안 핸들돌리기 0.3, 급회전 1.0
     constexpr float LOW_SPEED_CUTOFF = 18.26f / 3.6f; // 시속 18키로 미만은 최대 조향각 사용
 
-    if (ImGui::IsKeyDown(ImGuiKey_LeftArrow))
+    if (m_isControlled && ImGui::IsKeyDown(ImGuiKey_LeftArrow))
         m_steerAngle = std::min(m_steerAngle, 0.0f) - STEER_RAMP_RATE * dt;
-    else if (ImGui::IsKeyDown(ImGuiKey_RightArrow))
+    else if (m_isControlled && ImGui::IsKeyDown(ImGuiKey_RightArrow))
         m_steerAngle = std::max(m_steerAngle, 0.0f) + STEER_RAMP_RATE * dt;
     else if (m_steerAngle > 0.0f) // Return to center
         m_steerAngle = std::max(m_steerAngle - STEER_RAMP_RATE * dt, 0.0f);
@@ -89,29 +101,53 @@ float Car::UpdateSteering(float dt)
 
 void Car::UpdateDebugWindow(float maxSteerAngle)
 {
-    if (!m_drawCollider)
+    if (!m_drawCollider || !m_isControlled)
         return;
 
     ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x, 0.0f), ImGuiCond_FirstUseEver, ImVec2(1.0f, 0.0f));
     if (ImGui::Begin(("Car: " + GetName()).c_str()))
     {
+        DirectX::XMFLOAT3 pos = GetTransform().GetPosition();
+        ImGui::Text("Pos: %.1f %.1f %.1f", pos.x, pos.y, pos.z);
         ImGui::Text("Speed: %.1f km/h", m_speed * 3.6f);
         ImGui::Text("Accel: %.1f km/h/s", m_acceleration * 3.6f);
         ImGui::Text("Steer: %.2f / %.2f", m_steerAngle, maxSteerAngle);
+
+        float gearSign = m_isReverse ? -1.0f : 1.0f;
+        float signedSpeed = m_speed * gearSign;
+        DirectX::XMFLOAT3 fwd = GetTransform().GetForwardAxis();
+        JPH::Vec3 actualVel = m_rigidbody.GetLinearVelocity();
+        JPH::Vec3 desiredVel(fwd.x * signedSpeed, actualVel.GetY(), fwd.z * signedSpeed);
+        ImGui::Text("ActualVel: %.2f", actualVel.Length());
+        ImGui::Text("DesiredVel: %.2f", desiredVel.Length());
     }
     ImGui::End();
 }
 
 void Car::ApplyMotion()
 {
-    float signedSpeed = m_speed * (m_isReverse ? -1.0f : 1.0f);
+    float gearSign = m_isReverse ? -1.0f : 1.0f;
+    float signedSpeed = m_speed * gearSign;
 
-    float angularVelocity = signedSpeed * tan(m_steerAngle) / m_wheelbase; // bicycle model
+    // Steering stays kinematic -- the bicycle model already gives the correct yaw rate.
+    float angularVelocity = signedSpeed * tan(m_steerAngle) / m_wheelbase;
     m_rigidbody.SetAngularVelocity(JPH::Vec3(0.0f, angularVelocity, 0.0f));
 
     DirectX::XMFLOAT3 fwd = GetTransform().GetForwardAxis();
-    float vy = m_rigidbody.GetLinearVelocity().GetY();
-    m_rigidbody.SetLinearVelocity(JPH::Vec3(fwd.x * signedSpeed, vy, fwd.z * signedSpeed));
+    JPH::Vec3 actualVel = m_rigidbody.GetLinearVelocity();
+    JPH::Vec3 desiredVel(fwd.x * signedSpeed, actualVel.GetY(), fwd.z * signedSpeed);
+
+    constexpr float SPEED_DIVERGENCE_THRESHOLD = 0.05f; // m/s; how far physics can drift before we yield to it
+
+    if ((actualVel - desiredVel).Length() > SPEED_DIVERGENCE_THRESHOLD)
+    {
+        m_speed = JPH::Vec3(actualVel.GetX(), 0.0f, actualVel.GetZ()).Length();
+        m_acceleration = 0.0f;
+    }
+    else
+    {
+        m_rigidbody.SetLinearVelocity(desiredVel);
+    }
 }
 
 void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)

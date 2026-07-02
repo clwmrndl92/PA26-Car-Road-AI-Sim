@@ -4,7 +4,7 @@
 JPH_SUPPRESS_WARNINGS
 
 void Rigidbody::Init(JPH::BodyInterface& bodyInterface, JPH::Vec3 halfExtents, JPH::Vec3 position, Type type,
-                      JPH::Vec3 colliderOffset)
+                      JPH::Vec3 colliderOffset, float mass)
 {
     m_bodyInterface = &bodyInterface;
 
@@ -25,6 +25,13 @@ void Rigidbody::Init(JPH::BodyInterface& bodyInterface, JPH::Vec3 halfExtents, J
         motionType,
         layer
     );
+
+    if (type == Type::Dynamic)
+    {
+        // Take mass from `mass` but keep Jolt's shape-derived inertia tensor, scaled to that mass.
+        settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
+        settings.mMassPropertiesOverride.mMass = mass;
+    }
 
     m_bodyId = bodyInterface.CreateAndAddBody(settings, JPH::EActivation::Activate);
 }

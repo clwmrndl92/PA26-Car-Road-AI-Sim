@@ -18,10 +18,14 @@
 class GameApp : public D3DApp
 {
 public:
-    enum class CameraMode { ThirdPerson, Free };
+    enum class CameraMode
+    {
+        Focus,
+        Free
+    };
 
 public:
-    GameApp(HINSTANCE hInstance, const std::wstring& windowName, int initWidth, int initHeight);
+    GameApp(HINSTANCE hInstance, const std::wstring &windowName, int initWidth, int initHeight);
     ~GameApp();
 
     bool Init();
@@ -31,10 +35,11 @@ public:
 
 private:
     bool InitResource();
+    void FocusOnObject(const std::shared_ptr<GameObject> &obj);
 
 private:
     TextureManager m_TextureManager;
-    ModelManager   m_ModelManager;
+    ModelManager m_ModelManager;
 
     BasicEffect m_BasicEffect;
 
@@ -44,15 +49,15 @@ private:
 
     PhysicsSystem m_Physics;
 
-    std::shared_ptr<Camera>     m_pCamera;
-    CameraMode                  m_CameraMode = CameraMode::ThirdPerson;
-    std::string                 m_PickedObjectName;
-    std::weak_ptr<GameObject>   m_pPickedObject;
+    std::shared_ptr<Camera> m_pCamera;
+    CameraMode m_CameraMode = CameraMode::Focus;
+    std::string m_PickedObjectName;
+    std::weak_ptr<GameObject> m_pPickedObject;
 
     RenderObject m_GridXZ;
     RenderObject m_GridXY;
     RenderObject m_GridYZ;
-    bool m_ShowGridXZ = true;
+    bool m_ShowGridXZ = false;
     bool m_ShowGridXY = false;
     bool m_ShowGridYZ = false;
 };

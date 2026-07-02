@@ -15,7 +15,7 @@ public:
     // position stays the body's origin (its rotation pivot); colliderOffset shifts only
     // the collision box within that frame, so it rotates around position, not its own center.
     void    Init(JPH::BodyInterface& bodyInterface, JPH::Vec3 halfExtents, JPH::Vec3 position, Type type,
-                 JPH::Vec3 colliderOffset = JPH::Vec3::sZero());
+                 JPH::Vec3 colliderOffset = JPH::Vec3::sZero(), float mass = 1.0f);
     void    Destroy(JPH::BodyInterface& bodyInterface);
 
     JPH::Vec3   GetPosition() const;
