@@ -36,7 +36,9 @@ void Car::Update(float dt)
 
 void Car::UpdateGear()
 {
-    if (m_isControlled && m_speed == 0.0f && ImGui::IsKeyPressed(ImGuiKey_Z, false)) // Toggle Drive / Reverse gear
+    constexpr float GEAR_SWITCH_SPEED_THRESHOLD = 2.0f / 3.6f; // 2 km/h
+
+    if (m_isControlled && m_speed <= GEAR_SWITCH_SPEED_THRESHOLD && ImGui::IsKeyPressed(ImGuiKey_Z, false)) // Toggle Drive / Reverse gear
         m_isReverse = !m_isReverse;
 }
 
