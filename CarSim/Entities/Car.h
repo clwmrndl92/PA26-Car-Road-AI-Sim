@@ -22,6 +22,8 @@ private:
     float UpdateSteering(float dt); // returns current speed-scaled max steer angle
     void UpdateDebugWindow(float maxSteerAngle);
     void ApplyMotion();
+    float GetSignedSpeed() const { return m_speed * (m_isReverse ? -1.0f : 1.0f); } // + forward gear, - reverse gear
+    JPH::Vec3 ComputeDesiredVelocity() const; // target linear velocity from current speed/gear/facing
 
     bool m_isControlled = false; // only respond to keyboard input while selected (see GameApp)
 
@@ -30,7 +32,7 @@ private:
     const float m_maxBrakeDeceleration = 9.26f; // 100-0 km/h in 3s
     float m_wheelbase;                          // distance between front and rear axles
     float m_mass = 1.0f;                        // kg, set from CarSpec in Init(); force = mass * m_acceleration
-    float m_speed = 0.0f;                       // planar speed magnitude, read back from the rigidbody each frame
+    float m_speed = 0.0f;                       // planar speed magnitude, unsigned
     float m_acceleration = 0.0f;
     float m_maxSteerAngle = 0.785f; // radians (45 deg), cap at zero speed (shrinks as speed increases)
     float m_steerAngle = 0.0f;

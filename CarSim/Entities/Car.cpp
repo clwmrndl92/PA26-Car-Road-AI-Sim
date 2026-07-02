@@ -70,7 +70,7 @@ void Car::UpdateAcceleration(float dt)
 
     if (m_acceleration == 0.0f)
     {
-        // 자연 감속
+        // natural deceleration (drag) when coasting
         m_speed -= m_speed * 0.1f * dt;
 
         if (m_speed < 0.1f)
@@ -84,8 +84,8 @@ void Car::UpdateAcceleration(float dt)
 
 float Car::UpdateSteering(float dt)
 {
-    constexpr float STEER_RAMP_RATE = 0.4f;           // todo : 추후 편안 핸들돌리기 0.3, 급회전 1.0
-    constexpr float LOW_SPEED_CUTOFF = 18.26f / 3.6f; // 시속 18키로 미만은 최대 조향각 사용
+    constexpr float STEER_RAMP_RATE = 0.4f;           // todo: vary 0.3 (calm) ~ 1.0 (urgent) by input intensity
+    constexpr float LOW_SPEED_CUTOFF = 18.26f / 3.6f; // below this, use m_maxSteerAngle (formula below would exceed it)
 
     if (m_isControlled && ImGui::IsKeyDown(ImGuiKey_LeftArrow))
         m_steerAngle = std::min(m_steerAngle, 0.0f) - STEER_RAMP_RATE * dt;
@@ -96,7 +96,7 @@ float Car::UpdateSteering(float dt)
     else
         m_steerAngle = std::min(m_steerAngle + STEER_RAMP_RATE * dt, 0.0f);
 
-    float maxSteerAngle = (m_speed <= LOW_SPEED_CUTOFF) ? m_maxSteerAngle : 20.2f / (m_speed * m_speed);
+    float maxSteerAngle = (m_speed <= LOW_SPEED_CUTOFF) ? m_maxSteerAngle : 20.2f / (m_speed * m_speed); // tuned so 100 km/h -> ~1.5 deg
     m_steerAngle = std::clamp(m_steerAngle, -maxSteerAngle, maxSteerAngle);
     return maxSteerAngle;
 }
@@ -114,30 +114,28 @@ void Car::UpdateDebugWindow(float maxSteerAngle)
         ImGui::Text("Speed: %.1f km/h", m_speed * 3.6f);
         ImGui::Text("Accel: %.1f km/h/s", m_acceleration * 3.6f);
         ImGui::Text("Steer: %.2f / %.2f", m_steerAngle, maxSteerAngle);
-
-        float gearSign = m_isReverse ? -1.0f : 1.0f;
-        float signedSpeed = m_speed * gearSign;
-        DirectX::XMFLOAT3 fwd = GetTransform().GetForwardAxis();
-        JPH::Vec3 actualVel = m_rigidbody.GetLinearVelocity();
-        JPH::Vec3 desiredVel(fwd.x * signedSpeed, actualVel.GetY(), fwd.z * signedSpeed);
-        ImGui::Text("ActualVel: %.2f", actualVel.Length());
-        ImGui::Text("DesiredVel: %.2f", desiredVel.Length());
+        ImGui::Text("ActualVel: %.2f", m_rigidbody.GetLinearVelocity().Length());
+        ImGui::Text("DesiredVel: %.2f", ComputeDesiredVelocity().Length());
     }
     ImGui::End();
 }
 
+JPH::Vec3 Car::ComputeDesiredVelocity() const
+{
+    float signedSpeed = GetSignedSpeed();
+    DirectX::XMFLOAT3 fwd = GetTransform().GetForwardAxis();
+    float vy = m_rigidbody.GetLinearVelocity().GetY();
+    return JPH::Vec3(fwd.x * signedSpeed, vy, fwd.z * signedSpeed);
+}
+
 void Car::ApplyMotion()
 {
-    float gearSign = m_isReverse ? -1.0f : 1.0f;
-    float signedSpeed = m_speed * gearSign;
-
     // Steering stays kinematic -- the bicycle model already gives the correct yaw rate.
-    float angularVelocity = signedSpeed * tan(m_steerAngle) / m_wheelbase;
+    float angularVelocity = GetSignedSpeed() * tan(m_steerAngle) / m_wheelbase;
     m_rigidbody.SetAngularVelocity(JPH::Vec3(0.0f, angularVelocity, 0.0f));
 
-    DirectX::XMFLOAT3 fwd = GetTransform().GetForwardAxis();
     JPH::Vec3 actualVel = m_rigidbody.GetLinearVelocity();
-    JPH::Vec3 desiredVel(fwd.x * signedSpeed, actualVel.GetY(), fwd.z * signedSpeed);
+    JPH::Vec3 desiredVel = ComputeDesiredVelocity();
 
     constexpr float SPEED_DIVERGENCE_THRESHOLD = 0.05f; // m/s; how far physics can drift before we yield to it
 
