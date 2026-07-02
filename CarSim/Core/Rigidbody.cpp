@@ -26,6 +26,8 @@ void Rigidbody::Init(JPH::BodyInterface& bodyInterface, JPH::Vec3 halfExtents, J
         layer
     );
 
+    settings.mRestitution = 0.4f;
+
     if (type == Type::Dynamic)
     {
         // Take mass from `mass` but keep Jolt's shape-derived inertia tensor, scaled to that mass.
