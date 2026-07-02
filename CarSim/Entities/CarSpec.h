@@ -7,14 +7,14 @@ struct CarSpec
 {
     const char* modelPath;
     JPH::Vec3   halfExtents;
-    float       maxSpeed;
-    float       acceleration;
+    JPH::Vec3   renderOffset;    // where the model is drawn, relative to the car's transform
+    JPH::Vec3   colliderOffset;  // where the collider is placed, relative to the car's transform
 };
 
 enum class CarType
 {
-    Sedan,
-    Truck,
+    Car1,
+    Car2,
 };
 
 const CarSpec& GetCarSpec(CarType type);

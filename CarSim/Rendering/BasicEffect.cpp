@@ -214,6 +214,7 @@ void BasicEffect::SetRenderDefault()
 {
     pImpl->m_pCurrEffectPass = pImpl->m_pEffectHelper->GetEffectPass("Basic");
     pImpl->m_pCurrEffectPass->SetRasterizerState(nullptr);
+    pImpl->m_pCurrEffectPass->SetDepthStencilState(nullptr, 0);
     pImpl->m_pCurrInputLayout = pImpl->m_pVertexPosNormalTexLayout;
     pImpl->m_CurrTopology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
     pImpl->m_bWireframe = false;
@@ -226,6 +227,16 @@ void BasicEffect::SetRenderWireframe()
     pImpl->m_pCurrInputLayout = pImpl->m_pVertexPosNormalTexLayout;
     pImpl->m_CurrTopology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
     pImpl->m_bWireframe = true;
+}
+
+void BasicEffect::SetRenderNoDepthTest()
+{
+    pImpl->m_pCurrEffectPass = pImpl->m_pEffectHelper->GetEffectPass("Basic");
+    pImpl->m_pCurrEffectPass->SetRasterizerState(nullptr);
+    pImpl->m_pCurrEffectPass->SetDepthStencilState(RenderStates::DSSNoDepthTest.Get(), 0);
+    pImpl->m_pCurrInputLayout = pImpl->m_pVertexPosNormalTexLayout;
+    pImpl->m_CurrTopology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    pImpl->m_bWireframe = false;
 }
 
 void BasicEffect::Apply(ID3D11DeviceContext* deviceContext)

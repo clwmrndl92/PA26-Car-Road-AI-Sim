@@ -11,9 +11,11 @@ public:
 
     void SetAcceleration(float accel) { m_acceleration = accel; }
     float GetSpeed() const { return m_speed; }
+    float GetAcceleration() const { return m_acceleration; }
 
 private:
-    float m_maxSpeed     = 0.0f;
+    float m_maxSpeed     = 100.0f;
     float m_speed        = 0.0f;
+    float m_maxAcceleration = 100.0f;
     float m_acceleration = 0.0f;
 };

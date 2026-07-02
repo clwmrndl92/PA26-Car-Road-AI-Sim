@@ -3,7 +3,8 @@
 
 JPH_SUPPRESS_WARNINGS
 
-void Rigidbody::Init(JPH::BodyInterface& bodyInterface, JPH::Vec3 halfExtents, JPH::Vec3 position, Type type)
+void Rigidbody::Init(JPH::BodyInterface& bodyInterface, JPH::Vec3 halfExtents, JPH::Vec3 position, Type type,
+                      JPH::Vec3 colliderOffset)
 {
     m_bodyInterface = &bodyInterface;
 
@@ -15,8 +16,10 @@ void Rigidbody::Init(JPH::BodyInterface& bodyInterface, JPH::Vec3 halfExtents, J
         ? Layers::DYNAMIC
         : Layers::STATIC;
 
+    // Box is offset within the body's own frame, so the body still rotates around
+    // `position`, not around the box's center.
     JPH::BodyCreationSettings settings(
-        new JPH::BoxShape(halfExtents),
+        new JPH::RotatedTranslatedShapeSettings(colliderOffset, JPH::Quat::sIdentity(), new JPH::BoxShape(halfExtents)),
         JPH::RVec3(position),
         JPH::Quat::sIdentity(),
         motionType,

@@ -191,6 +191,12 @@ void GameApp::UpdateScene(float dt)
         else
             ImGui::Text("Picked: %s", m_PickedObjectName.c_str());
 
+        if (auto pickedCar = std::dynamic_pointer_cast<Car>(m_pPickedObject.lock()))
+        {
+            ImGui::Text("Speed: %.2f", pickedCar->GetSpeed());
+            ImGui::Text("Accel: %.2f", pickedCar->GetAcceleration());
+        }
+
         auto pos = m_pCamera->GetPosition();
         ImGui::Text("Pos: %.1f %.1f %.1f", pos.x, pos.y, pos.z);
     }
@@ -236,26 +242,31 @@ bool GameApp::InitResource()
     //
     // Road
     {
-        constexpr float ROAD_SIZE = 50.0f;
+        constexpr float ROAD_SIZE = 2000.0f;
 
         auto road = std::make_shared<GameObject>();
         road->SetName("Road");
         Model* pGround = m_ModelManager.CreateFromGeometry("road_ground", Geometry::CreatePlane(ROAD_SIZE, ROAD_SIZE));
+        // Model* pGround = m_ModelManager.CreateFromGeometry("road_ground", Geometry::CreatePlane(10.0f, ROAD_SIZE));
         pGround->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.22f, 0.22f, 0.22f, 1.0f));
         pGround->materials[0].Set<float>("$Opacity", 1.0f);
         road->GetRender().SetModel(pGround);
-        road->GetRender().GetTransform().SetPosition(0.0f, -5.0f, 0.0f);
+        road->GetTransform().SetPosition(0.0f, 0.0f, 0.0f);
         road->Init(JPH::Vec3(ROAD_SIZE * 0.5f, 0.05f, ROAD_SIZE * 0.5f), Rigidbody::Type::Static);
         m_GameObjects.push_back(road);
 
         Model* pDash = m_ModelManager.CreateFromGeometry("road_dash", Geometry::CreatePlane(0.3f, 3.0f));
         pDash->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f));
         pDash->materials[0].Set<float>("$Opacity", 1.0f);
-        for (int i = 0; i < 9; i++)
+
+        constexpr float DASH_SPACING = 6.0f;
+        int dashCount = static_cast<int>(ROAD_SIZE / DASH_SPACING + 0.5f) + 1;
+        float startZ = -(dashCount - 1) * DASH_SPACING * 0.5f;
+        for (int i = 0; i < dashCount; i++)
         {
             RenderObject& dash = road->AddSubRender();
             dash.SetModel(pDash);
-            dash.GetTransform().SetPosition(0.0f, -4.99f, -24.0f + i * 6.0f);
+            dash.GetTransform().SetPosition(0.0f, 0.01f, startZ + i * DASH_SPACING);
         }
     }
 
@@ -263,21 +274,21 @@ bool GameApp::InitResource()
     {
         auto car = std::make_shared<Car>();
         car->SetName("Car_0");
-        car->GetRender().GetTransform().SetPosition(-2.0f, 5.0f, 0.0f);
-        car->Init(GetCarSpec(CarType::Sedan));
+        car->GetTransform().SetPosition(0.0f, 1.0f, 0.0f);
+        car->Init(GetCarSpec(CarType::Car1));
         car->SetDrawCollider(true);
         m_GameObjects.push_back(car);
     }
 
-    // Car 2
-    {
-        auto car = std::make_shared<GameObject>();
-        car->SetName("Car_1");
-        car->GetRender().SetModel(m_ModelManager.CreateFromFile("Model\\car_2.obj"));
-        car->GetRender().GetTransform().SetPosition(2.0f, 0.0f, 0.0f);
-        car->Init(JPH::Vec3(1.3421f, 0.9073f, 2.8342f), Rigidbody::Type::Static);
-        m_GameObjects.push_back(car);
-    }
+    // // Car 2
+    // {
+    //     auto car = std::make_shared<GameObject>();
+    //     car->SetName("Car_1");
+    //     car->GetRender().SetModel(m_ModelManager.CreateFromFile("Model\\car_2.obj"));
+    //     car->GetTransform().SetPosition(2.0f, 0.0f, 0.0f);
+    //     car->Init(JPH::Vec3(1.3421f, 0.9073f, 2.8342f), Rigidbody::Type::Static);
+    //     m_GameObjects.push_back(car);
+    // }
 
     // ******************
     // Initialize camera

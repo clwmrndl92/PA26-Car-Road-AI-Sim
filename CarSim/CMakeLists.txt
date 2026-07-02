@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.14)
 
 set(CMAKE_CXX_STANDARD 17)
-add_compile_definitions(UNICODE _UNICODE)
+add_compile_definitions(UNICODE _UNICODE NOMINMAX)
 if (WIN7_SYSTEM_SUPPORT MATCHES ON)
     add_compile_definitions(_WIN32_WINNT=0x601)
 endif()

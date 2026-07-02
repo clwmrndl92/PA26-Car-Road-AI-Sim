@@ -58,6 +58,8 @@ public:
     void SetRenderDefault();
     // Draw with wireframe render state (for debug collider visualization)
     void SetRenderWireframe();
+    // Draw with depth testing disabled (so debug markers show through other geometry)
+    void SetRenderNoDepthTest();
 
     // Maximum number of lights per type
     static const int maxLights = 5;
