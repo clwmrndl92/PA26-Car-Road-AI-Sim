@@ -1,4 +1,5 @@
 #include "Car.h"
+#include "Core/PhysicsSystem.h"
 #include "Rendering/Effects.h"
 #include <ModelManager.h>
 #include <algorithm>
@@ -66,8 +67,7 @@ void Car::UpdateAcceleration(float dt)
 {
     constexpr float ACCEL_RAMP_RATE = 11.1f; // reaches m_maxAcceleration in ~0.25s
     constexpr float BRAKE_RAMP_RATE = 55.6f; // reaches m_maxBrakeDeceleration in ~0.17s
-    // constexpr float FRICT_DECEL_RATE = 0.1f;
-    constexpr float FRICT_DECEL_RATE = 0.0f;
+    constexpr float FRICT_DECEL_RATE = 0.1f;
 
     if (m_isControlled && ImGui::IsKeyDown(ImGuiKey_DownArrow)) // Brake
         m_acceleration = std::max(std::min(m_acceleration, 0.0f) - BRAKE_RAMP_RATE * dt, -m_maxBrakeDeceleration);
@@ -101,9 +101,9 @@ float Car::UpdateSteering(float dt)
     else if (m_isControlled && ImGui::IsKeyDown(ImGuiKey_RightArrow))
         m_steerAngle = std::max(m_steerAngle, 0.0f) + STEER_RAMP_RATE * dt;
     else if (m_steerAngle > 0.0f) // Return to center
-        m_steerAngle = std::max(m_steerAngle - STEER_RAMP_RATE * dt, 0.0f);
+        m_steerAngle = std::max(m_steerAngle - dt, 0.0f);
     else
-        m_steerAngle = std::min(m_steerAngle + STEER_RAMP_RATE * dt, 0.0f);
+        m_steerAngle = std::min(m_steerAngle + dt, 0.0f);
 
     float maxSteerAngle = (m_speed <= LOW_SPEED_CUTOFF) ? m_maxSteerAngle : 20.2f / (m_speed * m_speed); // tuned so 100 km/h -> ~1.5 deg
     m_steerAngle = std::clamp(m_steerAngle, -maxSteerAngle, maxSteerAngle);
@@ -139,24 +139,19 @@ JPH::Vec3 Car::ComputeDesiredVelocity() const
 
 void Car::ApplyMotion()
 {
+    if (PhysicsSystem::Get().HasNewContact(m_rigidbody.GetBodyID()))
+    {
+        m_rigidbody.SetLinearVelocity(JPH::Vec3::sZero());
+        m_rigidbody.SetAngularVelocity(JPH::Vec3::sZero());
+        m_acceleration = 0.0f;
+        m_speed = 0.0f;
+        return;
+    }
+
     // Steering stays kinematic -- the bicycle model already gives the correct yaw rate.
     float angularVelocity = GetSignedSpeed() * tan(m_steerAngle) / m_wheelbase;
     m_rigidbody.SetAngularVelocity(JPH::Vec3(0.0f, angularVelocity, 0.0f));
-
-    JPH::Vec3 actualVel = m_rigidbody.GetLinearVelocity();
-    JPH::Vec3 desiredVel = ComputeDesiredVelocity();
-    m_rigidbody.SetLinearVelocity(desiredVel);
-
-    // constexpr float SPEED_DIVERGENCE_THRESHOLD = 5.0f; // m/s; how far physics can drift before we yield to it
-
-    // if ((actualVel - desiredVel).Length() > SPEED_DIVERGENCE_THRESHOLD)
-    // {
-    //     m_speed = JPH::Vec3(actualVel.GetX(), 0.0f, actualVel.GetZ()).Length();
-    //     m_acceleration = 0.0f;
-    // }
-    // else
-    // {
-    // }
+    m_rigidbody.SetLinearVelocity(ComputeDesiredVelocity());
 }
 
 void Car::UpdateTrail()

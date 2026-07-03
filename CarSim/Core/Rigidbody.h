@@ -28,7 +28,8 @@ public:
     void        SetAngularVelocity(JPH::Vec3 angularVelocity);
     void        AddForce(JPH::Vec3 force);
 
-    bool IsValid() const { return !m_bodyId.IsInvalid(); }
+    bool        IsValid() const { return !m_bodyId.IsInvalid(); }
+    JPH::BodyID GetBodyID() const { return m_bodyId; }
 
 private:
     JPH::BodyInterface* m_bodyInterface = nullptr;

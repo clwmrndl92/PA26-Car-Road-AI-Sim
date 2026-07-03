@@ -6,6 +6,31 @@ JPH_SUPPRESS_WARNINGS
 
 namespace { PhysicsSystem* s_pInstance = nullptr; }
 
+void CarContactListener::OnContactAdded(const JPH::Body &inBody1, const JPH::Body &inBody2,
+                                         const JPH::ContactManifold &inManifold, JPH::ContactSettings &ioSettings)
+{
+    // Only car-vs-car contact should freeze kinematic control; touching the (static) road every
+    // frame would otherwise mark every car as "just collided" continuously.
+    if (!inBody1.IsDynamic() || !inBody2.IsDynamic())
+        return;
+
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_newContacts.insert(inBody1.GetID());
+    m_newContacts.insert(inBody2.GetID());
+}
+
+void CarContactListener::Clear()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_newContacts.clear();
+}
+
+bool CarContactListener::HasNewContact(JPH::BodyID id) const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_newContacts.find(id) != m_newContacts.end();
+}
+
 PhysicsSystem::PhysicsSystem()
 {
     if (s_pInstance)
@@ -43,10 +68,14 @@ void PhysicsSystem::Init()
     );
 
     m_physicsSystem.SetGravity(JPH::Vec3(0.0f, -9.81f, 0.0f));
+    m_physicsSystem.SetContactListener(&m_contactListener);
 }
 
 void PhysicsSystem::Update(float dt)
 {
+    // Cleared before stepping so HasNewContact() only reflects contacts that started in this step.
+    m_contactListener.Clear();
+
     // Fixed timestep: max 1 collision step per frame
     m_physicsSystem.Update(dt, 1, &m_tempAllocator, &m_jobSystem);
 }

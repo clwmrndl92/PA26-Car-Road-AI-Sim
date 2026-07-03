@@ -7,8 +7,29 @@
 #include <Jolt/Core/JobSystemThreadPool.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
+#include <Jolt/Physics/Body/BodyID.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
+#include <Jolt/Physics/Collision/ContactListener.h>
+#include <mutex>
+#include <unordered_set>
 #include "PhysicsLayers.h"
+
+// Records bodies that started touching something during the last physics step. Jolt calls
+// OnContactAdded once per pair, from worker threads, only at the moment contact begins
+// (not while it persists), so this doubles as a one-shot "collision just happened" signal.
+class CarContactListener final : public JPH::ContactListener
+{
+public:
+    void OnContactAdded(const JPH::Body &inBody1, const JPH::Body &inBody2,
+                         const JPH::ContactManifold &inManifold, JPH::ContactSettings &ioSettings) override;
+
+    void Clear();
+    bool HasNewContact(JPH::BodyID id) const;
+
+private:
+    mutable std::mutex             m_mutex;
+    std::unordered_set<JPH::BodyID> m_newContacts;
+};
 
 class BPLayerInterfaceImpl final : public JPH::BroadPhaseLayerInterface
 {
@@ -61,6 +82,10 @@ public:
 
     JPH::BodyInterface& GetBodyInterface();
 
+    // True if `id` started touching another body during the most recent Update(). One-shot per
+    // contact start, not per frame the bodies remain touching.
+    bool HasNewContact(JPH::BodyID id) const { return m_contactListener.HasNewContact(id); }
+
 private:
     struct JoltInitializer {
         JoltInitializer() { JPH::RegisterDefaultAllocator(); }
@@ -73,6 +98,7 @@ private:
     ObjectVsBPLayerFilterImpl    m_objVsBPFilter;
     ObjectLayerPairFilterImpl    m_objLayerFilter;
     JPH::PhysicsSystem           m_physicsSystem;
+    CarContactListener           m_contactListener;
 
     static constexpr JPH::uint MAX_BODIES       = 2048;
     static constexpr JPH::uint MAX_BODY_PAIRS   = 4096;
