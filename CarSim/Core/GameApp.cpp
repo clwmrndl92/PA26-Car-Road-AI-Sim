@@ -56,7 +56,7 @@ void GameApp::FocusOnObject(const std::shared_ptr<GameObject> &obj)
 {
     m_PickedObjectName = obj->GetName();
     m_pPickedObject = obj;
-    XMFLOAT3 target = obj->GetRender().GetBoundingBox().Center;
+    XMFLOAT3 target = obj->GetBoundingBox().Center;
 
     auto newCam = std::make_shared<FocusCamera>();
     newCam->SetViewPort(0.0f, 0.0f, (float)m_ClientWidth, (float)m_ClientHeight);
@@ -91,7 +91,7 @@ void GameApp::UpdateScene(float dt)
     if (auto picked = m_pPickedObject.lock())
     {
         if (auto cam3rd = std::dynamic_pointer_cast<FocusCamera>(m_pCamera))
-            cam3rd->SetTarget(picked->GetRender().GetBoundingBox().Center);
+            cam3rd->SetTarget(picked->GetBoundingBox().Center);
     }
 
     auto cam3rd = std::dynamic_pointer_cast<FocusCamera>(m_pCamera);
@@ -109,7 +109,7 @@ void GameApp::UpdateScene(float dt)
         for (auto &obj : m_GameObjects)
         {
             float d = FLT_MAX;
-            if (ray.Hit(obj->GetRender().GetBoundingBox(), &d) && d < distObj)
+            if (ray.Hit(obj->GetBoundingBox(), &d) && d < distObj)
             {
                 distObj = d;
                 hitObj = obj;
@@ -257,8 +257,8 @@ bool GameApp::InitResource()
         // Model* pGround = m_ModelManager.CreateFromGeometry("road_ground", Geometry::CreatePlane(10.0f, ROAD_SIZE));
         pGround->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.22f, 0.22f, 0.22f, 1.0f));
         pGround->materials[0].Set<float>("$Opacity", 1.0f);
-        road->GetRender().SetModel(pGround);
-        road->GetTransform().SetPosition(0.0f, 0.0f, 0.0f);
+        road->SetModel(pGround);
+        road->SetPosition(0.0f, 0.0f, 0.0f);
         road->Init(JPH::Vec3(ROAD_SIZE * 0.5f, 0.05f, ROAD_SIZE * 0.5f), Rigidbody::Type::Static);
         m_GameObjects.push_back(road);
 
@@ -299,22 +299,18 @@ bool GameApp::InitResource()
     // Car 1
     {
         auto car = std::make_shared<Car>();
-        car->SetName("Car_0");
-        car->GetTransform().SetPosition(2.0f, 0.1f, 0.0f);
-        car->Init(GetCarSpec(CarType::Car0));
+        car->Init(GetCarSpec(CarType::Car0), JPH::Vec3(0.0f, 0.1f, 0.0f));
         car->SetDrawCollider(true);
         m_GameObjects.push_back(car);
     }
 
-    // Car 2
-    {
-        auto car = std::make_shared<Car>();
-        car->SetName("Car_1");
-        car->GetTransform().SetPosition(-2.0f, 0.1f, 0.0f);
-        car->Init(GetCarSpec(CarType::Car1));
-        car->SetDrawCollider(true);
-        m_GameObjects.push_back(car);
-    }
+    // // Car 2
+    // {
+    //     auto car = std::make_shared<Car>();
+    //     car->Init(GetCarSpec(CarType::Car1), JPH::Vec3(-2.0f, 0.1f, 0.0f));
+    //     car->SetDrawCollider(true);
+    //     m_GameObjects.push_back(car);
+    // }
 
     // ******************
     // Initialize camera

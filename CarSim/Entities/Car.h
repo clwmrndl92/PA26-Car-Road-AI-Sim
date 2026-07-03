@@ -7,10 +7,16 @@
 class Car : public GameObject
 {
 public:
-    void Init(const CarSpec &spec);
+    // `position` is the front axle (see GetPosition/SetPosition below); defaults to world origin.
+    void Init(const CarSpec &spec, JPH::Vec3 position = JPH::Vec3::sZero());
 
     void Update(float dt) override;
     void Draw(ID3D11DeviceContext *context, IEffect &effect) override;
+
+    // GameObject's origin is the rear axle (steering/physics reference point), but everything
+    // outside this class should see/set the front axle instead -- add wheelbase forward of it.
+    DirectX::XMFLOAT3 GetPosition() const override;
+    void SetPosition(float x, float y, float z) override;
 
     void SetAcceleration(float accel) { m_acceleration = accel; }
     float GetSpeed() const { return m_speed; }
@@ -35,7 +41,7 @@ private:
     const float m_maxSpeed = 55.56f;            // 200 km/h
     const float m_maxAcceleration = 2.78f;      // 0-100 km/h in 10s
     const float m_maxBrakeDeceleration = 9.26f; // 100-0 km/h in 3s
-    float m_wheelbase;                          // distance between front and rear axles
+    float m_wheelbase = 0.0f;                   // distance between front and rear axles; set in Init(), so 0 until then
     float m_mass = 1.0f;                        // kg, set from CarSpec in Init(); force = mass * m_acceleration
     float m_speed = 0.0f;                       // planar speed magnitude, unsigned
     float m_acceleration = 0.0f;

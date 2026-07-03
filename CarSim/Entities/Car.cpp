@@ -6,23 +6,45 @@
 #include <cmath>
 #include <imgui.h>
 
-void Car::Init(const CarSpec &spec)
+void Car::Init(const CarSpec &spec, JPH::Vec3 position)
 {
-    GetRender().SetModel(ModelManager::Get().CreateFromFile(spec.modelPath));
+    SetName(spec.name);
+    m_render.SetModel(ModelManager::Get().CreateFromFile(spec.modelPath));
     SetRenderOffset(ToXMFLOAT3(spec.renderOffset));
+    m_wheelbase = spec.wheelbase;
+
+    // `position` is the front axle; GameObject::Init() below seeds the rigidbody from
+    // m_transform, which must hold the rear axle, so convert before creating the body.
+    DirectX::XMFLOAT3 fwd = m_transform.GetForwardAxis();
+    m_transform.SetPosition(position.GetX() - fwd.x * m_wheelbase,
+                            position.GetY() - fwd.y * m_wheelbase,
+                            position.GetZ() - fwd.z * m_wheelbase);
+
     GameObject::Init(spec.halfExtents, Rigidbody::Type::Dynamic, spec.colliderOffset, spec.mass);
 
-    m_spawnPosition = GetTransform().GetPosition();
-    m_spawnRotation = GetTransform().GetRotationQuat();
-    m_wheelbase = spec.wheelbase;
+    m_spawnPosition = m_transform.GetPosition();
+    m_spawnRotation = m_transform.GetRotationQuat();
     m_mass = spec.mass;
 
     // Line sticking out the front of the car, showing the current steering direction
     Model *pLine = ModelManager::Get().CreateFromGeometry("__steer_line__:" + GetName(),
-                                                          Geometry::CreateLine(DirectX::XMFLOAT3(0.0f, 0.0f, 2.0f), DirectX::XMFLOAT3(0.0f, 0.0f, 8.0f)));
+                                                          Geometry::CreateLine(DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f), DirectX::XMFLOAT3(0.0f, 0.0f, 6.0f)));
     pLine->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f));
     pLine->materials[0].Set<float>("$Opacity", 1.0f);
     m_steerLine.SetModel(pLine);
+}
+
+DirectX::XMFLOAT3 Car::GetPosition() const
+{
+    DirectX::XMFLOAT3 rear = m_transform.GetPosition();
+    DirectX::XMFLOAT3 fwd = m_transform.GetForwardAxis();
+    return DirectX::XMFLOAT3(rear.x + fwd.x * m_wheelbase, rear.y + fwd.y * m_wheelbase, rear.z + fwd.z * m_wheelbase);
+}
+
+void Car::SetPosition(float x, float y, float z)
+{
+    DirectX::XMFLOAT3 fwd = m_transform.GetForwardAxis();
+    GameObject::SetPosition(x - fwd.x * m_wheelbase, y - fwd.y * m_wheelbase, z - fwd.z * m_wheelbase);
 }
 
 void Car::Update(float dt)
@@ -118,7 +140,7 @@ void Car::UpdateDebugWindow(float maxSteerAngle)
     ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x, 0.0f), ImGuiCond_FirstUseEver, ImVec2(1.0f, 0.0f));
     if (ImGui::Begin(("Car: " + GetName()).c_str()))
     {
-        DirectX::XMFLOAT3 pos = GetTransform().GetPosition();
+        DirectX::XMFLOAT3 pos = m_transform.GetPosition();
         ImGui::Text("Pos: %.1f %.1f %.1f", pos.x, pos.y, pos.z);
         ImGui::Text("Speed: %.1f km/h", m_speed * 3.6f);
         ImGui::Text("Accel: %.1f km/h/s", m_acceleration * 3.6f);
@@ -132,7 +154,7 @@ void Car::UpdateDebugWindow(float maxSteerAngle)
 JPH::Vec3 Car::ComputeDesiredVelocity() const
 {
     float signedSpeed = GetSignedSpeed();
-    DirectX::XMFLOAT3 fwd = GetTransform().GetForwardAxis();
+    DirectX::XMFLOAT3 fwd = m_transform.GetForwardAxis();
     float vy = m_rigidbody.GetLinearVelocity().GetY();
     return JPH::Vec3(fwd.x * signedSpeed, vy, fwd.z * signedSpeed);
 }
@@ -161,8 +183,8 @@ void Car::UpdateTrail()
 
     using namespace DirectX;
 
-    XMFLOAT3 rearPos = GetTransform().GetPosition();
-    XMFLOAT3 fwd = GetTransform().GetForwardAxis();
+    XMFLOAT3 rearPos = m_transform.GetPosition();
+    XMFLOAT3 fwd = m_transform.GetForwardAxis();
     XMFLOAT3 frontPos(rearPos.x + fwd.x * m_wheelbase, rearPos.y + fwd.y * m_wheelbase, rearPos.z + fwd.z * m_wheelbase);
 
     auto recordPoint = [](std::deque<XMFLOAT3> &trail, const XMFLOAT3 &pos)
@@ -220,14 +242,14 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
 
     // Car only ever yaws around world Y, so the steer-angle offset and the car's own
     // rotation share an axis and can be combined in either order.
-    XMFLOAT4 carRotF = GetTransform().GetRotationQuat();
+    XMFLOAT4 carRotF = m_transform.GetRotationQuat();
     XMVECTOR carRot = XMLoadFloat4(&carRotF);
     XMVECTOR steerYaw = XMQuaternionRotationAxis(g_XMIdentityR1, m_steerAngle);
     XMVECTOR lineRot = XMQuaternionNormalize(XMQuaternionMultiply(carRot, steerYaw));
 
     XMFLOAT4 lineRotF;
     XMStoreFloat4(&lineRotF, lineRot);
-    m_steerLine.GetTransform().SetPosition(GetTransform().GetPosition());
+    m_steerLine.GetTransform().SetPosition(GetPosition());
     m_steerLine.GetTransform().SetRotation(lineRotF);
 
     if (auto *pBasic = dynamic_cast<BasicEffect *>(&effect))
