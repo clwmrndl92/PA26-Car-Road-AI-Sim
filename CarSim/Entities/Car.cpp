@@ -47,6 +47,13 @@ void Car::SetPosition(float x, float y, float z)
     GameObject::SetPosition(x - fwd.x * m_wheelbase, y - fwd.y * m_wheelbase, z - fwd.z * m_wheelbase);
 }
 
+void Car::SetRotation(const DirectX::XMFLOAT4 &rotation)
+{
+    DirectX::XMFLOAT3 frontAxle = GetPosition(); // capture using the OLD rotation, before it changes
+    GameObject::SetRotation(rotation);
+    SetPosition(frontAxle.x, frontAxle.y, frontAxle.z); // re-derive the rear axle using the NEW rotation
+}
+
 void Car::Update(float dt)
 {
     UpdateReset();

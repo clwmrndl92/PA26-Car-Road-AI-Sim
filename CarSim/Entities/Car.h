@@ -18,6 +18,10 @@ public:
     DirectX::XMFLOAT3 GetPosition() const override;
     void SetPosition(float x, float y, float z) override;
 
+    // Rotation itself is shared with the rear axle, but changing it must keep the front axle
+    // fixed in place -- otherwise SetPosition()/SetRotation() calls would become order-dependent.
+    void SetRotation(const DirectX::XMFLOAT4 &rotation) override;
+
     void SetAcceleration(float accel) { m_acceleration = accel; }
     float GetSpeed() const { return m_speed; }
     float GetAcceleration() const { return m_acceleration; }

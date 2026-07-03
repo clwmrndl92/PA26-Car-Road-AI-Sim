@@ -31,6 +31,11 @@ public:
     virtual DirectX::XMFLOAT3 GetPosition() const { return m_transform.GetPosition(); }
     virtual void SetPosition(float x, float y, float z);
 
+    // Rotation is shared by both axles (only position differs, by wheelbase), so Car doesn't
+    // need to override GetRotation -- only SetRotation, to keep the front axle fixed in place.
+    virtual DirectX::XMFLOAT4 GetRotation() const { return m_transform.GetRotationQuat(); }
+    virtual void SetRotation(const DirectX::XMFLOAT4 &rotation);
+
     // Local-space offset applied only to where the model is drawn, relative to GetPosition()
     void SetRenderOffset(const DirectX::XMFLOAT3 &offset) { m_renderOffset = offset; }
 
