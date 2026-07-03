@@ -32,6 +32,7 @@ void Car::Update(float dt)
     float maxSteerAngle = UpdateSteering(dt);
     UpdateDebugWindow(maxSteerAngle);
     ApplyMotion();
+    UpdateTrail();
 }
 
 void Car::UpdateGear()
@@ -54,12 +55,19 @@ void Car::UpdateReset()
     m_rigidbody.SetAngularVelocity(JPH::Vec3::sZero());
     m_speed = 0.0f;
     m_acceleration = 0.0f;
+
+    m_rearTrail.clear();
+    m_frontTrail.clear();
+    m_rearTrailRender.SetModel(nullptr);
+    m_frontTrailRender.SetModel(nullptr);
 }
 
 void Car::UpdateAcceleration(float dt)
 {
     constexpr float ACCEL_RAMP_RATE = 11.1f; // reaches m_maxAcceleration in ~0.25s
     constexpr float BRAKE_RAMP_RATE = 55.6f; // reaches m_maxBrakeDeceleration in ~0.17s
+    // constexpr float FRICT_DECEL_RATE = 0.1f;
+    constexpr float FRICT_DECEL_RATE = 0.0f;
 
     if (m_isControlled && ImGui::IsKeyDown(ImGuiKey_DownArrow)) // Brake
         m_acceleration = std::max(std::min(m_acceleration, 0.0f) - BRAKE_RAMP_RATE * dt, -m_maxBrakeDeceleration);
@@ -71,7 +79,7 @@ void Car::UpdateAcceleration(float dt)
     if (m_acceleration == 0.0f)
     {
         // natural deceleration (drag) when coasting
-        m_speed -= m_speed * 0.1f * dt;
+        m_speed -= m_speed * FRICT_DECEL_RATE * dt;
 
         if (m_speed < 0.1f)
             m_speed = 0.0f;
@@ -84,6 +92,7 @@ void Car::UpdateAcceleration(float dt)
 
 float Car::UpdateSteering(float dt)
 {
+    // constexpr float STEER_RAMP_RATE = 0.4f;           // todo: vary 0.3 (calm) ~ 1.0 (urgent) by input intensity
     constexpr float STEER_RAMP_RATE = 0.4f;           // todo: vary 0.3 (calm) ~ 1.0 (urgent) by input intensity
     constexpr float LOW_SPEED_CUTOFF = 18.26f / 3.6f; // below this, use m_maxSteerAngle (formula below would exceed it)
 
@@ -136,23 +145,78 @@ void Car::ApplyMotion()
 
     JPH::Vec3 actualVel = m_rigidbody.GetLinearVelocity();
     JPH::Vec3 desiredVel = ComputeDesiredVelocity();
+    m_rigidbody.SetLinearVelocity(desiredVel);
 
-    constexpr float SPEED_DIVERGENCE_THRESHOLD = 0.05f; // m/s; how far physics can drift before we yield to it
+    // constexpr float SPEED_DIVERGENCE_THRESHOLD = 5.0f; // m/s; how far physics can drift before we yield to it
 
-    if ((actualVel - desiredVel).Length() > SPEED_DIVERGENCE_THRESHOLD)
+    // if ((actualVel - desiredVel).Length() > SPEED_DIVERGENCE_THRESHOLD)
+    // {
+    //     m_speed = JPH::Vec3(actualVel.GetX(), 0.0f, actualVel.GetZ()).Length();
+    //     m_acceleration = 0.0f;
+    // }
+    // else
+    // {
+    // }
+}
+
+void Car::UpdateTrail()
+{
+    if (!m_drawCollider) // only track/rebuild the trail for cars actually shown in debug view
+        return;
+
+    using namespace DirectX;
+
+    XMFLOAT3 rearPos = GetTransform().GetPosition();
+    XMFLOAT3 fwd = GetTransform().GetForwardAxis();
+    XMFLOAT3 frontPos(rearPos.x + fwd.x * m_wheelbase, rearPos.y + fwd.y * m_wheelbase, rearPos.z + fwd.z * m_wheelbase);
+
+    auto recordPoint = [](std::deque<XMFLOAT3> &trail, const XMFLOAT3 &pos)
     {
-        m_speed = JPH::Vec3(actualVel.GetX(), 0.0f, actualVel.GetZ()).Length();
-        m_acceleration = 0.0f;
-    }
-    else
-    {
-        m_rigidbody.SetLinearVelocity(desiredVel);
-    }
+        if (!trail.empty())
+        {
+            XMVECTOR diff = XMVectorSubtract(XMLoadFloat3(&pos), XMLoadFloat3(&trail.back()));
+            if (XMVectorGetX(XMVector3LengthSq(diff)) < TRAIL_SAMPLE_DISTANCE * TRAIL_SAMPLE_DISTANCE)
+                return false;
+        }
+        trail.push_back(pos);
+        if (trail.size() > TRAIL_MAX_POINTS)
+            trail.pop_front();
+        return true;
+    };
+
+    if (recordPoint(m_rearTrail, rearPos) && m_rearTrail.size() >= 2)
+        RebuildTrailRender(m_rearTrailRender, m_rearTrail, "__rear_trail__:" + GetName(), XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f));
+
+    if (recordPoint(m_frontTrail, frontPos) && m_frontTrail.size() >= 2)
+        RebuildTrailRender(m_frontTrailRender, m_frontTrail, "__front_trail__:" + GetName(), XMFLOAT4(0.0f, 1.0f, 1.0f, 1.0f));
+}
+
+void Car::RebuildTrailRender(RenderObject &render, const std::deque<DirectX::XMFLOAT3> &trail,
+                             const std::string &name, const DirectX::XMFLOAT4 &color)
+{
+    std::vector<DirectX::XMFLOAT3> points(trail.begin(), trail.end());
+    Model *pModel = ModelManager::Get().CreateFromGeometry(name, Geometry::CreatePolyline(points));
+    pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", color);
+    pModel->materials[0].Set<float>("$Opacity", 1.0f);
+    render.SetModel(pModel);
 }
 
 void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
 {
     GameObject::Draw(context, effect);
+
+    if (m_drawCollider && (m_rearTrailRender.GetModel() || m_frontTrailRender.GetModel()))
+    {
+        if (auto *pBasic = dynamic_cast<BasicEffect *>(&effect))
+        {
+            pBasic->SetRenderLines();
+            if (m_rearTrailRender.GetModel())
+                m_rearTrailRender.Draw(context, effect);
+            if (m_frontTrailRender.GetModel())
+                m_frontTrailRender.Draw(context, effect);
+            pBasic->SetRenderDefault();
+        }
+    }
 
     if (!m_drawCollider || !m_steerLine.GetModel())
         return;

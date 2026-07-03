@@ -1,6 +1,8 @@
 #pragma once
 #include "Core/GameObject.h"
 #include "CarSpec.h"
+#include <deque>
+#include <string>
 
 class Car : public GameObject
 {
@@ -22,8 +24,11 @@ private:
     float UpdateSteering(float dt); // returns current speed-scaled max steer angle
     void UpdateDebugWindow(float maxSteerAngle);
     void ApplyMotion();
+    void UpdateTrail(); // records rear/front axle trail points and rebuilds their render geometry
+    void RebuildTrailRender(RenderObject &render, const std::deque<DirectX::XMFLOAT3> &trail,
+                            const std::string &name, const DirectX::XMFLOAT4 &color);
     float GetSignedSpeed() const { return m_speed * (m_isReverse ? -1.0f : 1.0f); } // + forward gear, - reverse gear
-    JPH::Vec3 ComputeDesiredVelocity() const; // target linear velocity from current speed/gear/facing
+    JPH::Vec3 ComputeDesiredVelocity() const;                                       // target linear velocity from current speed/gear/facing
 
     bool m_isControlled = false; // only respond to keyboard input while selected (see GameApp)
 
@@ -42,4 +47,12 @@ private:
     DirectX::XMFLOAT4 m_spawnRotation = {0.0f, 0.0f, 0.0f, 1.0f};
 
     RenderObject m_steerLine; // shown in front of the car when SetDrawCollider(true)
+
+    static constexpr float TRAIL_SAMPLE_DISTANCE = 0.5f; // meters travelled between recorded trail points
+    static constexpr size_t TRAIL_MAX_POINTS = 2000;     // oldest points drop off once exceeded
+
+    std::deque<DirectX::XMFLOAT3> m_rearTrail;  // world-space path of the rear axle (car's true origin)
+    std::deque<DirectX::XMFLOAT3> m_frontTrail; // world-space path of the front axle (origin + wheelbase forward)
+    RenderObject m_rearTrailRender;
+    RenderObject m_frontTrailRender;
 };

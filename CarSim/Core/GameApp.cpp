@@ -300,21 +300,21 @@ bool GameApp::InitResource()
     {
         auto car = std::make_shared<Car>();
         car->SetName("Car_0");
-        car->GetTransform().SetPosition(-2.0f, 0.1f, 0.0f);
+        car->GetTransform().SetPosition(2.0f, 0.1f, 0.0f);
         car->Init(GetCarSpec(CarType::Car0));
         car->SetDrawCollider(true);
         m_GameObjects.push_back(car);
     }
 
-    // Car 2
-    {
-        auto car = std::make_shared<Car>();
-        car->SetName("Car_1");
-        car->GetTransform().SetPosition(0.0f, 0.1f, 0.0f);
-        car->Init(GetCarSpec(CarType::Car1));
-        car->SetDrawCollider(true);
-        m_GameObjects.push_back(car);
-    }
+    // // Car 2
+    // {
+    //     auto car = std::make_shared<Car>();
+    //     car->SetName("Car_1");
+    //     car->GetTransform().SetPosition(0.0f, 0.1f, 0.0f);
+    //     car->Init(GetCarSpec(CarType::Car1));
+    //     car->SetDrawCollider(true);
+    //     m_GameObjects.push_back(car);
+    // }
 
     // ******************
     // Initialize camera

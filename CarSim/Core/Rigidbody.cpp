@@ -3,30 +3,31 @@
 
 JPH_SUPPRESS_WARNINGS
 
-void Rigidbody::Init(JPH::BodyInterface& bodyInterface, JPH::Vec3 halfExtents, JPH::Vec3 position, Type type,
-                      JPH::Vec3 colliderOffset, float mass)
+void Rigidbody::Init(JPH::BodyInterface &bodyInterface, JPH::Vec3 halfExtents, JPH::Vec3 position, Type type,
+                     JPH::Vec3 colliderOffset, float mass)
 {
     m_bodyInterface = &bodyInterface;
 
     JPH::EMotionType motionType = (type == Type::Dynamic)
-        ? JPH::EMotionType::Dynamic
-        : JPH::EMotionType::Static;
+                                      ? JPH::EMotionType::Dynamic
+                                      : JPH::EMotionType::Static;
 
     JPH::ObjectLayer layer = (type == Type::Dynamic)
-        ? Layers::DYNAMIC
-        : Layers::STATIC;
+                                 ? Layers::DYNAMIC
+                                 : Layers::STATIC;
 
-    // Box is offset within the body's own frame, so the body still rotates around
-    // `position`, not around the box's center.
+    // Jolt always simulates/rotates a body around Shape::GetCenterOfMass(), regardless of any
+    // mass/inertia override -- so just offsetting the box via RotatedTranslatedShape makes the
+    // body rotate around the box's center, not `position`. OffsetCenterOfMassShape cancels that
+    // out (-colliderOffset) so the shape's center of mass -- and therefore the rotation pivot --
+    // lands back on `position`, while the collider itself stays visually offset.
     JPH::BodyCreationSettings settings(
-        new JPH::RotatedTranslatedShapeSettings(colliderOffset, JPH::Quat::sIdentity(), new JPH::BoxShape(halfExtents)),
+        new JPH::OffsetCenterOfMassShapeSettings(-colliderOffset,
+            new JPH::RotatedTranslatedShapeSettings(colliderOffset, JPH::Quat::sIdentity(), new JPH::BoxShape(halfExtents))),
         JPH::RVec3(position),
         JPH::Quat::sIdentity(),
         motionType,
-        layer
-    );
-
-    settings.mRestitution = 0.4f;
+        layer);
 
     if (type == Type::Dynamic)
     {
@@ -38,7 +39,7 @@ void Rigidbody::Init(JPH::BodyInterface& bodyInterface, JPH::Vec3 halfExtents, J
     m_bodyId = bodyInterface.CreateAndAddBody(settings, JPH::EActivation::Activate);
 }
 
-void Rigidbody::Destroy(JPH::BodyInterface& bodyInterface)
+void Rigidbody::Destroy(JPH::BodyInterface &bodyInterface)
 {
     if (!m_bodyId.IsInvalid())
     {

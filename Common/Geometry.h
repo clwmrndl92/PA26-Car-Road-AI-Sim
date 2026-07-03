@@ -49,6 +49,10 @@ namespace Geometry
     // Draw with a line-list topology (see BasicEffect::SetRenderLines).
     GeometryData CreateLineGrid(float size = 500.0f, float spacing = 1.0f);
 
+    // Create a connected polyline through the given points, as consecutive line segments.
+    // Draw with a line-list topology (see BasicEffect::SetRenderLines).
+    GeometryData CreatePolyline(const std::vector<DirectX::XMFLOAT3>& points);
+
 }
 
 
