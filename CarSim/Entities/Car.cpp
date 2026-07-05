@@ -34,24 +34,26 @@ void Car::Init(const CarSpec &spec, JPH::Vec3 position)
     m_steerLine.SetModel(pLine);
 }
 
-DirectX::XMFLOAT3 Car::GetPosition() const
+Vec3 Car::GetPosition() const
 {
     DirectX::XMFLOAT3 rear = m_transform.GetPosition();
     DirectX::XMFLOAT3 fwd = m_transform.GetForwardAxis();
-    return DirectX::XMFLOAT3(rear.x + fwd.x * m_wheelbase, rear.y + fwd.y * m_wheelbase, rear.z + fwd.z * m_wheelbase);
+    return Vec3(rear.x + fwd.x * m_wheelbase, rear.y + fwd.y * m_wheelbase, rear.z + fwd.z * m_wheelbase);
 }
 
-void Car::SetPosition(float x, float y, float z)
+void Car::SetPosition(Vec3 position)
 {
     DirectX::XMFLOAT3 fwd = m_transform.GetForwardAxis();
-    GameObject::SetPosition(x - fwd.x * m_wheelbase, y - fwd.y * m_wheelbase, z - fwd.z * m_wheelbase);
+    GameObject::SetPosition(Vec3(position.GetX() - fwd.x * m_wheelbase,
+                                 position.GetY() - fwd.y * m_wheelbase,
+                                 position.GetZ() - fwd.z * m_wheelbase));
 }
 
 void Car::SetRotation(const DirectX::XMFLOAT4 &rotation)
 {
-    DirectX::XMFLOAT3 frontAxle = GetPosition(); // capture using the OLD rotation, before it changes
+    Vec3 frontAxle = GetPosition(); // capture using the OLD rotation, before it changes
     GameObject::SetRotation(rotation);
-    SetPosition(frontAxle.x, frontAxle.y, frontAxle.z); // re-derive the rear axle using the NEW rotation
+    SetPosition(frontAxle); // re-derive the rear axle using the NEW rotation
 }
 
 void Car::Update(float dt)
@@ -256,7 +258,7 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
 
     XMFLOAT4 lineRotF;
     XMStoreFloat4(&lineRotF, lineRot);
-    m_steerLine.GetTransform().SetPosition(GetPosition());
+    m_steerLine.GetTransform().SetPosition(ToXMFLOAT3(GetPosition()));
     m_steerLine.GetTransform().SetRotation(lineRotF);
 
     if (auto *pBasic = dynamic_cast<BasicEffect *>(&effect))

@@ -15,8 +15,8 @@ public:
 
     // GameObject's origin is the rear axle (steering/physics reference point), but everything
     // outside this class should see/set the front axle instead -- add wheelbase forward of it.
-    DirectX::XMFLOAT3 GetPosition() const override;
-    void SetPosition(float x, float y, float z) override;
+    Vec3 GetPosition() const override;
+    void SetPosition(Vec3 position) override;
 
     // Rotation itself is shared with the rear axle, but changing it must keep the front axle
     // fixed in place -- otherwise SetPosition()/SetRotation() calls would become order-dependent.

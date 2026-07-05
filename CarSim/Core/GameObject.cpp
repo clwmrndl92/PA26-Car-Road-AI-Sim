@@ -6,14 +6,14 @@
 
 JPH_SUPPRESS_WARNINGS
 
-void GameObject::SetPosition(float x, float y, float z)
+void GameObject::SetPosition(Vec3 position)
 {
-    m_transform.SetPosition(x, y, z);
+    m_transform.SetPosition(position.GetX(), position.GetY(), position.GetZ());
 
     // Once the rigidbody exists, SyncPhysicsToRender() overwrites m_transform from it every
     // frame, so a plain transform write here wouldn't stick -- teleport the physics body too.
     if (m_rigidbody.IsValid())
-        m_rigidbody.SetPositionAndRotation(JPH::Vec3(x, y, z), m_rigidbody.GetRotation());
+        m_rigidbody.SetPositionAndRotation(position, m_rigidbody.GetRotation());
 }
 
 void GameObject::SetRotation(const DirectX::XMFLOAT4 &rotation)

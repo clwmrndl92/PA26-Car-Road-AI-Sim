@@ -28,8 +28,8 @@ public:
 
     // True origin of the object (e.g. physics/steering reference point such as the rear axle
     // center). Car overrides both so external callers see the front axle instead.
-    virtual DirectX::XMFLOAT3 GetPosition() const { return m_transform.GetPosition(); }
-    virtual void SetPosition(float x, float y, float z);
+    virtual Vec3 GetPosition() const { return ToVec3(m_transform.GetPosition()); }
+    virtual void SetPosition(Vec3 position);
 
     // Rotation is shared by both axles (only position differs, by wheelbase), so Car doesn't
     // need to override GetRotation -- only SetRotation, to keep the front axle fixed in place.

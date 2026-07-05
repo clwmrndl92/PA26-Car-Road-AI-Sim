@@ -258,7 +258,7 @@ bool GameApp::InitResource()
         pGround->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.22f, 0.22f, 0.22f, 1.0f));
         pGround->materials[0].Set<float>("$Opacity", 1.0f);
         road->SetModel(pGround);
-        road->SetPosition(0.0f, 0.0f, 0.0f);
+        road->SetPosition(Vec3(0.0f, 0.0f, 0.0f));
         road->Init(JPH::Vec3(ROAD_SIZE * 0.5f, 0.05f, ROAD_SIZE * 0.5f), Rigidbody::Type::Static);
         m_GameObjects.push_back(road);
 
