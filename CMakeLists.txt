@@ -88,6 +88,7 @@ set(BUILD_SHARED_LIBS OFF)
 set(JPH_BUILD_SAMPLES OFF)
 set(JPH_BUILD_TESTS OFF)
 set(JPH_BUILD_DOCS OFF)
+set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)
 
 FetchContent_Declare(
     JoltPhysics
@@ -97,6 +98,9 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(JoltPhysics)
 set_target_properties(Jolt PROPERTIES FOLDER "JoltPhysics")
+if(MSVC)
+    target_compile_options(Jolt PRIVATE /wd4865 $<$<CONFIG:Release>:/MD> $<$<CONFIG:Debug>:/MDd>)
+endif()
 
 add_subdirectory("Common")
 add_subdirectory("CarSim")
