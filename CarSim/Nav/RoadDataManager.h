@@ -8,6 +8,8 @@ public:
     RoadDataManager() = default;
     ~RoadDataManager() = default;
     void Init(const std::string &filePath);
+    bool HasDestination() const;
+    Vec3 GetDestination() const;
     Vec3 GetPositionOnRoad(Vec3 position, float lookaheadDistance) const;
     Spline GetSpline() const { return m_spline; }
 

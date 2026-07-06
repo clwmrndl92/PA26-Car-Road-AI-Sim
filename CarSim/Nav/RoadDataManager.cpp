@@ -7,6 +7,18 @@ void RoadDataManager::Init(const std::string &filePath)
     m_spline = DataParser::ParseSplineData(filePath);
 }
 
+bool RoadDataManager::HasDestination() const
+{
+    return !m_spline.IsCycle();
+}
+Vec3 RoadDataManager::GetDestination() const
+{
+    std::vector<Vec3> splinePoints = m_spline.GenerateSplinePoints();
+    if (splinePoints.empty())
+        return Vec3::sZero();
+
+    return splinePoints.back();
+}
 Vec3 RoadDataManager::GetPositionOnRoad(Vec3 position, float lookaheadDistance) const
 {
     std::vector<Vec3> splinePoints = m_spline.GenerateSplinePoints();

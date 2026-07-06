@@ -11,13 +11,22 @@ std::unique_ptr<BTNode> Car::BuildBehaviourTree()
 
 std::unique_ptr<BTNode> Car::StopNode()
 {
-    return MakeSequence(std::make_unique<BTCondition>([this]()
-                                                      { return false; }),
-                        std::make_unique<BTAction>([this]()
-                                                   {
+    return MakeSequence(
+        std::make_unique<BTCondition>(
+            [this]()
+            {
+                if (!m_RoadDataManager->HasDestination())
+                    return false;
+                float distanceToDestination = (m_RoadDataManager->GetDestination() - m_rigidbody.GetPosition()).Length();
+                DebugConsole::Get().Log(std::to_string(distanceToDestination));
+                return distanceToDestination < 1.0f;
+            }),
+        std::make_unique<BTAction>(
+            [this]()
+            {
             // 차량이 멈췄을 때 수행할 동작
             if(m_speed > 0.0f) {
-                Accelerate(-1);
+                Accelerate(0.0f);
                 return BTStatus::Running;
             }
             return BTStatus::Success; }));

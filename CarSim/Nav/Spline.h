@@ -14,6 +14,7 @@ public:
     const std::vector<Vec3> &GetControlPoints() const { return m_controlPoints; }
 
     std::vector<Vec3> GenerateSplinePoints() const;
+    bool IsCycle() const { return m_isCycle; }
 
 private:
     // Private members for spline implementation

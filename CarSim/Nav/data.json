@@ -2,7 +2,7 @@
     "id": "lane_001",
     "geometry": {
         "type": "LineString",
-        "cycle": true,
+        "cycle": false,
         "control_points": [
             [0, 0],
             [0, 0],
