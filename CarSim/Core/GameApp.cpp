@@ -77,7 +77,7 @@ void GameApp::UpdateScene(float dt)
     for (auto &obj : m_GameObjects)
     {
         if (auto car = std::dynamic_pointer_cast<Car>(obj))
-            car->SetControlled(obj == pickedObj);
+            car->SetFocused(obj == pickedObj);
         obj->Update(dt);
     }
 

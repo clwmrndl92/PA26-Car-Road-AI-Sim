@@ -8,8 +8,8 @@ endif()
 
 add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
 
-file(GLOB_RECURSE DIR_SRCS "*.cpp")
-file(GLOB_RECURSE HEADER_FILES "*.h")
+file(GLOB_RECURSE DIR_SRCS CONFIGURE_DEPENDS "*.cpp")
+file(GLOB_RECURSE HEADER_FILES CONFIGURE_DEPENDS "*.h")
 file(GLOB HLSL_FILES Shaders/*.hlsl Shaders/*.hlsli)
 
 foreach(HLSL_FILE ${HLSL_FILES})

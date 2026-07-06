@@ -31,3 +31,10 @@ BTStatus BTAction::Tick()
 {
     return action();
 }
+
+std::unique_ptr<BTSequence> MakeSequence(std::vector<std::unique_ptr<BTNode>> children)
+{
+    auto seq = std::make_unique<BTSequence>();
+    seq->children = std::move(children);
+    return seq;
+}
