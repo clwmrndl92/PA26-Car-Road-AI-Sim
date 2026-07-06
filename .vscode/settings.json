@@ -1,4 +1,10 @@
 {
     "cmake.buildDirectory": "${workspaceFolder}/build",
-    "cmake.modifyLists.addNewSourceFiles": false
+    "cmake.modifyLists.addNewSourceFiles": false,
+    "[json]": {
+        "editor.formatOnSave": false
+    },
+    "[jsonc]": {
+        "editor.formatOnSave": false
+    }
 }

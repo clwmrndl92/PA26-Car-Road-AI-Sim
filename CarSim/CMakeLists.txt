@@ -77,6 +77,10 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/Model)
     file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/Model DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
 endif()
 
+# Nav data: reference straight from the source tree (not the build output) so edits to
+# data.json take effect on rebuild without needing to reconfigure CMake.
+target_compile_definitions(CarSim PRIVATE NAV_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Nav")
+
 source_group("Shaders" FILES ${HLSL_FILES})
 set_target_properties(CarSim PROPERTIES OUTPUT_NAME "CarSim")
 

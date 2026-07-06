@@ -1,23 +1,22 @@
-#include "GameApp.h"
+#include "EditApp.h"
 #include <XUtil.h>
 #include <DXTrace.h>
-#include <Entities/Car.h>
 #include <Nav/DataParser.h>
 
 using namespace DirectX;
 
-GameApp::GameApp(HINSTANCE hInstance, const std::wstring &windowName, int initWidth, int initHeight)
+EditApp::EditApp(HINSTANCE hInstance, const std::wstring &windowName, int initWidth, int initHeight)
     : D3DApp(hInstance, windowName, initWidth, initHeight)
 {
 }
 
-GameApp::~GameApp()
+EditApp::~EditApp()
 {
     m_GameObjects.clear();
     m_Physics.Shutdown();
 }
 
-bool GameApp::Init()
+bool EditApp::Init()
 {
     if (!D3DApp::Init())
         return false;
@@ -38,7 +37,7 @@ bool GameApp::Init()
     return true;
 }
 
-void GameApp::OnResize()
+void EditApp::OnResize()
 {
     D3DApp::OnResize();
 
@@ -53,33 +52,11 @@ void GameApp::OnResize()
     }
 }
 
-void GameApp::FocusOnObject(const std::shared_ptr<GameObject> &obj)
-{
-    m_PickedObjectName = obj->GetName();
-    m_pPickedObject = obj;
-    XMFLOAT3 target = obj->GetBoundingBox().Center;
-
-    auto newCam = std::make_shared<FocusCamera>();
-    newCam->SetViewPort(0.0f, 0.0f, (float)m_ClientWidth, (float)m_ClientHeight);
-    newCam->SetFrustum(XM_PI / 3, AspectRatio(), 1.0f, 1000.0f);
-    newCam->SetTarget(target);
-    newCam->SetDistance(15.0f);
-    newCam->SetDistanceMinMax(3.0f, 100.0f);
-    newCam->SetRotationX(XM_PIDIV4);
-    m_pCamera = newCam;
-    m_CameraMode = CameraMode::Focus;
-}
-
-void GameApp::UpdateScene(float dt)
+void EditApp::UpdateScene(float dt)
 {
     // Step 1. Update game objects
-    auto pickedObj = m_pPickedObject.lock();
     for (auto &obj : m_GameObjects)
-    {
-        if (auto car = std::dynamic_pointer_cast<Car>(obj))
-            car->SetControlled(obj == pickedObj);
         obj->Update(dt);
-    }
 
     // Step 2. Calculate physics System
     m_Physics.Update(dt);
@@ -88,84 +65,56 @@ void GameApp::UpdateScene(float dt)
     for (auto &obj : m_GameObjects)
         obj->UpdateRender();
 
-    // Step 4. Update camera by Input
-    if (auto picked = m_pPickedObject.lock())
-    {
-        if (auto cam3rd = std::dynamic_pointer_cast<FocusCamera>(m_pCamera))
-            cam3rd->SetTarget(picked->GetBoundingBox().Center);
-    }
-
-    auto cam3rd = std::dynamic_pointer_cast<FocusCamera>(m_pCamera);
-    auto cam1st = std::dynamic_pointer_cast<FirstPersonCamera>(m_pCamera);
-
+    // Step 4. Update top-down camera: mouse wheel zooms (height), WASD pans along X/Z.
+    // Camera direction is fixed (straight down), so it never rotates.
     ImGuiIO &io = ImGui::GetIO();
 
-    // Left click: pick object or switch to free camera
+    constexpr float PAN_SPEED = 20.0f;
+    constexpr float ZOOM_SPEED = 5.0f;
+
+    XMFLOAT3 pos = m_pCamera->GetPosition();
+
+    if (ImGui::IsKeyDown(ImGuiKey_W))
+        pos.z += dt * PAN_SPEED;
+    if (ImGui::IsKeyDown(ImGuiKey_S))
+        pos.z -= dt * PAN_SPEED;
+    if (ImGui::IsKeyDown(ImGuiKey_A))
+        pos.x -= dt * PAN_SPEED;
+    if (ImGui::IsKeyDown(ImGuiKey_D))
+        pos.x += dt * PAN_SPEED;
+
+    if (!io.WantCaptureMouse && io.MouseWheel != 0.0f)
+    {
+        pos.y -= io.MouseWheel * ZOOM_SPEED;
+        if (pos.y < m_TopDownHeightMin)
+            pos.y = m_TopDownHeightMin;
+        else if (pos.y > m_TopDownHeightMax)
+            pos.y = m_TopDownHeightMax;
+    }
+
+    m_pCamera->SetPosition(pos);
+
+    // Step 4.5. Left click on the ground plane (y = 0) adds a spline control point
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.WantCaptureMouse)
     {
         Ray ray = Ray::ScreenToRay(*m_pCamera, io.MousePos.x, io.MousePos.y);
-
-        float distObj = FLT_MAX;
-        std::shared_ptr<GameObject> hitObj;
-        for (auto &obj : m_GameObjects)
+        if (ray.direction.y != 0.0f)
         {
-            float d = FLT_MAX;
-            if (ray.Hit(obj->GetBoundingBox(), &d) && d < distObj)
+            float t = -ray.origin.y / ray.direction.y;
+            if (t > 0.0f)
             {
-                distObj = d;
-                hitObj = obj;
+                float hitX = ray.origin.x + ray.direction.x * t;
+                float hitZ = ray.origin.z + ray.direction.z * t;
+
+                m_Spline.AddControlPoint(Vec3(hitX, 0.0f, hitZ));
+
+                RenderObject &marker = m_SplineMarkers.emplace_back();
+                marker.SetModel(m_pSplineMarkerModel);
+                marker.GetTransform().SetPosition(hitX, 0.02f, hitZ);
+
+                UpdateSplineRender(m_Spline);
+                UpdateRoadRender(m_Spline);
             }
-        }
-
-        if (hitObj)
-        {
-            FocusOnObject(hitObj);
-        }
-        else
-        {
-            m_PickedObjectName = "";
-            m_pPickedObject.reset();
-            // Switch to free camera from current position
-            if (m_CameraMode != CameraMode::Free)
-            {
-                auto newCam = std::make_shared<FirstPersonCamera>();
-                newCam->SetViewPort(0.0f, 0.0f, (float)m_ClientWidth, (float)m_ClientHeight);
-                newCam->SetFrustum(XM_PI / 3, AspectRatio(), 1.0f, 1000.0f);
-                newCam->LookTo(m_pCamera->GetPosition(), m_pCamera->GetLookAxis(), XMFLOAT3(0.0f, 1.0f, 0.0f));
-                m_pCamera = newCam;
-                m_CameraMode = CameraMode::Free;
-            }
-        }
-    }
-
-    if (m_CameraMode == CameraMode::Focus && cam3rd)
-    {
-        if (ImGui::IsMouseDragging(ImGuiMouseButton_Right))
-        {
-            cam3rd->RotateX(io.MouseDelta.y * 0.01f);
-            cam3rd->RotateY(io.MouseDelta.x * 0.01f);
-        }
-        cam3rd->Approach(-io.MouseWheel * 1.0f);
-    }
-    else if (m_CameraMode == CameraMode::Free && cam1st)
-    {
-        if (ImGui::IsKeyDown(ImGuiKey_W))
-            cam1st->MoveForward(dt * 10.0f);
-        if (ImGui::IsKeyDown(ImGuiKey_S))
-            cam1st->MoveForward(-dt * 10.0f);
-        if (ImGui::IsKeyDown(ImGuiKey_A))
-            cam1st->Strafe(-dt * 10.0f);
-        if (ImGui::IsKeyDown(ImGuiKey_D))
-            cam1st->Strafe(dt * 10.0f);
-        if (ImGui::IsKeyDown(ImGuiKey_Q))
-            cam1st->Translate(XMFLOAT3(0, -1, 0), dt * 10.0f);
-        if (ImGui::IsKeyDown(ImGuiKey_E))
-            cam1st->Translate(XMFLOAT3(0, 1, 0), dt * 10.0f);
-
-        if (ImGui::IsMouseDragging(ImGuiMouseButton_Right))
-        {
-            cam1st->Pitch(io.MouseDelta.y * 0.01f);
-            cam1st->RotateY(io.MouseDelta.x * 0.01f);
         }
     }
 
@@ -181,32 +130,13 @@ void GameApp::UpdateScene(float dt)
     }
     ImGui::End();
 
-    ImGui::SetNextWindowPos(ImVec2(0.0f, debugGridWindowHeight), ImGuiCond_Always);
-    if (ImGui::Begin("Objects"))
-    {
-        ImGui::Text("Mode : %s", m_CameraMode == CameraMode::Free ? "Free Camera" : "Focus Camera");
-
-        if (m_PickedObjectName.empty())
-            ImGui::Text("Picked: (none)");
-        else
-            ImGui::Text("Picked: %s", m_PickedObjectName.c_str());
-
-        ImGui::Separator();
-        for (auto &obj : m_GameObjects)
-        {
-            bool isSelected = (obj->GetName() == m_PickedObjectName);
-            if (ImGui::Selectable(obj->GetName().c_str(), isSelected))
-                FocusOnObject(obj);
-        }
-    }
-    ImGui::End();
     ImGui::Render();
 
     m_BasicEffect.SetViewMatrix(m_pCamera->GetViewMatrixXM());
     m_BasicEffect.SetEyePos(m_pCamera->GetPosition());
 }
 
-void GameApp::DrawScene()
+void EditApp::DrawScene()
 {
     // Create render target view for the back buffer
     if (m_FrameCount < m_BackBufferCount)
@@ -230,6 +160,8 @@ void GameApp::DrawScene()
         obj->Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     for (auto &roadRender : m_RoadRenders)
         roadRender.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
+    for (auto &marker : m_SplineMarkers)
+        marker.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
 
     m_BasicEffect.SetRenderLines();
     if (m_ShowGridXZ)
@@ -238,6 +170,8 @@ void GameApp::DrawScene()
         m_GridXY.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     if (m_ShowGridYZ)
         m_GridYZ.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
+    if (m_SplineCurveVisible)
+        m_SplineCurve.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     m_BasicEffect.SetRenderDefault();
 
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
@@ -245,31 +179,12 @@ void GameApp::DrawScene()
     HR(m_pSwapChain->Present(0, m_IsDxgiFlipModel ? DXGI_PRESENT_ALLOW_TEARING : 0));
 }
 
-bool GameApp::InitResource()
+bool EditApp::InitResource()
 {
+    m_Spline = DataParser::ParseSplineData(NAV_DATA_DIR "/data.json");
     // ******************
     // Initialize game objects
     //
-    // Road
-    {
-        constexpr float ROAD_SIZE = 2000.0f;
-
-        auto road = std::make_shared<GameObject>();
-        road->SetName("Ground");
-        Model *pGround = m_ModelManager.CreateFromGeometry("ground", Geometry::CreatePlane(ROAD_SIZE, ROAD_SIZE));
-        // Model* pGround = m_ModelManager.CreateFromGeometry("road_ground", Geometry::CreatePlane(10.0f, ROAD_SIZE));
-        pGround->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.7f, 0.8f, 0.6f, 1.0f));
-        pGround->materials[0].Set<float>("$Opacity", 1.0f);
-        road->SetModel(pGround);
-        road->SetPosition(Vec3(0.0f, -0.01f, 0.0f));
-        road->Init(JPH::Vec3(ROAD_SIZE * 0.5f, 0.05f, ROAD_SIZE * 0.5f), Rigidbody::Type::Static);
-        m_GameObjects.push_back(road);
-
-        auto spline = DataParser::ParseSplineData(NAV_DATA_DIR "/data.json");
-        UpdateSplineRender(spline);
-        UpdateRoadRender(spline);
-    }
-
     // Debug grid (XZ plane, rotated copies for XY / YZ)
     {
         Model *pGrid = m_ModelManager.CreateFromGeometry("debug_grid", Geometry::CreateLineGrid(500.0f, 1.0f));
@@ -289,36 +204,38 @@ bool GameApp::InitResource()
         m_GridYZ.GetTransform().SetRotation(rotYZ);
     }
 
-    // Car 1
+    // Spline control point marker
     {
-        auto car = std::make_shared<Car>();
-        car->Init(GetCarSpec(CarType::Car0), JPH::Vec3(0.0f, 0.1f, 0.0f));
-        car->SetDrawCollider(true);
-        m_GameObjects.push_back(car);
+        constexpr float MARKER_SIZE = 0.5f;
+
+        Model *pMarker = m_ModelManager.CreateFromGeometry("spline_marker", Geometry::CreatePlane(MARKER_SIZE, MARKER_SIZE));
+        pMarker->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f));
+        pMarker->materials[0].Set<float>("$Opacity", 1.0f);
+        m_pSplineMarkerModel = pMarker;
     }
 
-    // // Car 2
-    // {
-    //     auto car = std::make_shared<Car>();
-    //     car->Init(GetCarSpec(CarType::Car1), JPH::Vec3(-2.0f, 0.1f, 0.0f));
-    //     car->SetDrawCollider(true);
-    //     m_GameObjects.push_back(car);
-    // }
+    // Markers for control points loaded from data.json
+    for (const Vec3 &p : m_Spline.GetControlPoints())
+    {
+        RenderObject &marker = m_SplineMarkers.emplace_back();
+        marker.SetModel(m_pSplineMarkerModel);
+        marker.GetTransform().SetPosition(p.GetX(), 0.02f, p.GetZ());
+    }
+
+    UpdateSplineRender(m_Spline);
+    UpdateRoadRender(m_Spline);
 
     // ******************
     // Initialize camera
     //
 
-    auto camera = std::make_shared<FocusCamera>();
+    auto camera = std::make_shared<FirstPersonCamera>();
     m_pCamera = camera;
-    m_CameraMode = CameraMode::Focus;
 
     camera->SetViewPort(0.0f, 0.0f, (float)m_ClientWidth, (float)m_ClientHeight);
-    camera->SetTarget(XMFLOAT3(0.0f, 0.5f, 0.0f));
-    camera->SetDistance(15.0f);
-    camera->SetDistanceMinMax(6.0f, 100.0f);
-    camera->SetRotationX(XM_PIDIV4);
     camera->SetFrustum(XM_PI / 3, AspectRatio(), 1.0f, 1000.0f);
+    // Fixed top-down view looking straight at the origin from above; only position (pan/zoom) changes afterwards.
+    camera->LookTo(XMFLOAT3(0.0f, 15.0f, 0.0f), XMFLOAT3(0.0f, -1.0f, 0.0f), XMFLOAT3(0.0f, 0.0f, 1.0f));
 
     m_BasicEffect.SetWorldMatrix(XMMatrixIdentity());
     m_BasicEffect.SetViewMatrix(camera->GetViewMatrixXM());
@@ -336,11 +253,20 @@ bool GameApp::InitResource()
     dirLight.specular = XMFLOAT4(0.5f, 0.5f, 0.5f, 1.0f);
     dirLight.direction = XMFLOAT3(0.0f, -1.0f, 0.0f);
     m_BasicEffect.SetDirLight(0, dirLight);
+    // Point light
+    PointLight pointLight{};
+    pointLight.position = XMFLOAT3(0.0f, 20.0f, 0.0f);
+    pointLight.ambient = XMFLOAT4(0.3f, 0.3f, 0.3f, 1.0f);
+    pointLight.diffuse = XMFLOAT4(0.7f, 0.7f, 0.7f, 1.0f);
+    pointLight.specular = XMFLOAT4(0.2f, 0.2f, 0.2f, 1.0f);
+    pointLight.att = XMFLOAT3(0.0f, 0.1f, 0.0f);
+    pointLight.range = 30.0f;
+    m_BasicEffect.SetPointLight(0, pointLight);
 
     return true;
 }
 
-void GameApp::UpdateSplineRender(const Spline &spline)
+void EditApp::UpdateSplineRender(const Spline &spline)
 {
     if (spline.GetControlPointCount() < 4)
         return;
@@ -364,9 +290,11 @@ void GameApp::UpdateSplineRender(const Spline &spline)
     Model *pCurveModel = m_ModelManager.CreateFromGeometry("spline_curve", Geometry::CreatePolyline(renderPoints));
     pCurveModel->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(1.0f, 0.8f, 0.0f, 1.0f));
     pCurveModel->materials[0].Set<float>("$Opacity", 1.0f);
+    m_SplineCurve.SetModel(pCurveModel);
+    m_SplineCurveVisible = true;
 }
 
-void GameApp::UpdateRoadRender(const Spline &spline)
+void EditApp::UpdateRoadRender(const Spline &spline)
 {
     const auto &points = spline.GetControlPoints();
     if (points.size() < 2)
@@ -385,7 +313,7 @@ void GameApp::UpdateRoadRender(const Spline &spline)
     for (const Vec3 &p : splinePoints)
         centerline.push_back(ToXMFLOAT3(p));
 
-    Model *pGround = m_ModelManager.CreateFromGeometry("road", Geometry::CreateRibbon(centerline, ROAD_WIDTH));
+    Model *pGround = m_ModelManager.CreateFromGeometry("road_ground", Geometry::CreateRibbon(centerline, ROAD_WIDTH));
     pGround->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.22f, 0.22f, 0.22f, 1.0f));
     pGround->materials[0].Set<float>("$Opacity", 1.0f);
 

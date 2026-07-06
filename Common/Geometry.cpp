@@ -712,4 +712,85 @@ namespace Geometry
         return geoData;
     }
 
+    GeometryData CreateRibbon(const std::vector<DirectX::XMFLOAT3>& centerPoints, float width)
+    {
+        using namespace DirectX;
+
+        GeometryData geoData;
+        size_t n = centerPoints.size();
+        if (n < 2)
+            return geoData;
+
+        float halfWidth = width * 0.5f;
+
+        geoData.vertices.resize(n * 2);
+        geoData.normals.resize(n * 2, XMFLOAT3(0.0f, 1.0f, 0.0f));
+        geoData.tangents.resize(n * 2);
+        geoData.texcoords.resize(n * 2);
+
+        float distanceAccum = 0.0f;
+        for (size_t i = 0; i < n; ++i)
+        {
+            // Central difference for interior points gives a smoother offset direction at joints;
+            // endpoints fall back to the single adjacent segment.
+            XMVECTOR dir;
+            if (i == 0)
+                dir = XMLoadFloat3(&centerPoints[1]) - XMLoadFloat3(&centerPoints[0]);
+            else if (i == n - 1)
+                dir = XMLoadFloat3(&centerPoints[n - 1]) - XMLoadFloat3(&centerPoints[n - 2]);
+            else
+                dir = XMLoadFloat3(&centerPoints[i + 1]) - XMLoadFloat3(&centerPoints[i - 1]);
+            dir = XMVector3Normalize(dir);
+
+            // Rotate the direction 90 degrees around Y to get the sideways offset in the XZ plane.
+            XMFLOAT3 dirF;
+            XMStoreFloat3(&dirF, dir);
+            XMVECTOR side = XMVector3Normalize(XMVectorSet(dirF.z, 0.0f, -dirF.x, 0.0f)) * halfWidth;
+
+            XMVECTOR center = XMLoadFloat3(&centerPoints[i]);
+            XMVECTOR left = center - side;
+            XMVECTOR right = center + side;
+
+            if (i > 0)
+            {
+                XMVECTOR prev = XMLoadFloat3(&centerPoints[i - 1]);
+                distanceAccum += XMVectorGetX(XMVector3Length(center - prev));
+            }
+
+            XMStoreFloat3(&geoData.vertices[i * 2 + 0], left);
+            XMStoreFloat3(&geoData.vertices[i * 2 + 1], right);
+            geoData.tangents[i * 2 + 0] = XMFLOAT4(dirF.x, dirF.y, dirF.z, 1.0f);
+            geoData.tangents[i * 2 + 1] = XMFLOAT4(dirF.x, dirF.y, dirF.z, 1.0f);
+            geoData.texcoords[i * 2 + 0] = XMFLOAT2(0.0f, distanceAccum);
+            geoData.texcoords[i * 2 + 1] = XMFLOAT2(1.0f, distanceAccum);
+        }
+
+        // Winding matches CreatePlane: (left@i, left@i+1, right@i+1), (right@i+1, right@i, left@i)
+        // so the ribbon faces up (+Y) just like a flat plane laid along +Z.
+        std::vector<uint32_t> indices;
+        indices.reserve((n - 1) * 6);
+        for (size_t i = 0; i + 1 < n; ++i)
+        {
+            uint32_t l0 = static_cast<uint32_t>(i * 2 + 0);
+            uint32_t r0 = static_cast<uint32_t>(i * 2 + 1);
+            uint32_t l1 = static_cast<uint32_t>((i + 1) * 2 + 0);
+            uint32_t r1 = static_cast<uint32_t>((i + 1) * 2 + 1);
+
+            indices.push_back(l0);
+            indices.push_back(l1);
+            indices.push_back(r1);
+
+            indices.push_back(r1);
+            indices.push_back(r0);
+            indices.push_back(l0);
+        }
+
+        if (indices.size() > 65535)
+            geoData.indices32 = std::move(indices);
+        else
+            geoData.indices16.assign(indices.begin(), indices.end());
+
+        return geoData;
+    }
+
 }

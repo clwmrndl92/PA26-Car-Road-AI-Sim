@@ -53,6 +53,10 @@ namespace Geometry
     // Draw with a line-list topology (see BasicEffect::SetRenderLines).
     GeometryData CreatePolyline(const std::vector<DirectX::XMFLOAT3>& points);
 
+    // Create a flat quad-strip ribbon of constant width following a centerline path in the XZ plane
+    // (y taken from each point). Useful for roads/lanes built from spline sample points.
+    GeometryData CreateRibbon(const std::vector<DirectX::XMFLOAT3>& centerPoints, float width);
+
 }
 
 

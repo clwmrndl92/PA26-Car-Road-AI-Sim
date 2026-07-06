@@ -1,0 +1,17 @@
+{
+    "id": "lane_001",
+    "geometry": {
+        "type": "LineString",
+        "cycle": true,
+        "control_points": [
+            [0, 0],
+            [0, 30],
+            [30, 30],
+            [30, 0]
+        ]
+    },
+    "properties": {
+        "road_name": "강남대로",
+        "speed_limit": 60
+    }
+}

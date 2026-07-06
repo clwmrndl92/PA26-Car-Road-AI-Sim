@@ -1,5 +1,5 @@
-#ifndef GAMEAPP_H
-#define GAMEAPP_H
+#ifndef EDITAPP_H
+#define EDITAPP_H
 
 #include <WinMin.h>
 #include "d3dApp.h"
@@ -14,20 +14,13 @@
 #include <string>
 #include "PhysicsSystem.h"
 #include "GameObject.h"
-#include <Nav/Spline.h>
+#include "Nav/Spline.h"
 
-class GameApp : public D3DApp
+class EditApp : public D3DApp
 {
 public:
-    enum class CameraMode
-    {
-        Focus,
-        Free
-    };
-
-public:
-    GameApp(HINSTANCE hInstance, const std::wstring &windowName, int initWidth, int initHeight);
-    ~GameApp();
+    EditApp(HINSTANCE hInstance, const std::wstring &windowName, int initWidth, int initHeight);
+    ~EditApp();
 
     bool Init();
     void OnResize();
@@ -36,7 +29,6 @@ public:
 
 private:
     bool InitResource();
-    void FocusOnObject(const std::shared_ptr<GameObject> &obj);
     void UpdateSplineRender(const Spline &spline);
     void UpdateRoadRender(const Spline &spline);
 
@@ -52,10 +44,9 @@ private:
 
     PhysicsSystem m_Physics;
 
-    std::shared_ptr<Camera> m_pCamera;
-    CameraMode m_CameraMode = CameraMode::Focus;
-    std::string m_PickedObjectName;
-    std::weak_ptr<GameObject> m_pPickedObject;
+    std::shared_ptr<FirstPersonCamera> m_pCamera;
+    float m_TopDownHeightMin = 6.0f;
+    float m_TopDownHeightMax = 100.0f;
 
     RenderObject m_GridXZ;
     RenderObject m_GridXY;
@@ -65,6 +56,12 @@ private:
     bool m_ShowGridYZ = false;
 
     std::vector<RenderObject> m_RoadRenders;
+
+    Spline m_Spline;
+    RenderObject m_SplineCurve;
+    bool m_SplineCurveVisible = false;
+    Model *m_pSplineMarkerModel = nullptr;
+    std::vector<RenderObject> m_SplineMarkers;
 };
 
 #endif
