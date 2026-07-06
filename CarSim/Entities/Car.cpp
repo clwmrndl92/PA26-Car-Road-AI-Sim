@@ -115,24 +115,24 @@ void Car::SetRotation(const DirectX::XMFLOAT4 &rotation)
     SetPosition(frontAxle); // re-derive the rear axle using the NEW rotation
 }
 
-void Car::Accelerate(int direction)
+void Car::Accelerate(float desiredVelocity)
 {
     constexpr float ACCEL_RAMP_RATE = 11.1f; // reaches m_maxAcceleration in ~0.25s
     constexpr float BRAKE_RAMP_RATE = 55.6f; // reaches m_maxBrakeDeceleration in ~0.17s
-    if (direction > 0)
+    if (desiredVelocity > m_speed)
         m_acceleration = std::min(std::max(m_acceleration, 0.0f) + ACCEL_RAMP_RATE * m_deltaTime, m_maxAcceleration);
-    else if (direction < 0)
+    else if (desiredVelocity < m_speed)
         m_acceleration = std::max(std::min(m_acceleration, 0.0f) - BRAKE_RAMP_RATE * m_deltaTime, -m_maxBrakeDeceleration);
     else
         m_acceleration = 0.0f;
 }
-void Car::Steer(int direction)
+void Car::Steer(float radian)
 {
     constexpr float STEER_RAMP_RATE = 0.4f; // todo: vary 0.3 (calm) ~ 1.0 (urgent) by input intensity
 
-    if (direction < 0)
+    if (m_steerAngle < radian)
         m_steerAngle = std::min(m_steerAngle, 0.0f) - STEER_RAMP_RATE * m_deltaTime;
-    else if (direction > 0)
+    else if (m_steerAngle > radian)
         m_steerAngle = std::max(m_steerAngle, 0.0f) + STEER_RAMP_RATE * m_deltaTime;
     else if (m_steerAngle > 0.0f) // Return to center
         m_steerAngle = std::max(m_steerAngle - m_deltaTime, 0.0f);

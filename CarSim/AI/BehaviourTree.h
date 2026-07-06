@@ -57,5 +57,18 @@ public:
 };
 
 // 노드를 쉽게 만들어주는 헬퍼 함수들
-std::unique_ptr<BTSequence> MakeSequence(std::vector<std::unique_ptr<BTNode>> children);
-std::unique_ptr<BTSelector> MakeSelector(std::vector<std::unique_ptr<BTNode>> children);
+template <typename... Children>
+std::unique_ptr<BTSequence> MakeSequence(Children &&...children)
+{
+    auto seq = std::make_unique<BTSequence>();
+    (seq->children.push_back(std::forward<Children>(children)), ...);
+    return seq;
+}
+
+template <typename... Children>
+std::unique_ptr<BTSelector> MakeSelector(Children &&...children)
+{
+    auto sel = std::make_unique<BTSelector>();
+    (sel->children.push_back(std::forward<Children>(children)), ...);
+    return sel;
+}

@@ -23,9 +23,9 @@ public:
     void SetFocused(bool focused) { m_isFocused = focused; }
 
     // 조작 및 제어 인터페이스 (Control Interface)
-    void Accelerate(int direction); // 1: 가속, -1: 제동, 0: 관성
-    void Steer(int direction);      // -1: 좌, 1: 우, 0: 정렬
-    void ChangeGear();              // 속도가 낮을 때 전진/후진 기어 토글
+    void Accelerate(float desiredVelocity);
+    void Steer(float desiredRadian);
+    void ChangeGear(); // 속도가 낮을 때 전진/후진 기어 토글
 
 private:
     // 내부 물리 및 제어 로직 (Internal Physics & Control)

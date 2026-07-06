@@ -2,26 +2,24 @@
 
 std::unique_ptr<BTNode> Car::BuildBehaviourTree()
 {
-    auto root = MakeSelector({
+    return MakeSelector(
         StopNode(),
         ChangeLineNode(),
-        DriveNode(),
-    });
-    return root;
+        DriveNode());
 }
 
 std::unique_ptr<BTNode> Car::StopNode()
 {
-    return MakeSequence({std::make_unique<BTCondition>([this]()
-                                                       { return false; }),
-                         std::make_unique<BTAction>([this]()
-                                                    {
+    return MakeSequence(std::make_unique<BTCondition>([this]()
+                                                      { return false; }),
+                        std::make_unique<BTAction>([this]()
+                                                   {
             // 차량이 멈췄을 때 수행할 동작
             if(m_speed > 0.0f) {
                 Accelerate(-1);
                 return BTStatus::Running;
             }
-            return BTStatus::Success; })});
+            return BTStatus::Success; }));
 }
 
 std::unique_ptr<BTNode> Car::ChangeLineNode()
@@ -37,6 +35,7 @@ std::unique_ptr<BTNode> Car::DriveNode()
 {
     return std::make_unique<BTAction>([this]()
                                       {
-        // 차량이 주행 중일 때 수행할 동작
+        Accelerate(10);
+        Steer(0.8);
         return BTStatus::Running; });
 }
