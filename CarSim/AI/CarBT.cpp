@@ -1,4 +1,5 @@
 #include "Entities/Car.h"
+#include "Core/DebugConsole.h"
 
 std::unique_ptr<BTNode> Car::BuildBehaviourTree()
 {
@@ -35,7 +36,13 @@ std::unique_ptr<BTNode> Car::DriveNode()
 {
     return std::make_unique<BTAction>([this]()
                                       {
-        Accelerate(10);
-        Steer(0.8);
+
+        const float speed = 5.0f; 
+        const float lookaheadCoeff = 2.0f;
+        Accelerate(speed);
+        auto targetPosition = m_RoadDataManager->GetPositionOnRoad(m_rigidbody.GetPosition(), speed * lookaheadCoeff);
+        m_targetMarker.GetTransform().SetPosition(ToXMFLOAT3(targetPosition));
+        auto targetSteer = PurePursuit(targetPosition);
+        Steer(targetSteer);
         return BTStatus::Running; });
 }

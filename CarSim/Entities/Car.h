@@ -4,12 +4,13 @@
 #include <deque>
 #include <string>
 #include "AI/BehaviourTree.h"
+#include <Nav/RoadDataManager.h>
 
 class Car : public GameObject
 {
 public:
     // 생명주기 및 초기화 (Lifecycle & Initialization)
-    void Init(const CarSpec &spec, JPH::Vec3 position = JPH::Vec3::sZero());
+    void Init(const CarSpec &spec, const RoadDataManager *roadDataManager, JPH::Vec3 position = JPH::Vec3::sZero());
 
     // 부모 클래스 오버라이드 함수 (Overrides)
     void Update(float dt) override;
@@ -35,6 +36,8 @@ private:
     float GetSignedSpeed() const { return m_speed * (m_isReverse ? -1.0f : 1.0f); }
     JPH::Vec3 ComputeDesiredVelocity() const;
 
+    float PurePursuit(Vec3 target);
+
     // 디버그 및 트레일(자국) 렌더링 (Debug & Rendering Helpers)
     void UpdateDebugWindow();
     void UpdateTrail();
@@ -58,6 +61,7 @@ private: // 멤버 변수 구역
     float m_maxSteerAngle = 0.785f;             // 최대 조향각 (45도)
 
     // 컴포넌트 및 AI 상태 (Components & Systems)
+    const RoadDataManager *m_RoadDataManager = nullptr;
     BehaviourTree m_BehaviourTree;
     bool m_isFocused = false; // 포커스 여부 (입력 처리용)
 
@@ -81,4 +85,5 @@ private: // 멤버 변수 구역
     RenderObject m_rearTrailRender;
     RenderObject m_frontTrailRender;
     RenderObject m_steerLine;
+    RenderObject m_targetMarker;
 };

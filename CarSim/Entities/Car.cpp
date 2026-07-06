@@ -5,8 +5,9 @@
 #include <algorithm>
 #include <cmath>
 #include <imgui.h>
+#include <Core/DebugConsole.h>
 
-void Car::Init(const CarSpec &spec, JPH::Vec3 position)
+void Car::Init(const CarSpec &spec, const RoadDataManager *roadDataManager, JPH::Vec3 position)
 {
     SetName(spec.name);
     m_render.SetModel(ModelManager::Get().CreateFromFile(spec.modelPath));
@@ -33,6 +34,15 @@ void Car::Init(const CarSpec &spec, JPH::Vec3 position)
     pLine->materials[0].Set<float>("$Opacity", 1.0f);
     m_steerLine.SetModel(pLine);
 
+    // Small red marker showing the BT's current lookahead target on the road
+    constexpr float TARGET_MARKER_SIZE = 0.5f;
+    Model *pTargetMarker = ModelManager::Get().CreateFromGeometry("__target_marker__:" + GetName(),
+                                                                  Geometry::CreatePlane(TARGET_MARKER_SIZE, TARGET_MARKER_SIZE));
+    pTargetMarker->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f));
+    pTargetMarker->materials[0].Set<float>("$Opacity", 1.0f);
+    m_targetMarker.SetModel(pTargetMarker);
+
+    m_RoadDataManager = roadDataManager;
     m_BehaviourTree = BehaviourTree();
     m_BehaviourTree.root = BuildBehaviourTree();
 }
@@ -91,6 +101,9 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
         m_steerLine.Draw(context, effect);
         pBasic->SetRenderDefault();
     }
+
+    if (m_targetMarker.GetModel())
+        m_targetMarker.Draw(context, effect);
 }
 
 Vec3 Car::GetPosition() const
@@ -130,10 +143,10 @@ void Car::Steer(float radian)
 {
     constexpr float STEER_RAMP_RATE = 0.4f; // todo: vary 0.3 (calm) ~ 1.0 (urgent) by input intensity
 
-    if (m_steerAngle < radian)
-        m_steerAngle = std::min(m_steerAngle, 0.0f) - STEER_RAMP_RATE * m_deltaTime;
-    else if (m_steerAngle > radian)
-        m_steerAngle = std::max(m_steerAngle, 0.0f) + STEER_RAMP_RATE * m_deltaTime;
+    if (m_steerAngle > radian)
+        m_steerAngle -= STEER_RAMP_RATE * m_deltaTime;
+    else if (m_steerAngle < radian)
+        m_steerAngle += STEER_RAMP_RATE * m_deltaTime;
     else if (m_steerAngle > 0.0f) // Return to center
         m_steerAngle = std::max(m_steerAngle - m_deltaTime, 0.0f);
     else
@@ -167,7 +180,7 @@ void Car::UpdateCar()
     constexpr float LOW_SPEED_CUTOFF = 18.26f / 3.6f; // below this, use m_maxSteerAngle (formula below would exceed it)
     constexpr float MAX_STEER_ANGLE = 0.785f;
     m_maxSteerAngle = (m_speed <= LOW_SPEED_CUTOFF) ? MAX_STEER_ANGLE : 20.2f / (m_speed * m_speed); // tuned so 100 km/h -> ~1.5 deg
-    m_steerAngle = std::clamp(m_steerAngle, -MAX_STEER_ANGLE, MAX_STEER_ANGLE);
+    m_steerAngle = std::clamp(m_steerAngle, -m_maxSteerAngle, m_maxSteerAngle);
 }
 
 void Car::UpdateWithControl()
@@ -239,6 +252,32 @@ JPH::Vec3 Car::ComputeDesiredVelocity() const
     return JPH::Vec3(fwd.x * signedSpeed, vy, fwd.z * signedSpeed);
 }
 
+float Car::PurePursuit(Vec3 target)
+{
+    Vec3 carPos = m_rigidbody.GetPosition();
+    Vec3 targetVec = target - carPos;
+
+    float distance = targetVec.Length();
+
+    // [방어 코드] 혹시라도 타겟과 내 차의 위치가 완벽히 겹치면 조향하지 않음
+    if (distance < 0.001f)
+        return 0.0f;
+
+    Vec3 carFwd = ToVec3(m_transform.GetForwardAxis()).Normalized();
+    Vec3 carRight = ToVec3(m_transform.GetRightAxis()).Normalized(); // 좌우 판별용
+
+    float dotProd = carFwd.Dot(targetVec) / distance;
+    dotProd = std::clamp(dotProd, -1.0f, 1.0f);
+    float headingError = acosf(dotProd);
+
+    float directionSign = (carRight.Dot(targetVec) > 0.0f) ? 1.0f : -1.0f;
+
+    float steeringAngle = atanf((2.0f * m_wheelbase * sinf(headingError)) / distance);
+
+    return steeringAngle * directionSign;
+}
+
+// Debug / Rendering Helpers
 void Car::UpdateDebugWindow()
 {
     if (!m_drawCollider || !m_isFocused)

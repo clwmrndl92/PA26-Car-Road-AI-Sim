@@ -3,6 +3,7 @@
 #include <DXTrace.h>
 #include <Entities/Car.h>
 #include <Nav/DataParser.h>
+#include "DebugConsole.h"
 
 using namespace DirectX;
 
@@ -26,6 +27,7 @@ bool GameApp::Init()
 
     m_TextureManager.Init(m_pd3dDevice.Get());
     m_ModelManager.Init(m_pd3dDevice.Get());
+    m_RoadDataManager.Init(NAV_DATA_DIR "/data.json");
 
     RenderStates::InitAll(m_pd3dDevice.Get());
 
@@ -200,6 +202,9 @@ void GameApp::UpdateScene(float dt)
         }
     }
     ImGui::End();
+
+    DebugConsole::Get().Draw();
+
     ImGui::Render();
 
     m_BasicEffect.SetViewMatrix(m_pCamera->GetViewMatrixXM());
@@ -265,9 +270,8 @@ bool GameApp::InitResource()
         road->Init(JPH::Vec3(ROAD_SIZE * 0.5f, 0.05f, ROAD_SIZE * 0.5f), Rigidbody::Type::Static);
         m_GameObjects.push_back(road);
 
-        auto spline = DataParser::ParseSplineData(NAV_DATA_DIR "/data.json");
-        UpdateSplineRender(spline);
-        UpdateRoadRender(spline);
+        UpdateSplineRender(m_RoadDataManager.GetSpline());
+        UpdateRoadRender(m_RoadDataManager.GetSpline());
     }
 
     // Debug grid (XZ plane, rotated copies for XY / YZ)
@@ -292,7 +296,7 @@ bool GameApp::InitResource()
     // Car 1
     {
         auto car = std::make_shared<Car>();
-        car->Init(GetCarSpec(CarType::Car0), JPH::Vec3(0.0f, 0.1f, 0.0f));
+        car->Init(GetCarSpec(CarType::Car0), &m_RoadDataManager, JPH::Vec3(0.0f, 0.1f, 0.0f));
         car->SetDrawCollider(true);
         m_GameObjects.push_back(car);
     }
@@ -300,7 +304,7 @@ bool GameApp::InitResource()
     // // Car 2
     // {
     //     auto car = std::make_shared<Car>();
-    //     car->Init(GetCarSpec(CarType::Car1), JPH::Vec3(-2.0f, 0.1f, 0.0f));
+    //     car->Init(GetCarSpec(CarType::Car1), &m_RoadDataManager, JPH::Vec3(-2.0f, 0.1f, 0.0f));
     //     car->SetDrawCollider(true);
     //     m_GameObjects.push_back(car);
     // }

@@ -15,6 +15,7 @@
 #include "PhysicsSystem.h"
 #include "GameObject.h"
 #include <Nav/Spline.h>
+#include <Nav/RoadDataManager.h>
 
 class GameApp : public D3DApp
 {
@@ -43,6 +44,7 @@ private:
 private:
     TextureManager m_TextureManager;
     ModelManager m_ModelManager;
+    RoadDataManager m_RoadDataManager;
 
     BasicEffect m_BasicEffect;
 
