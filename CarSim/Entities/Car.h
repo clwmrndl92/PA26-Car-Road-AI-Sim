@@ -43,7 +43,10 @@ private:
 
     // 인공지능 / 행동 트리 (AI / Behavior Tree)
     std::unique_ptr<BTNode> BuildBehaviourTree();
-    std::unique_ptr<BTNode> CreateAccelerateNode();
+
+    std::unique_ptr<BTNode> StopNode();
+    std::unique_ptr<BTNode> ChangeLineNode();
+    std::unique_ptr<BTNode> DriveNode();
 
 private: // 멤버 변수 구역
     // 설정 및 스펙 상수/변수 (Constants & Specifications)
