@@ -2,7 +2,6 @@
 #include <XUtil.h>
 #include <DXTrace.h>
 #include <Entities/Car.h>
-#include <Nav/DataParser.h>
 #include "DebugConsole.h"
 
 using namespace DirectX;

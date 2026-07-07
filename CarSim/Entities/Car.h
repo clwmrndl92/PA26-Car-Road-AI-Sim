@@ -22,6 +22,7 @@ public:
 
     // Getter / Setter (Accessors)
     void SetFocused(bool focused) { m_isFocused = focused; }
+    void SetDestination(std::shared_ptr<RoadNode> roadNode) { m_destNode = roadNode; }
 
     // 조작 및 제어 인터페이스 (Control Interface)
     void Accelerate(float desiredVelocity);
@@ -37,6 +38,8 @@ private:
     JPH::Vec3 ComputeDesiredVelocity() const;
 
     float PurePursuit(Vec3 target);
+    bool IsNavigating() { return m_destNode != nullptr; }
+    bool IsArrived() { return IsNavigating() && (m_destNode->position - m_rigidbody.GetPosition()).Length() < 3.0f; }
 
     // 디버그 및 트레일(자국) 렌더링 (Debug & Rendering Helpers)
     void UpdateDebugWindow();
@@ -64,6 +67,10 @@ private: // 멤버 변수 구역
     const RoadDataManager *m_RoadDataManager = nullptr;
     BehaviourTree m_BehaviourTree;
     bool m_isFocused = false; // 포커스 여부 (입력 처리용)
+    shared_ptr<RoadNode> m_destNode;
+    shared_ptr<RoadNode> m_currentNode;
+    vector<shared_ptr<RoadNode>> m_path;
+    size_t m_pathIndex = 0;
 
     // 차량 주행 상태 변수 (Vehicle States)
     float m_speed = 0.0f;

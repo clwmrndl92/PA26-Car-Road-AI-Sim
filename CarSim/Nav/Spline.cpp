@@ -1,7 +1,6 @@
 #include "Spline.h"
 
 Spline::Spline()
-    : m_isCycle(true)
 {
 }
 
@@ -46,8 +45,16 @@ std::vector<Vec3> Spline::GenerateSplinePoints() const
 {
     std::vector<Vec3> splinePoints;
     int n = static_cast<int>(m_controlPoints.size());
-    if (n < 4)
+    std::vector<Vec3> controlPoints;
+    if (n < 2)
         return splinePoints; // Not enough control points for Catmull-Rom spline
+
+    controlPoints.push_back(m_controlPoints[0]);
+    for (auto const &point : m_controlPoints)
+    {
+        controlPoints.push_back(point);
+    }
+    controlPoints.push_back(m_controlPoints.back());
 
     auto MakeSegment = [&](const Vec3 &p0, const Vec3 &p1, const Vec3 &p2, const Vec3 &p3)
     {
@@ -59,15 +66,10 @@ std::vector<Vec3> Spline::GenerateSplinePoints() const
         }
     };
 
-    for (int i = 1; i < n - 2; ++i)
+    for (int i = 1; i < n; ++i)
     {
-        MakeSegment(m_controlPoints[i - 1], m_controlPoints[i], m_controlPoints[i + 1], m_controlPoints[i + 2]);
+        MakeSegment(controlPoints[i - 1], controlPoints[i], controlPoints[i + 1], controlPoints[i + 2]);
     }
 
-    if (m_isCycle)
-    {
-        MakeSegment(m_controlPoints[n - 2], m_controlPoints[n - 1], m_controlPoints[0], m_controlPoints[1]);
-        MakeSegment(m_controlPoints[n - 1], m_controlPoints[0], m_controlPoints[1], m_controlPoints[2]);
-    }
     return splinePoints;
 }

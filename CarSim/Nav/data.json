@@ -1,19 +1,80 @@
 {
-    "id": "lane_001",
-    "geometry": {
-        "type": "LineString",
-        "cycle": false,
+  "roads": [
+    { "id": 1, "speed_limit": 30 }
+  ],
+  "lanes": [
+    {
+        "id": 1,
         "control_points": [
-            [0, 0],
-            [0, 0],
-            [0, 30],
-            [30, 30],
-            [30, 0],
-            [30, 0]
-        ]
+            [0, 0, -1],
+            [0, 0, 0],
+            [0, 0, 24],
+            [0, 0, 25]
+        ] ,
+        "road":1
     },
-    "properties": {
-        "road_name": "강남대로",
-        "speed_limit": 60
+    {
+        "id": 2,
+        "control_points": [
+            [-5, 0, 30],
+            [-6, 0, 30],
+            [-30, 0, 30],
+            [-31, 0, 30]
+        ] ,
+        "road":1
+    },
+    {
+        "id": 3,
+        "control_points": [
+            [5, 0, 30],
+            [6, 0, 30],
+            [30, 0, 30],
+            [31, 0, 30]
+        ] ,
+        "road":1
+    },
+    {
+        "id": 4,
+        "control_points": [
+            [0, 0, 23],
+            [0, 0, 24],
+            [-6, 0, 30],
+            [-7, 0, 30]
+        ] ,
+        "road":1
+    },
+    {
+        "id": 5,
+        "control_points": [
+            [0, 0, 23],
+            [0, 0, 24],
+            [6, 0, 30],
+            [7, 0, 30]
+        ] ,
+        "road":1
     }
+  ],
+  "nodes": [
+    { "id": 1, "position": [0,0,0], "lane" : 1, "type": "normal" },
+    { "id": 2, "position": [0,0,24], "lane" : 1, "type": "normal" },
+    { "id": 3, "position": [0,0,24], "lane" : 4, "type": "normal" },
+    { "id": 4, "position": [-6,0,30], "lane" : 4, "type": "normal" },
+    { "id": 5, "position": [-6,0,30], "lane" : 2, "type": "normal" },
+    { "id": 6, "position": [-30,0,30], "lane" : 2, "type": "normal" },
+    { "id": 7, "position": [0,0,24], "lane" : 5, "type": "normal" },
+    { "id": 8, "position": [6,0,30], "lane" : 5, "type": "normal" },
+    { "id": 9, "position": [6,0,30], "lane" : 3, "type": "normal" },
+    { "id": 10, "position": [30,0,30], "lane" : 3, "type": "normal" }
+  ],
+  "links": [
+    {  "id": 1, "source": 1, "target": 2, "length": 24 },
+    {  "id": 2, "source": 2, "target": 3, "length": 0 },
+    {  "id": 3, "source": 3, "target": 4, "length": 8.485281 },
+    {  "id": 4, "source": 4, "target": 5, "length": 0 },
+    {  "id": 5, "source": 5, "target": 6, "length": 24 },
+    {  "id": 6, "source": 2, "target": 7, "length": 0 },
+    {  "id": 7, "source": 7, "target": 8, "length": 8.485281 },
+    {  "id": 8, "source": 8, "target": 9, "length": 0 },
+    {  "id": 9, "source": 9, "target": 10, "length": 24 }
+  ]
 }

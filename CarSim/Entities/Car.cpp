@@ -50,11 +50,9 @@ void Car::Init(const CarSpec &spec, const RoadDataManager *roadDataManager, JPH:
 void Car::Update(float dt)
 {
     m_deltaTime = dt;
-    if (m_isFocused)
-    {
-        // UpdateWithControl(dt);
-        m_BehaviourTree.Tick();
-    }
+    // if (m_isFocused)
+    //     UpdateWithControl(dt);
+    m_BehaviourTree.Tick();
     UpdateCar();
     UpdateDebugWindow();
     ApplyMotion();

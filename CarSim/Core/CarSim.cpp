@@ -2,7 +2,6 @@
 #include <XUtil.h>
 #include <DXTrace.h>
 #include <Entities/Car.h>
-#include <Nav/DataParser.h>
 #include "DebugConsole.h"
 
 using namespace DirectX;
@@ -116,14 +115,19 @@ void CarSim::UpdateCamera(float dt)
     }
     else if (m_CameraMode == CameraMode::Free && cam1st)
     {
+        XMFLOAT3 forward = cam1st->GetLookAxis();
+        forward.y = 0.0f;
+        XMFLOAT3 right = cam1st->GetRightAxis();
+        right.y = 0.0f;
+
         if (ImGui::IsKeyDown(ImGuiKey_W))
-            cam1st->MoveForward(dt * 10.0f);
+            cam1st->Translate(forward, dt * 10.0f);
         if (ImGui::IsKeyDown(ImGuiKey_S))
-            cam1st->MoveForward(-dt * 10.0f);
+            cam1st->Translate(forward, -dt * 10.0f);
         if (ImGui::IsKeyDown(ImGuiKey_A))
-            cam1st->Strafe(-dt * 10.0f);
+            cam1st->Translate(right, -dt * 10.0f);
         if (ImGui::IsKeyDown(ImGuiKey_D))
-            cam1st->Strafe(dt * 10.0f);
+            cam1st->Translate(right, dt * 10.0f);
         if (ImGui::IsKeyDown(ImGuiKey_Q))
             cam1st->Translate(XMFLOAT3(0, -1, 0), dt * 10.0f);
         if (ImGui::IsKeyDown(ImGuiKey_E))
@@ -221,15 +225,16 @@ bool CarSim::InitResource()
         road->Init(JPH::Vec3(ROAD_SIZE * 0.5f, 0.05f, ROAD_SIZE * 0.5f), Rigidbody::Type::Static);
         m_GameObjects.push_back(road);
 
-        UpdateSplineRender(m_RoadDataManager.GetSpline());
-        UpdateRoadRender(m_RoadDataManager.GetSpline());
+        InitRoadRenderer();
     }
 
     // Car 1
     {
         auto car = std::make_shared<Car>();
-        car->Init(GetCarSpec(CarType::Car0), &m_RoadDataManager, JPH::Vec3(0.0f, 0.1f, 0.0f));
+        car->Init(GetCarSpec(CarType::Car0), &m_RoadDataManager, JPH::Vec3(-10.0f, 0.1f, -10.0f));
         car->SetDrawCollider(true);
+        car->SetDestination(m_RoadDataManager.GetNode(10));
+
         m_GameObjects.push_back(car);
         m_CarObjects.push_back(car);
     }
@@ -263,56 +268,37 @@ void CarSim::InitCamera()
     m_BasicEffect.SetProjMatrix(camera->GetProjMatrixXM());
     m_BasicEffect.SetEyePos(camera->GetPosition());
 }
-void CarSim::UpdateSplineRender(const Spline &spline)
+void CarSim::InitRoadRenderer()
 {
-    if (spline.GetControlPointCount() < 4)
-        return;
-
-    std::vector<Vec3> splinePoints = spline.GenerateSplinePoints();
-    if (splinePoints.empty())
-        return;
-
-    // Lift the curve above the road plane (y = 0) so it doesn't z-fight with it.
-    constexpr float CURVE_HEIGHT_OFFSET = 0.05f;
-
-    std::vector<XMFLOAT3> renderPoints;
-    renderPoints.reserve(splinePoints.size());
-    for (const Vec3 &p : splinePoints)
-    {
-        XMFLOAT3 renderPoint = ToXMFLOAT3(p);
-        renderPoint.y += CURVE_HEIGHT_OFFSET;
-        renderPoints.push_back(renderPoint);
-    }
-
-    Model *pCurveModel = m_ModelManager.CreateFromGeometry("spline_curve", Geometry::CreatePolyline(renderPoints));
-    pCurveModel->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(1.0f, 0.8f, 0.0f, 1.0f));
-    pCurveModel->materials[0].Set<float>("$Opacity", 1.0f);
-}
-
-void CarSim::UpdateRoadRender(const Spline &spline)
-{
-    const auto &points = spline.GetControlPoints();
-    if (points.size() < 2)
-        return;
-
     constexpr float ROAD_WIDTH = 3.0f;
-
-    // Spline::GenerateSplinePoints() only draws between its interior control points (see
-    // Spline.cpp), so duplicating the first/last point as phantom endpoints makes the curve
-    // actually reach the first and last clicked points instead of stopping short of them.
-
-    std::vector<Vec3> splinePoints = spline.GenerateSplinePoints();
-
-    std::vector<XMFLOAT3> centerline;
-    centerline.reserve(splinePoints.size());
-    for (const Vec3 &p : splinePoints)
-        centerline.push_back(ToXMFLOAT3(p));
-
-    Model *pGround = m_ModelManager.CreateFromGeometry("road", Geometry::CreateRibbon(centerline, ROAD_WIDTH));
-    pGround->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.22f, 0.22f, 0.22f, 1.0f));
-    pGround->materials[0].Set<float>("$Opacity", 1.0f);
+    constexpr float NODE_MARKER_RADIUS = 0.5f;
 
     m_RoadRenders.clear();
-    RenderObject &roadRender = m_RoadRenders.emplace_back();
-    roadRender.SetModel(pGround);
+    for (auto const &lane : m_RoadDataManager.GetLanes())
+    {
+        std::vector<Vec3> splinePoints = lane->GetSpline().GenerateSplinePoints();
+
+        std::vector<XMFLOAT3> centerline;
+        centerline.reserve(splinePoints.size());
+        for (const Vec3 &p : splinePoints)
+            centerline.push_back(ToXMFLOAT3(p));
+
+        Model *pGround = m_ModelManager.CreateFromGeometry("road" + std::to_string(lane->GetId()), Geometry::CreateRibbon(centerline, ROAD_WIDTH));
+        pGround->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.22f, 0.22f, 0.22f, 1.0f));
+        pGround->materials[0].Set<float>("$Opacity", 1.0f);
+
+        RenderObject &roadRender = m_RoadRenders.emplace_back();
+        roadRender.SetModel(pGround);
+    }
+
+    for (const auto &node : m_RoadDataManager.GetNodes())
+    {
+        Model *pMarker = m_ModelManager.CreateFromGeometry("node_marker" + std::to_string(node->id), Geometry::CreateSphere(NODE_MARKER_RADIUS));
+        pMarker->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f));
+        pMarker->materials[0].Set<float>("$Opacity", 1.0f);
+
+        RenderObject &nodeRender = m_RoadRenders.emplace_back();
+        nodeRender.SetModel(pMarker);
+        nodeRender.GetTransform().SetPosition(ToXMFLOAT3(node->position));
+    }
 }

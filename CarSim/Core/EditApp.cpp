@@ -1,7 +1,6 @@
 #include "EditApp.h"
 #include <XUtil.h>
 #include <DXTrace.h>
-#include <Nav/DataParser.h>
 
 using namespace DirectX;
 
@@ -181,7 +180,7 @@ void EditApp::DrawScene()
 
 bool EditApp::InitResource()
 {
-    m_Spline = DataParser::ParseSplineData(NAV_DATA_DIR "/data.json");
+    // m_Spline = DataParser::ParseSplineData(NAV_DATA_DIR "/data.json");
     // ******************
     // Initialize game objects
     //

@@ -25,8 +25,7 @@ public:
 private:
     bool InitResource();
     void FocusOnObject(const std::shared_ptr<Car> &obj);
-    void UpdateSplineRender(const Spline &spline);
-    void UpdateRoadRender(const Spline &spline);
+    void InitRoadRenderer();
 
 private:
     RoadDataManager m_RoadDataManager;
