@@ -65,6 +65,9 @@ add_custom_command(TARGET CarSim POST_BUILD
 # Common
 target_link_libraries(CarSim Common)
 
+# nlohmann/json
+target_link_libraries(CarSim nlohmann_json::nlohmann_json)
+
 # Jolt Physics
 target_link_libraries(CarSim Jolt)
 target_include_directories(CarSim PRIVATE ${joltphysics_SOURCE_DIR})

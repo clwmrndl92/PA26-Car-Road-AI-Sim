@@ -53,6 +53,18 @@ set_target_properties(UpdateAssimpLibsDebugSymbolsAndDLLs PROPERTIES FOLDER "Ass
 set_target_properties(zlibstatic PROPERTIES FOLDER "Assimp")
 
 #
+# nlohmann/json
+#
+set(JSON_BuildTests OFF CACHE INTERNAL "")
+
+FetchContent_Declare(
+    json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG v3.11.3
+)
+FetchContent_MakeAvailable(json)
+
+#
 # ImGui
 #
 FetchContent_Declare(
