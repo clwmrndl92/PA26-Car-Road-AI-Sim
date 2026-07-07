@@ -17,25 +17,24 @@ class CameraController
 {
 public:
     CameraController() = default;
-    CameraController& operator=(const CameraController&) = delete;
+    CameraController &operator=(const CameraController &) = delete;
     virtual ~CameraController() {}
     virtual void Update(float deltaTime) = 0;
 };
 
-class FirstPersonCameraController : public CameraController
+class FreeCameraController : public CameraController
 {
 public:
-
-    ~FirstPersonCameraController() override {};
+    ~FreeCameraController() override {};
     void Update(float deltaTime) override;
 
-    void InitCamera(FirstPersonCamera* pCamera);
+    void InitCamera(FreeCamera *pCamera);
 
     void SetMouseSensitivity(float x, float y);
     void SetMoveSpeed(float speed);
 
 private:
-    FirstPersonCamera* m_pCamera = nullptr;
+    FreeCamera *m_pCamera = nullptr;
 
     float m_MoveSpeed = 5.0f;
     float m_MouseSensitivityX = 0.005f;
@@ -50,7 +49,5 @@ private:
     float m_TotalDragTimeToZero = 0.25f;
     float m_DragTimer = 0.0f;
 };
-
-
 
 #endif

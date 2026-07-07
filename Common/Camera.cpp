@@ -130,38 +130,38 @@ void Camera::SetViewPort(float topLeftX, float topLeftY, float width, float heig
 // First-person / free-view camera
 //
 
-FirstPersonCamera::~FirstPersonCamera()
+FreeCamera::~FreeCamera()
 {
 }
 
-void FirstPersonCamera::SetPosition(float x, float y, float z)
+void FreeCamera::SetPosition(float x, float y, float z)
 {
     SetPosition(XMFLOAT3(x, y, z));
 }
 
-void FirstPersonCamera::SetPosition(const XMFLOAT3 &pos)
+void FreeCamera::SetPosition(const XMFLOAT3 &pos)
 {
     m_Transform.SetPosition(pos);
 }
 
-void FirstPersonCamera::LookAt(const XMFLOAT3 &pos, const XMFLOAT3 &target, const XMFLOAT3 &up)
+void FreeCamera::LookAt(const XMFLOAT3 &pos, const XMFLOAT3 &target, const XMFLOAT3 &up)
 {
     m_Transform.SetPosition(pos);
     m_Transform.LookAt(target, up);
 }
 
-void FirstPersonCamera::LookTo(const XMFLOAT3 &pos, const XMFLOAT3 &to, const XMFLOAT3 &up)
+void FreeCamera::LookTo(const XMFLOAT3 &pos, const XMFLOAT3 &to, const XMFLOAT3 &up)
 {
     m_Transform.SetPosition(pos);
     m_Transform.LookTo(to, up);
 }
 
-void FirstPersonCamera::Strafe(float d)
+void FreeCamera::Strafe(float d)
 {
     m_Transform.Translate(m_Transform.GetRightAxis(), d);
 }
 
-void FirstPersonCamera::Walk(float d)
+void FreeCamera::Walk(float d)
 {
     XMVECTOR rightVec = m_Transform.GetRightAxisXM();
     XMVECTOR frontVec = XMVector3Normalize(XMVector3Cross(rightVec, g_XMIdentityR1));
@@ -170,17 +170,17 @@ void FirstPersonCamera::Walk(float d)
     m_Transform.Translate(front, d);
 }
 
-void FirstPersonCamera::MoveForward(float d)
+void FreeCamera::MoveForward(float d)
 {
     m_Transform.Translate(m_Transform.GetForwardAxis(), d);
 }
 
-void FirstPersonCamera::Translate(const DirectX::XMFLOAT3 &dir, float magnitude)
+void FreeCamera::Translate(const DirectX::XMFLOAT3 &dir, float magnitude)
 {
     m_Transform.Translate(dir, magnitude);
 }
 
-void FirstPersonCamera::Pitch(float rad)
+void FreeCamera::Pitch(float rad)
 {
     XMFLOAT3 rotation = m_Transform.GetRotation();
     // Clamp the rotation around the x axis to [-7pi/18, 7pi/18]
@@ -193,7 +193,7 @@ void FirstPersonCamera::Pitch(float rad)
     m_Transform.SetRotation(rotation);
 }
 
-void FirstPersonCamera::RotateY(float rad)
+void FreeCamera::RotateY(float rad)
 {
     XMFLOAT3 rotation = m_Transform.GetRotation();
     rotation.y = XMScalarModAngle(rotation.y + rad);

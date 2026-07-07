@@ -44,7 +44,7 @@ private:
 
     PhysicsSystem m_Physics;
 
-    std::shared_ptr<FirstPersonCamera> m_pCamera;
+    std::shared_ptr<FreeCamera> m_pCamera;
     float m_TopDownHeightMin = 6.0f;
     float m_TopDownHeightMax = 100.0f;
 

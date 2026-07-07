@@ -229,7 +229,7 @@ bool EditApp::InitResource()
     // Initialize camera
     //
 
-    auto camera = std::make_shared<FirstPersonCamera>();
+    auto camera = std::make_shared<FreeCamera>();
     m_pCamera = camera;
 
     camera->SetViewPort(0.0f, 0.0f, (float)m_ClientWidth, (float)m_ClientHeight);

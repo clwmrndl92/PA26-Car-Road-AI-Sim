@@ -4,9 +4,9 @@
 
 using namespace DirectX;
 
-void FirstPersonCameraController::Update(float deltaTime)
+void FreeCameraController::Update(float deltaTime)
 {
-    ImGuiIO& io = ImGui::GetIO();
+    ImGuiIO &io = ImGui::GetIO();
 
     float yaw = 0.0f, pitch = 0.0f;
     if (ImGui::IsMouseDragging(ImGuiMouseButton_Right))
@@ -16,14 +16,10 @@ void FirstPersonCameraController::Update(float deltaTime)
         pitch += io.MouseDelta.y * m_MouseSensitivityY;
     }
 
-    int forward = (
-        (ImGui::IsKeyDown(ImGuiKey_W) ? 1 : 0) +
-        (ImGui::IsKeyDown(ImGuiKey_S) ? -1 : 0)
-        );
-    int strafe = (
-        (ImGui::IsKeyDown(ImGuiKey_A) ? -1 : 0) +
-        (ImGui::IsKeyDown(ImGuiKey_D) ? 1 : 0)
-        );
+    int forward = ((ImGui::IsKeyDown(ImGuiKey_W) ? 1 : 0) +
+                   (ImGui::IsKeyDown(ImGuiKey_S) ? -1 : 0));
+    int strafe = ((ImGui::IsKeyDown(ImGuiKey_A) ? -1 : 0) +
+                  (ImGui::IsKeyDown(ImGuiKey_D) ? 1 : 0));
 
     if (forward || strafe)
     {
@@ -52,18 +48,18 @@ void FirstPersonCameraController::Update(float deltaTime)
     m_pCamera->Translate(m_MoveDir, m_MoveVelocity * deltaTime);
 }
 
-void FirstPersonCameraController::InitCamera(FirstPersonCamera* pCamera)
+void FreeCameraController::InitCamera(FreeCamera *pCamera)
 {
     m_pCamera = pCamera;
 }
 
-void FirstPersonCameraController::SetMouseSensitivity(float x, float y)
+void FreeCameraController::SetMouseSensitivity(float x, float y)
 {
     m_MouseSensitivityX = x;
     m_MouseSensitivityY = y;
 }
 
-void FirstPersonCameraController::SetMoveSpeed(float speed)
+void FreeCameraController::SetMoveSpeed(float speed)
 {
     m_MoveSpeed = speed;
 }

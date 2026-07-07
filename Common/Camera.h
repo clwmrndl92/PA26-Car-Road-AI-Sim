@@ -86,11 +86,11 @@ protected:
     D3D11_VIEWPORT m_ViewPort = {};
 };
 
-class FirstPersonCamera : public Camera
+class FreeCamera : public Camera
 {
 public:
-    FirstPersonCamera() = default;
-    ~FirstPersonCamera() override;
+    FreeCamera() = default;
+    ~FreeCamera() override;
 
     // Set camera position
     void SetPosition(float x, float y, float z);

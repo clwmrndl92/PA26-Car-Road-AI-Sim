@@ -9,44 +9,29 @@
 #include <RenderStates.h>
 #include <Texture2D.h>
 #include <Buffer.h>
-#include <ModelManager.h>
-#include <TextureManager.h>
 #include <string>
 #include "PhysicsSystem.h"
 #include "GameObject.h"
-#include <Nav/Spline.h>
-#include <Nav/RoadDataManager.h>
+#include <TextureManager.h>
 
 class GameApp : public D3DApp
 {
-public:
-    enum class CameraMode
-    {
-        Focus,
-        Free
-    };
-
 public:
     GameApp(HINSTANCE hInstance, const std::wstring &windowName, int initWidth, int initHeight);
     ~GameApp();
 
     bool Init();
+    virtual void InitCamera();
     void OnResize();
-    void UpdateScene(float dt);
+    virtual void UpdateScene(float dt);
+    virtual void UpdateCamera(float dt);
+    virtual void UpdateUI(float dt);
     void DrawScene();
 
-private:
-    bool InitResource();
-    void FocusOnObject(const std::shared_ptr<GameObject> &obj);
-    void UpdateSplineRender(const Spline &spline);
-    void UpdateRoadRender(const Spline &spline);
-
-private:
+protected:
+    BasicEffect m_BasicEffect;
     TextureManager m_TextureManager;
     ModelManager m_ModelManager;
-    RoadDataManager m_RoadDataManager;
-
-    BasicEffect m_BasicEffect;
 
     std::unique_ptr<Depth2D> m_pDepthTexture;
 
@@ -55,9 +40,6 @@ private:
     PhysicsSystem m_Physics;
 
     std::shared_ptr<Camera> m_pCamera;
-    CameraMode m_CameraMode = CameraMode::Focus;
-    std::string m_PickedObjectName;
-    std::weak_ptr<GameObject> m_pPickedObject;
 
     RenderObject m_GridXZ;
     RenderObject m_GridXY;
@@ -66,7 +48,9 @@ private:
     bool m_ShowGridXY = false;
     bool m_ShowGridYZ = false;
 
-    std::vector<RenderObject> m_RoadRenders;
+private:
+    bool InitResource();
+    void InitLight();
 };
 
 #endif
