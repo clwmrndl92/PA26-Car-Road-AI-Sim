@@ -29,7 +29,7 @@ void RoadDataManager::BuildRoadData(const string &filePath)
     for (const nlohmann::json &roadJson : root.value("roads", nlohmann::json::array()))
     {
         int id = roadJson.value("id", 0);
-        float speedLimit = roadJson.value("speed_limit", 0.0f);
+        float speedLimit = roadJson.value("speed_limit", 0.0f) / 3.6f;
 
         auto road = make_shared<Road>(id, speedLimit);
         m_roads.push_back(road);

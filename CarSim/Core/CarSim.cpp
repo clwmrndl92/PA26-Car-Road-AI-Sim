@@ -198,6 +198,8 @@ void CarSim::DrawScene()
         m_GridXY.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     if (m_ShowGridYZ)
         m_GridYZ.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
+    for (auto &edgeRender : m_RoadEdgeRenders)
+        edgeRender.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     m_BasicEffect.SetRenderDefault();
 
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
@@ -272,6 +274,7 @@ void CarSim::InitRoadRenderer()
 {
     constexpr float ROAD_WIDTH = 3.0f;
     constexpr float NODE_MARKER_RADIUS = 0.5f;
+    constexpr float EDGE_LINE_HEIGHT = 0.1f;
 
     m_RoadRenders.clear();
     for (auto const &lane : m_RoadDataManager.GetLanes())
@@ -300,5 +303,26 @@ void CarSim::InitRoadRenderer()
         RenderObject &nodeRender = m_RoadRenders.emplace_back();
         nodeRender.SetModel(pMarker);
         nodeRender.GetTransform().SetPosition(ToXMFLOAT3(node->position));
+    }
+
+    m_RoadEdgeRenders.clear();
+    for (const auto &node : m_RoadDataManager.GetNodes())
+    {
+        for (const auto &edge : node->edges)
+        {
+            auto endNode = edge->endNode.lock();
+            if (!endNode)
+                continue;
+
+            Vec3 from = node->position + Vec3(0.0f, EDGE_LINE_HEIGHT, 0.0f);
+            Vec3 to = endNode->position + Vec3(0.0f, EDGE_LINE_HEIGHT, 0.0f);
+
+            Model *pLine = m_ModelManager.CreateFromGeometry("edge_line" + std::to_string(edge->id), Geometry::CreateLine(ToXMFLOAT3(from), ToXMFLOAT3(to)));
+            pLine->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f));
+            pLine->materials[0].Set<float>("$Opacity", 1.0f);
+
+            RenderObject &edgeRender = m_RoadEdgeRenders.emplace_back();
+            edgeRender.SetModel(pLine);
+        }
     }
 }

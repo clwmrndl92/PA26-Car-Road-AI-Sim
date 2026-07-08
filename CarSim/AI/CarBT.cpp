@@ -124,7 +124,8 @@ std::unique_ptr<BTNode> Car::DriveNode()
                 DebugConsole::Get().Log("TargetSpeed (km/h): " + std::to_string(targetSpeed * 3.6f));
             }
 
-            Accelerate(targetSpeed);
+            Accelerate(1.0f);
+            // Accelerate(targetSpeed);
 
             // steering
             float lookaheadCoeff = 5.0f / m_speed;

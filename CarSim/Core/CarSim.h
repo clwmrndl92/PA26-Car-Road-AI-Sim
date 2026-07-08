@@ -37,6 +37,7 @@ private:
     std::weak_ptr<Car> m_pPickedObject;
 
     std::vector<RenderObject> m_RoadRenders;
+    std::vector<RenderObject> m_RoadEdgeRenders;
 };
 
 #endif
