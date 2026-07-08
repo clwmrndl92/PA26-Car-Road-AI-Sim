@@ -105,7 +105,8 @@ void EditApp::UpdateScene(float dt)
                 float hitX = ray.origin.x + ray.direction.x * t;
                 float hitZ = ray.origin.z + ray.direction.z * t;
 
-                m_Spline.AddControlPoint(Vec3(hitX, 0.0f, hitZ));
+                m_SplineControlPoints.push_back(Vec3(hitX, 0.0f, hitZ));
+                m_Spline = Spline(m_SplineControlPoints);
 
                 RenderObject &marker = m_SplineMarkers.emplace_back();
                 marker.SetModel(m_pSplineMarkerModel);

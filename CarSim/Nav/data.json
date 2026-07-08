@@ -1,6 +1,6 @@
 {
   "roads": [
-    { "id": 1, "speed_limit": 30 }
+    { "id": 1, "speed_limit": 50 }
   ],
   "lanes": [
     {
@@ -55,16 +55,16 @@
     }
   ],
   "nodes": [
-    { "id": 1, "position": [0,0,0], "lane" : 1, "type": "normal" },
-    { "id": 2, "position": [0,0,24], "lane" : 1, "type": "normal" },
-    { "id": 3, "position": [0,0,24], "lane" : 4, "type": "normal" },
-    { "id": 4, "position": [-6,0,30], "lane" : 4, "type": "normal" },
-    { "id": 5, "position": [-6,0,30], "lane" : 2, "type": "normal" },
-    { "id": 6, "position": [-30,0,30], "lane" : 2, "type": "normal" },
-    { "id": 7, "position": [0,0,24], "lane" : 5, "type": "normal" },
-    { "id": 8, "position": [6,0,30], "lane" : 5, "type": "normal" },
-    { "id": 9, "position": [6,0,30], "lane" : 3, "type": "normal" },
-    { "id": 10, "position": [30,0,30], "lane" : 3, "type": "normal" }
+    { "id": 1, "position": [0,0,0], "lane" : 1, "type": "Start", "lane_pos":0 },
+    { "id": 2, "position": [0,0,24], "lane" : 1, "type": "End", "lane_pos":1  },
+    { "id": 3, "position": [0,0,24], "lane" : 4, "type": "Start", "lane_pos":0  },
+    { "id": 4, "position": [-6,0,30], "lane" : 4, "type": "End", "lane_pos":1  },
+    { "id": 5, "position": [-6,0,30], "lane" : 2, "type": "Start", "lane_pos":0  },
+    { "id": 6, "position": [-30,0,30], "lane" : 2, "type": "End", "lane_pos":1  },
+    { "id": 7, "position": [0,0,24], "lane" : 5, "type": "Start", "lane_pos":0  },
+    { "id": 8, "position": [6,0,30], "lane" : 5, "type": "End", "lane_pos":1  },
+    { "id": 9, "position": [6,0,30], "lane" : 3, "type": "Start", "lane_pos":0  },
+    { "id": 10, "position": [30,0,30], "lane" : 3, "type": "End", "lane_pos":1  }
   ],
   "links": [
     {  "id": 1, "source": 1, "target": 2, "length": 24 },

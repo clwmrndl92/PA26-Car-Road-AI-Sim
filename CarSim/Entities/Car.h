@@ -1,6 +1,7 @@
 #pragma once
 #include "Core/GameObject.h"
 #include "CarSpec.h"
+#include <cmath>
 #include <deque>
 #include <string>
 #include "AI/BehaviourTree.h"
@@ -17,6 +18,7 @@ public:
     void Draw(ID3D11DeviceContext *context, IEffect &effect) override;
 
     Vec3 GetPosition() const override;
+    Vec3 GetForwardAxis() const;
     void SetPosition(Vec3 position) override;
     void SetRotation(const DirectX::XMFLOAT4 &rotation) override;
 
@@ -56,12 +58,14 @@ private:
 
 private: // 멤버 변수 구역
     // 설정 및 스펙 상수/변수 (Constants & Specifications)
-    const float m_maxSpeed = 55.56f;            // 200 km/h
-    const float m_maxAcceleration = 2.78f;      // 0-100 km/h in 10s
-    const float m_maxBrakeDeceleration = 9.26f; // 100-0 km/h in 3s
-    float m_wheelbase = 0.0f;                   // 축거 (Init에서 설정)
-    float m_mass = 1.0f;                        // 질량 (Init에서 설정)
-    float m_maxSteerAngle = 0.785f;             // 최대 조향각 (45도)
+    const float m_maxSpeed = 200.0f / 3.6f;                      // 200 km/h
+    const float m_maxAcceleration = (100.0f / 3.6f) / 10.0f;     // 0-100 km/h in 10s
+    const float m_maxBrakeDeceleration = (100.0f / 3.6f) / 3.0f; // 100-0 km/h in 3s
+    static constexpr float ACCEL_RAMP_RATE = 11.1f;              // reaches m_maxAcceleration in ~0.25s
+    static constexpr float BRAKE_RAMP_RATE = 55.6f;              // reaches m_maxBrakeDeceleration in ~0.17s
+    float m_wheelbase = 0.0f;                                    // 축거 (Init에서 설정)
+    float m_mass = 1.0f;                                         // 질량 (Init에서 설정)
+    float m_maxSteerAngle = ToRadians(45.0f);                    // 최대 조향각 (45도)
 
     // 컴포넌트 및 AI 상태 (Components & Systems)
     const RoadDataManager *m_RoadDataManager = nullptr;
@@ -94,3 +98,17 @@ private: // 멤버 변수 구역
     RenderObject m_steerLine;
     RenderObject m_targetMarker;
 };
+
+static float CalcMaxSteerAngle(float speed)
+{
+    constexpr float LOW_SPEED_CUTOFF = 5.072f; // use MAX_STEER_ANGLE (cause 20.2f / LOW_SPEED_CUTOFF^2 > 45 degree)
+    constexpr float MAX_STEER_ANGLE = ToRadians(45.0f); // 45 degree
+    return (speed <= LOW_SPEED_CUTOFF) ? MAX_STEER_ANGLE : 20.2f / (speed * speed);
+}
+static float CalcMaxSpeed(float targetAngle)
+{
+    constexpr float LOW_SPEED_CUTOFF = 5.072f; // use MAX_STEER_ANGLE (cause 20.2f / LOW_SPEED_CUTOFF^2 > 45 degree)
+    constexpr float MAX_STEER_ANGLE = ToRadians(45.0f); // 45 degree
+    targetAngle = std::clamp(std::abs(targetAngle), 0.15f, MAX_STEER_ANGLE);
+    return std::sqrt(20.2f / targetAngle);
+}

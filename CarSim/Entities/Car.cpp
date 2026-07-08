@@ -110,6 +110,10 @@ Vec3 Car::GetPosition() const
     DirectX::XMFLOAT3 fwd = m_transform.GetForwardAxis();
     return Vec3(rear.x + fwd.x * m_wheelbase, rear.y + fwd.y * m_wheelbase, rear.z + fwd.z * m_wheelbase);
 }
+Vec3 Car::GetForwardAxis() const
+{
+    return ToVec3(m_transform.GetForwardAxis());
+}
 
 void Car::SetPosition(Vec3 position)
 {
@@ -128,8 +132,6 @@ void Car::SetRotation(const DirectX::XMFLOAT4 &rotation)
 
 void Car::Accelerate(float desiredVelocity)
 {
-    constexpr float ACCEL_RAMP_RATE = 11.1f; // reaches m_maxAcceleration in ~0.25s
-    constexpr float BRAKE_RAMP_RATE = 55.6f; // reaches m_maxBrakeDeceleration in ~0.17s
     if (desiredVelocity > m_speed)
         m_acceleration = std::min(std::max(m_acceleration, 0.0f) + ACCEL_RAMP_RATE * m_deltaTime, m_maxAcceleration);
     else if (desiredVelocity < m_speed)
@@ -175,9 +177,7 @@ void Car::UpdateCar()
     m_speed = std::clamp(m_speed, 0.0f, m_maxSpeed);
 
     // steer
-    constexpr float LOW_SPEED_CUTOFF = 18.26f / 3.6f; // below this, use m_maxSteerAngle (formula below would exceed it)
-    constexpr float MAX_STEER_ANGLE = 0.785f;
-    m_maxSteerAngle = (m_speed <= LOW_SPEED_CUTOFF) ? MAX_STEER_ANGLE : 20.2f / (m_speed * m_speed); // tuned so 100 km/h -> ~1.5 deg
+    m_maxSteerAngle = CalcMaxSteerAngle(m_speed);
     m_steerAngle = std::clamp(m_steerAngle, -m_maxSteerAngle, m_maxSteerAngle);
 }
 

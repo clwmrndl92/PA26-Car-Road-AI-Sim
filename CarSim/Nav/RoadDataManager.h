@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <unordered_map>
 #include "Spline.h"
 #include "Lane.h"
 #include "Road.h"
@@ -34,10 +35,24 @@ private:
 
 enum class RoadNodeType
 {
-    Normal,
+    Unkown,
+    Start,
+    End,
     Stop,
     ChangeLane
 };
+
+inline const unordered_map<string, RoadNodeType> &GetRoadNodeTypeByName()
+{
+    static const unordered_map<string, RoadNodeType> map = {
+        {"unknown", RoadNodeType::Unkown},
+        {"start", RoadNodeType::Start},
+        {"end", RoadNodeType::End},
+        {"stop", RoadNodeType::Stop},
+        {"changeLane", RoadNodeType::ChangeLane},
+    };
+    return map;
+}
 
 struct RoadNode
 {
@@ -45,7 +60,10 @@ struct RoadNode
     Vec3 position;
     vector<shared_ptr<RoadEdge>> edges;
     RoadNodeType nodeType;
+    float lanePosition;
     shared_ptr<Lane> lane;
+
+    Vec3 GetDirection() const { return lane->GetSpline().GetDirectionAt(lanePosition); }
 };
 
 struct RoadEdge

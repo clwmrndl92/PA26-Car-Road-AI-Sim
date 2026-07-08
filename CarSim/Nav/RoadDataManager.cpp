@@ -42,7 +42,12 @@ void RoadDataManager::BuildRoadData(const string &filePath)
         int id = laneJson.value("id", 0);
         int roadId = laneJson.value("road", 0);
 
-        Spline spline;
+        shared_ptr<Road> road;
+        auto roadIt = roadById.find(roadId);
+        if (roadIt != roadById.end())
+            road = roadIt->second;
+
+        vector<Vec3> controlPoints;
         for (const nlohmann::json &point : laneJson.value("control_points", nlohmann::json::array()))
         {
             if (point.size() < 3)
@@ -50,10 +55,10 @@ void RoadDataManager::BuildRoadData(const string &filePath)
             float x = point[0].get<float>();
             float y = point[1].get<float>();
             float z = point[2].get<float>();
-            spline.AddControlPoint(Vec3(x, y, z));
+            controlPoints.push_back(Vec3(x, y, z));
         }
 
-        auto lane = make_shared<Lane>(id, spline, roadId);
+        auto lane = make_shared<Lane>(id, Spline(controlPoints), road);
         m_lanes.push_back(lane);
         laneById[id] = lane;
     }
@@ -75,16 +80,17 @@ void RoadDataManager::BuildRoadData(const string &filePath)
             lane = laneIt->second;
 
         string typeStr = nodeJson.value("type", "normal");
-        RoadNodeType nodeType = RoadNodeType::Normal;
-        if (typeStr == "stop")
-            nodeType = RoadNodeType::Stop;
-        else if (typeStr == "changeLane")
-            nodeType = RoadNodeType::ChangeLane;
+        const auto &nodeTypeByName = GetRoadNodeTypeByName();
+        auto nodeTypeIt = nodeTypeByName.find(typeStr);
+        RoadNodeType nodeType = nodeTypeIt != nodeTypeByName.end() ? nodeTypeIt->second : RoadNodeType::Unkown;
+
+        float lanePosition = nodeJson.value("lane_pos", 0);
 
         auto node = make_shared<RoadNode>();
         node->id = id;
         node->position = position;
         node->nodeType = nodeType;
+        node->lanePosition = lanePosition;
         node->lane = lane;
 
         m_nodes.push_back(node);
@@ -112,6 +118,7 @@ void RoadDataManager::BuildRoadData(const string &filePath)
         m_edges.push_back(edge);
     }
 }
+
 shared_ptr<RoadNode> RoadDataManager::GetClosestNode(const Vec3 &position) const
 {
     shared_ptr<RoadNode> closestNode;
@@ -127,7 +134,6 @@ shared_ptr<RoadNode> RoadDataManager::GetClosestNode(const Vec3 &position) const
     }
     return closestNode;
 }
-
 vector<shared_ptr<RoadNode>> RoadDataManager::FindPath(const shared_ptr<RoadNode> &startNode, const shared_ptr<RoadNode> &destNode) const
 {
     if (startNode == nullptr || destNode == nullptr)
@@ -153,7 +159,12 @@ vector<shared_ptr<RoadNode>> RoadDataManager::FindPath(const shared_ptr<RoadNode
         {
             vector<shared_ptr<RoadNode>> path;
             for (shared_ptr<RoadNode> node = current; node; node = parent[node->id])
-                path.push_back(node);
+            {
+                if (node->nodeType != RoadNodeType::Start)
+                {
+                    path.push_back(node);
+                }
+            }
             reverse(path.begin(), path.end());
             return path;
         }

@@ -57,6 +57,7 @@ private:
 
     std::vector<RenderObject> m_RoadRenders;
 
+    std::vector<Vec3> m_SplineControlPoints;
     Spline m_Spline;
     RenderObject m_SplineCurve;
     bool m_SplineCurveVisible = false;
