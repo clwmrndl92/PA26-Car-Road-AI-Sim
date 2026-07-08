@@ -40,8 +40,6 @@ private:
     JPH::Vec3 ComputeDesiredVelocity() const;
 
     float PurePursuit(Vec3 target);
-    bool IsNavigating() { return m_destNode != nullptr; }
-    bool IsArrived() { return IsNavigating() && (m_destNode->position - m_rigidbody.GetPosition()).Length() < 3.0f; }
 
     // 디버그 및 트레일(자국) 렌더링 (Debug & Rendering Helpers)
     void UpdateDebugWindow();
@@ -52,8 +50,11 @@ private:
     // 인공지능 / 행동 트리 (AI / Behavior Tree)
     std::unique_ptr<BTNode> BuildBehaviourTree();
 
+    std::unique_ptr<BTNode> FindPathNode();
+
     std::unique_ptr<BTNode> StopNode();
     std::unique_ptr<BTNode> ChangeLineNode();
+    std::unique_ptr<BTNode> ProgressPath();
     std::unique_ptr<BTNode> DriveNode();
 
 private: // 멤버 변수 구역
@@ -73,6 +74,7 @@ private: // 멤버 변수 구역
     bool m_isFocused = false; // 포커스 여부 (입력 처리용)
     shared_ptr<RoadNode> m_destNode;
     shared_ptr<RoadNode> m_currentNode;
+    float m_startDistToNode = 0.0f;
     vector<shared_ptr<RoadNode>> m_path;
     size_t m_pathIndex = 0;
 
@@ -101,13 +103,13 @@ private: // 멤버 변수 구역
 
 static float CalcMaxSteerAngle(float speed)
 {
-    constexpr float LOW_SPEED_CUTOFF = 5.072f; // use MAX_STEER_ANGLE (cause 20.2f / LOW_SPEED_CUTOFF^2 > 45 degree)
+    constexpr float LOW_SPEED_CUTOFF = 5.072f;          // use MAX_STEER_ANGLE (cause 20.2f / LOW_SPEED_CUTOFF^2 > 45 degree)
     constexpr float MAX_STEER_ANGLE = ToRadians(45.0f); // 45 degree
     return (speed <= LOW_SPEED_CUTOFF) ? MAX_STEER_ANGLE : 20.2f / (speed * speed);
 }
 static float CalcMaxSpeed(float targetAngle)
 {
-    constexpr float LOW_SPEED_CUTOFF = 5.072f; // use MAX_STEER_ANGLE (cause 20.2f / LOW_SPEED_CUTOFF^2 > 45 degree)
+    constexpr float LOW_SPEED_CUTOFF = 5.072f;          // use MAX_STEER_ANGLE (cause 20.2f / LOW_SPEED_CUTOFF^2 > 45 degree)
     constexpr float MAX_STEER_ANGLE = ToRadians(45.0f); // 45 degree
     targetAngle = std::clamp(std::abs(targetAngle), 0.15f, MAX_STEER_ANGLE);
     return std::sqrt(20.2f / targetAngle);

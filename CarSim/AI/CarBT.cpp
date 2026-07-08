@@ -5,69 +5,109 @@
 
 std::unique_ptr<BTNode> Car::BuildBehaviourTree()
 {
-    return MakeSelector(
-        StopNode(),
-        ChangeLineNode(),
-        DriveNode());
+    return MakeSequence(
+        FindPathNode(),
+        MakeSelector(
+            StopNode(),
+            DriveNode()));
+}
+
+std::unique_ptr<BTNode> Car::FindPathNode()
+{
+    // 경로 (재)탐색 조건
+    auto notSearch = std::make_unique<BTCondition>(
+        [this]()
+        {
+            if (m_destNode == nullptr)
+                return true;
+            if (m_currentNode == nullptr)
+                return false;
+
+            float remainDist = (m_rigidbody.GetPosition() - m_currentNode->position).Length();
+            constexpr float REFIND_DISTANCE = 10.0f;
+            if (remainDist > m_startDistToNode + REFIND_DISTANCE)
+            {
+                m_currentNode = nullptr;
+                m_startDistToNode = 0.0f;
+                return false;
+            }
+            return true;
+        });
+    notSearch->name = "NotSearch?";
+
+    // 경로를 탐색
+    auto searchPath = std::make_unique<BTAction>(
+        [this]()
+        {
+            if (m_currentNode != nullptr)
+                return BTStatus::Success;
+
+            Vec3 position = m_rigidbody.GetPosition();
+            auto closestNode = m_RoadDataManager->GetClosestNode(position);
+            m_path = m_RoadDataManager->FindPath(closestNode, m_destNode);
+            m_pathIndex = -1;
+
+            m_currentNode = make_shared<RoadNode>();
+            m_currentNode->position = closestNode->position;
+            m_currentNode->nodeType = RoadNodeType::End;
+            m_currentNode->lanePosition = 1;
+            m_startDistToNode = (m_currentNode->position - position).Length();
+            Spline spline = Spline({position - GetForwardAxis(),
+                                    position,
+                                    closestNode->position,
+                                    closestNode->position + closestNode->GetDirection()});
+            m_currentNode->lane = make_shared<Lane>(-1, spline, closestNode->lane->GetRoad());
+            if (m_path.empty())
+            {
+                m_destNode = nullptr;
+                m_currentNode = nullptr;
+                return BTStatus::Success;
+            }
+            return BTStatus::Success;
+        });
+    searchPath->name = "SearchPath";
+
+    return MakeSelector(std::move(notSearch), std::move(searchPath));
 }
 
 std::unique_ptr<BTNode> Car::StopNode()
 {
-    return MakeSequence(
-        std::make_unique<BTCondition>([this]()
-                                      { return IsArrived(); }),
-        std::make_unique<BTAction>(
-            [this]()
+    // 정지 조건 : 목적지가 없거나 도착
+    auto shouldStop = std::make_unique<BTCondition>(
+        [this]()
+        {
+            constexpr float ARRIVE_DISTANCE = 5.0f;
+            return m_destNode == nullptr || (m_destNode->position - m_rigidbody.GetPosition()).Length() < ARRIVE_DISTANCE;
+        });
+    shouldStop->name = "ShouldStop?";
+
+    auto brake = std::make_unique<BTAction>(
+        [this]()
+        {
+            if (m_speed > 0.0f)
             {
-            // 차량이 멈췄을 때 수행할 동작
-            if(m_speed > 0.0f) {
                 Accelerate(0.0f);
                 return BTStatus::Running;
             }
             m_destNode = nullptr;
             m_currentNode = nullptr;
-            return BTStatus::Success; }));
-}
+            return BTStatus::Success;
+        });
+    brake->name = "Stop";
 
-std::unique_ptr<BTNode> Car::ChangeLineNode()
-{
-
-    return std::make_unique<BTAction>([this]()
-                                      {
-        // 차량이 차선을 변경할 때 수행할 동작
-        return BTStatus::Failure; });
+    return MakeSequence(std::move(shouldStop), std::move(brake));
 }
 
 std::unique_ptr<BTNode> Car::DriveNode()
 {
-    return std::make_unique<BTAction>(
+    auto checkNext = std::make_unique<BTAction>(
         [this]()
         {
             // path find
             Vec3 position = m_rigidbody.GetPosition();
-            if (!m_currentNode)
-            {
-                auto closestNode = m_RoadDataManager->GetClosestNode(position);
-                m_path = m_RoadDataManager->FindPath(closestNode, m_destNode);
-                m_pathIndex = -1;
 
-                m_currentNode = make_shared<RoadNode>();
-                m_currentNode->position = closestNode->position;
-                m_currentNode->nodeType = RoadNodeType::End;
-                m_currentNode->lanePosition = 1;
-                Spline spline = Spline({position - GetForwardAxis(),
-                                        position,
-                                        closestNode->position,
-                                        closestNode->position + closestNode->GetDirection()});
-                m_currentNode->lane = make_shared<Lane>(-1, spline, closestNode->lane->GetRoad());
-                if (m_path.empty())
-                {
-                    m_destNode = nullptr;
-                    m_currentNode = nullptr;
-                    return BTStatus::Failure;
-                }
-            };
             float currentNodeDistance = (m_currentNode->position - position).Length();
+            DebugConsole::Get().Log("currentNodeDistance: " + std::to_string(currentNodeDistance));
             while (currentNodeDistance < 3.0f)
             {
                 if (m_pathIndex + 1 >= m_path.size())
@@ -78,11 +118,18 @@ std::unique_ptr<BTNode> Car::DriveNode()
                 }
                 m_currentNode = m_path[++m_pathIndex];
                 currentNodeDistance = (m_currentNode->position - position).Length();
+                m_startDistToNode = currentNodeDistance;
             }
-
+            return BTStatus::Success;
+        });
+    checkNext->name = "CheckNextNode";
+    auto drive = std::make_unique<BTAction>(
+        [this]()
+        {
             // speed control
+            Vec3 position = m_rigidbody.GetPosition();
             float maxSpeed = m_currentNode->lane->GetRoad()->GetSpeedLimit();
-            float targetSpeed = m_maxSpeed;
+            float targetSpeed = maxSpeed;
 
             float fullBreakTime = m_speed / m_maxBrakeDeceleration + m_maxBrakeDeceleration / BRAKE_RAMP_RATE; // 대충 계산
             float lookDistance = (m_speed / 2 * fullBreakTime) + 5.0f;
@@ -118,10 +165,6 @@ std::unique_ptr<BTNode> Car::DriveNode()
             if (!isStraight)
             {
                 constexpr float CURVE_SPEED_COEFF = 1.22f; // 최대 속도 (4.4 * 루트 R)
-                targetSpeed = std::min(m_maxSpeed, CURVE_SPEED_COEFF * std::sqrt(minRadius));
-                DebugConsole::Get().Log("minRadius: " + std::to_string(minRadius));
-                DebugConsole::Get().Log("TargetSpeed (m/s): " + std::to_string(targetSpeed));
-                DebugConsole::Get().Log("TargetSpeed (km/h): " + std::to_string(targetSpeed * 3.6f));
             }
 
             Accelerate(1.0f);
@@ -133,6 +176,8 @@ std::unique_ptr<BTNode> Car::DriveNode()
             m_targetMarker.GetTransform().SetPosition(ToXMFLOAT3(targetPosition));
             float targetSteer = PurePursuit(targetPosition);
             Steer(targetSteer);
-            return BTStatus::Running;
+            return BTStatus::Success;
         });
+    drive->name = "DriveControl";
+    return MakeSequence(std::move(checkNext), std::move(drive));
 }

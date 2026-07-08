@@ -293,6 +293,8 @@ void Car::UpdateDebugWindow()
         ImGui::Text("DesiredVel: %.2f", ComputeDesiredVelocity().Length());
     }
     ImGui::End();
+
+    m_BehaviourTree.Draw(("BT: " + GetName()).c_str());
 }
 
 void Car::UpdateTrail()
