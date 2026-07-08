@@ -66,7 +66,7 @@
   ],
   "nodes": [
     { "id": 1, "position": [0,0,0], "lane" : 1, "type": "start", "lane_pos":0 },
-    { "id": 2, "position": [0,0,24], "lane" : 1, "type": "end", "lane_pos":1  },
+    { "id": 2, "position": [0,0,24], "lane" : 1, "type": "end", "lane_pos":1, "limit_speed":15  },
     { "id": 3, "position": [0,0,24], "lane" : 4, "type": "start", "lane_pos":0  },
     { "id": 4, "position": [-6,0,30], "lane" : 4, "type": "end", "lane_pos":1  },
     { "id": 5, "position": [-6,0,30], "lane" : 2, "type": "start", "lane_pos":0  },
@@ -76,7 +76,7 @@
     { "id": 9, "position": [9,0,30], "lane" : 3, "type": "start", "lane_pos":0  },
     { "id": 10, "position": [33,0,30], "lane" : 3, "type": "end", "lane_pos":1  },
     { "id": 11, "position": [3,0,0], "lane" : 6, "type": "start", "lane_pos":0  },
-    { "id": 12, "position": [3,0,24], "lane" : 6, "type": "end", "lane_pos":1  },
+    { "id": 12, "position": [3,0,24], "lane" : 6, "type": "end", "lane_pos":1, "limit_speed":15  },
     { "id": 13, "position": [0,0,12], "lane" : 1, "type": "changeLane", "lane_pos":0.5  },
     { "id": 14, "position": [3,0,12], "lane" : 6, "type": "changeLane", "lane_pos":0.5  }
   ],

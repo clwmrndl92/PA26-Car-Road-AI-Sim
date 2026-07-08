@@ -59,11 +59,13 @@ struct RoadNode
     int id;
     Vec3 position;
     vector<shared_ptr<RoadEdge>> edges;
-    RoadNodeType nodeType;
-    float lanePosition;
+    RoadNodeType nodeType = RoadNodeType::End;
+    float lanePosition = 1.0f;
     shared_ptr<Lane> lane;
+    float limitSpeed = 999.0f;
 
     Vec3 GetDirection() const { return lane->GetSpline().GetDirectionAt(lanePosition); }
+    float GetLimitSpeed() const { return min(limitSpeed, lane->GetRoad()->GetSpeedLimit()); }
 };
 
 struct RoadEdge

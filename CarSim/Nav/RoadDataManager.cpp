@@ -86,11 +86,14 @@ void RoadDataManager::BuildRoadData(const string &filePath)
 
         float lanePosition = nodeJson.value("lane_pos", 0);
 
+        float limitSpeed = nodeJson.value("limit_speed", 999) / 3.6f;
+
         auto node = make_shared<RoadNode>();
         node->id = id;
         node->position = position;
         node->nodeType = nodeType;
         node->lanePosition = lanePosition;
+        node->limitSpeed = limitSpeed;
         node->lane = lane;
 
         m_nodes.push_back(node);

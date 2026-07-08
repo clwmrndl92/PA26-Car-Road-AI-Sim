@@ -4,6 +4,7 @@
 #include <cmath>
 #include <deque>
 #include <string>
+#include <array>
 #include "AI/BehaviourTree.h"
 #include <Nav/RoadDataManager.h>
 
@@ -53,8 +54,6 @@ private:
     std::unique_ptr<BTNode> FindPathNode();
 
     std::unique_ptr<BTNode> StopNode();
-    std::unique_ptr<BTNode> ChangeLineNode();
-    std::unique_ptr<BTNode> ProgressPath();
     std::unique_ptr<BTNode> DriveNode();
 
 private: // 멤버 변수 구역
@@ -70,13 +69,15 @@ private: // 멤버 변수 구역
 
     // 컴포넌트 및 AI 상태 (Components & Systems)
     const RoadDataManager *m_RoadDataManager = nullptr;
-    BehaviourTree m_BehaviourTree;
     bool m_isFocused = false; // 포커스 여부 (입력 처리용)
+    BehaviourTree m_BehaviourTree;
     shared_ptr<RoadNode> m_destNode;
     shared_ptr<RoadNode> m_currentNode;
     float m_startDistToNode = 0.0f;
     vector<shared_ptr<RoadNode>> m_path;
     size_t m_pathIndex = 0;
+    std::array<std::pair<Vec3, float>, 25> m_speedProfile; // 0.2초단위로 5초까지
+    size_t m_profileIndex = 0;
 
     // 차량 주행 상태 변수 (Vehicle States)
     float m_speed = 0.0f;

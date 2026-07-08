@@ -128,6 +128,7 @@ std::unique_ptr<BTNode> Car::DriveNode()
         {
             // speed control
             Vec3 position = m_rigidbody.GetPosition();
+            // float maxSpeed = m_currentNode->GetLimitSpeed();
             float maxSpeed = m_currentNode->lane->GetRoad()->GetSpeedLimit();
             float targetSpeed = maxSpeed;
 
@@ -167,8 +168,7 @@ std::unique_ptr<BTNode> Car::DriveNode()
                 constexpr float CURVE_SPEED_COEFF = 1.22f; // 최대 속도 (4.4 * 루트 R)
             }
 
-            Accelerate(1.0f);
-            // Accelerate(targetSpeed);
+            Accelerate(targetSpeed);
 
             // steering
             float lookaheadCoeff = 5.0f / m_speed;
