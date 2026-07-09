@@ -47,13 +47,18 @@ private:
     void UpdateTrail();
     void RebuildTrailRender(RenderObject &render, const std::deque<DirectX::XMFLOAT3> &trail,
                             const std::string &name, const DirectX::XMFLOAT4 &color);
+    void RebuildSplineRender();
 
     // 인공지능 / 행동 트리 (AI / Behavior Tree)
     std::unique_ptr<BTNode> BuildBehaviourTree();
 
+    bool IsOffCourse();
+
     std::unique_ptr<BTNode> FindPathNode();
 
     std::unique_ptr<BTNode> StopNode();
+    void MoveSpeedProfile();
+    void CalculateSpeedProfile();
     std::unique_ptr<BTNode> DriveNode();
 
 private: // 멤버 변수 구역
@@ -66,6 +71,7 @@ private: // 멤버 변수 구역
     float m_wheelbase = 0.0f;                                    // 축거 (Init에서 설정)
     float m_mass = 1.0f;                                         // 질량 (Init에서 설정)
     float m_maxSteerAngle = ToRadians(45.0f);                    // 최대 조향각 (45도)
+    static constexpr float CURVE_SPEED_COEFF = 0.8f;             // 최대 코너링 속도 = CURVE_SPEED_COEFF * sqrt(R)
 
     // 컴포넌트 및 AI 상태 (Components & Systems)
     const RoadDataManager *m_RoadDataManager = nullptr;
@@ -73,11 +79,15 @@ private: // 멤버 변수 구역
     BehaviourTree m_BehaviourTree;
     shared_ptr<RoadNode> m_destNode;
     shared_ptr<RoadNode> m_currentNode;
-    float m_startDistToNode = 0.0f;
     vector<shared_ptr<RoadNode>> m_path;
     size_t m_pathIndex = 0;
-    std::array<std::pair<Vec3, float>, 25> m_speedProfile; // 0.2초단위로 5초까지
+    static constexpr float LOOK_PROFILE_TIME = 5.0f;
+    static constexpr size_t SPEED_PROFILE_COUNT = 25;
+    std::array<std::pair<Vec3, float>, SPEED_PROFILE_COUNT> m_speedProfile; // 0.2초단위로 5초까지
     size_t m_profileIndex = 0;
+    Spline m_currentSpline;
+    float m_currentTime = 0.0f;
+    float m_lastProfileTime = 0.0f;
 
     // 차량 주행 상태 변수 (Vehicle States)
     float m_speed = 0.0f;
@@ -100,6 +110,7 @@ private: // 멤버 변수 구역
     RenderObject m_frontTrailRender;
     RenderObject m_steerLine;
     RenderObject m_targetMarker;
+    RenderObject m_splineRender;
 };
 
 static float CalcMaxSteerAngle(float speed)

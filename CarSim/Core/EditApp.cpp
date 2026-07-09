@@ -271,7 +271,7 @@ void EditApp::UpdateSplineRender(const Spline &spline)
     if (spline.GetControlPointCount() < 4)
         return;
 
-    std::vector<Vec3> splinePoints = spline.GenerateSplinePoints();
+    std::vector<Vec3> splinePoints = spline.GetSplinePoints();
     if (splinePoints.empty())
         return;
 
@@ -306,7 +306,7 @@ void EditApp::UpdateRoadRender(const Spline &spline)
     // Spline.cpp), so duplicating the first/last point as phantom endpoints makes the curve
     // actually reach the first and last clicked points instead of stopping short of them.
 
-    std::vector<Vec3> splinePoints = spline.GenerateSplinePoints();
+    std::vector<Vec3> splinePoints = spline.GetSplinePoints();
 
     std::vector<XMFLOAT3> centerline;
     centerline.reserve(splinePoints.size());

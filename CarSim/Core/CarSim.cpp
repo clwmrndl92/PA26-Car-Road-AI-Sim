@@ -279,7 +279,7 @@ void CarSim::InitRoadRenderer()
     m_RoadRenders.clear();
     for (auto const &lane : m_RoadDataManager.GetLanes())
     {
-        std::vector<Vec3> splinePoints = lane->GetSpline().GenerateSplinePoints();
+        std::vector<Vec3> splinePoints = lane->GetSpline().GetSplinePoints();
 
         std::vector<XMFLOAT3> centerline;
         centerline.reserve(splinePoints.size());

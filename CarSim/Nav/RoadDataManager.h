@@ -26,6 +26,9 @@ public:
     const vector<shared_ptr<RoadNode>> &GetNodes() const { return m_nodes; };
     const shared_ptr<RoadNode> GetNode(int nodeId) const;
 
+public:
+    static constexpr float ROAD_WIDTH = 3.0f;
+
 private:
     vector<shared_ptr<Lane>> m_lanes;
     vector<shared_ptr<Road>> m_roads;

@@ -7,6 +7,7 @@
 #include <map>
 #include <limits>
 #include <algorithm>
+#include <Core/DebugConsole.h>
 
 void RoadDataManager::Init(const string &filePath)
 {
@@ -163,10 +164,8 @@ vector<shared_ptr<RoadNode>> RoadDataManager::FindPath(const shared_ptr<RoadNode
             vector<shared_ptr<RoadNode>> path;
             for (shared_ptr<RoadNode> node = current; node; node = parent[node->id])
             {
-                if (node->nodeType != RoadNodeType::Start)
-                {
-                    path.push_back(node);
-                }
+                path.push_back(node);
+                DebugConsole::Get().Log("node: " + std::to_string(node->id));
             }
             reverse(path.begin(), path.end());
             return path;
