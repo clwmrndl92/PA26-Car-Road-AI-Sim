@@ -1,99 +1,273 @@
 {
   "roads": [
-    { "id": 1, "speed_limit": 30 }
+    { "id": 1, "name": "Center_Horizontal_Road", "speed_limit": 50 },
+    { "id": 2, "name": "Center_Vertical_Road", "speed_limit": 50 },
+    { "id": 3, "name": "Outer_Loop_Road", "speed_limit": 40 }
   ],
-  "lanes": [
-    {
-        "id": 1,
-        "control_points": [
-            [0, 0, -1],
-            [0, 0, 0],
-            [0, 0, 24],
-            [0, 0, 25]
-        ] ,
-        "road":1
-    },
-    {
-        "id": 2,
-        "control_points": [
-            [-5, 0, 30],
-            [-6, 0, 30],
-            [-30, 0, 30],
-            [-31, 0, 30]
-        ] ,
-        "road":1
-    },
-    {
-        "id": 3,
-        "control_points": [
-            [8, 0, 30],
-            [9, 0, 30],
-            [33, 0, 30],
-            [34, 0, 30]
-        ] ,
-        "road":1
-    },
-    {
-        "id": 4,
-        "control_points": [
-            [0, 0, 23],
-            [0, 0, 24],
-            [-6, 0, 30],
-            [-7, 0, 30]
-        ] ,
-        "road":1
-    },
-    {
-        "id": 5,
-        "control_points": [
-            [3, 0, 23],
-            [3, 0, 24],
-            [9, 0, 30],
-            [10, 0, 30]
-        ] ,
-        "road":1
-    },
-    {
-        "id": 6,
-        "control_points": [
-            [3, 0, -1],
-            [3, 0, 0],
-            [3, 0, 24],
-            [3, 0, 25]
-        ] ,
-        "road":1
-    }
+"lanes": [
+    { "id": 11, "comment": "중앙 서측 진입 1차로", "road": 1, "control_points": [[-55, 0, -1.5], [-50, 0, -1.5], [-6, 0, -1.5], [-1, 0, -1.5]] },
+    { "id": 12, "comment": "중앙 서측 진입 2차로", "road": 1, "control_points": [[-55, 0, -4.5], [-50, 0, -4.5], [-6, 0, -4.5], [-1, 0, -4.5]] },
+    { "id": 17, "comment": "중앙 서측 진출 1차로", "road": 1, "control_points": [[-1, 0, 1.5], [-6, 0, 1.5], [-50, 0, 1.5], [-55, 0, 1.5]] },
+    { "id": 18, "comment": "중앙 서측 진출 2차로", "road": 1, "control_points": [[-1, 0, 4.5], [-6, 0, 4.5], [-50, 0, 4.5], [-55, 0, 4.5]] },
+
+    { "id": 15, "comment": "중앙 동측 진출 1차로", "road": 1, "control_points": [[1, 0, -1.5], [6, 0, -1.5], [50, 0, -1.5], [55, 0, -1.5]] },
+    { "id": 16, "comment": "중앙 동측 진출 2차로", "road": 1, "control_points": [[1, 0, -4.5], [6, 0, -4.5], [50, 0, -4.5], [55, 0, -4.5]] },
+    { "id": 13, "comment": "중앙 동측 진입 1차로", "road": 1, "control_points": [[55, 0, 1.5], [50, 0, 1.5], [6, 0, 1.5], [1, 0, 1.5]] },
+    { "id": 14, "comment": "중앙 동측 진입 2차로", "road": 1, "control_points": [[55, 0, 4.5], [50, 0, 4.5], [6, 0, 4.5], [1, 0, 4.5]] },
+
+    { "id": 21, "comment": "중앙 남측 진입 1차로", "road": 2, "control_points": [[1.5, 0, -55], [1.5, 0, -50], [1.5, 0, -6], [1.5, 0, -1]] },
+    { "id": 22, "comment": "중앙 남측 진입 2차로", "road": 2, "control_points": [[4.5, 0, -55], [4.5, 0, -50], [4.5, 0, -6], [4.5, 0, -1]] },
+    { "id": 27, "comment": "중앙 남측 진출 1차로", "road": 2, "control_points": [[-1.5, 0, -1], [-1.5, 0, -6], [-1.5, 0, -50], [-1.5, 0, -55]] },
+    { "id": 28, "comment": "중앙 남측 진출 2차로", "road": 2, "control_points": [[-4.5, 0, -1], [-4.5, 0, -6], [-4.5, 0, -50], [-4.5, 0, -55]] },
+
+    { "id": 25, "comment": "중앙 북측 진출 1차로", "road": 2, "control_points": [[1.5, 0, 1], [1.5, 0, 6], [1.5, 0, 50], [1.5, 0, 55]] },
+    { "id": 26, "comment": "중앙 북측 진출 2차로", "road": 2, "control_points": [[4.5, 0, 1], [4.5, 0, 6], [4.5, 0, 50], [4.5, 0, 55]] },
+    { "id": 23, "comment": "중앙 북측 진입 1차로", "road": 2, "control_points": [[-1.5, 0, 55], [-1.5, 0, 50], [-1.5, 0, 6], [-1.5, 0, 1]] },
+    { "id": 24, "comment": "중앙 북측 진입 2차로", "road": 2, "control_points": [[-4.5, 0, 55], [-4.5, 0, 50], [-4.5, 0, 6], [-4.5, 0, 1]] },
+
+
+    { "id": 31, "comment": "교차로 내부 직진 (서 -> 동)", "road": 1, "control_points": [[-11, 0, -1.5], [-6, 0, -1.5], [6, 0, -1.5], [11, 0, -1.5]] },
+    { "id": 32, "comment": "교차로 내부 직진 (동 -> 서)", "road": 1, "control_points": [[11, 0, 1.5], [6, 0, 1.5], [-6, 0, 1.5], [-11, 0, 1.5]] },
+    { "id": 33, "comment": "교차로 내부 직진 (남 -> 북)", "road": 2, "control_points": [[1.5, 0, -11], [1.5, 0, -6], [1.5, 0, 6], [1.5, 0, 11]] },
+    { "id": 34, "comment": "교차로 내부 직진 (북 -> 남)", "road": 2, "control_points": [[-1.5, 0, 11], [-1.5, 0, 6], [-1.5, 0, -6], [-1.5, 0, -11]] },
+
+    { "id": 41, "comment": "교차로 내부 좌회전 (서 -> 북)", "road": 1, "control_points": [[-11, 0, -1.5], [-6, 0, -1.5], [1.5, 0, 6], [1.5, 0, 11]] },
+    { "id": 42, "comment": "교차로 내부 좌회전 (동 -> 남)", "road": 1, "control_points": [[11, 0, 1.5], [6, 0, 1.5], [-1.5, 0, -6], [-1.5, 0, -11]] },
+    { "id": 43, "comment": "교차로 내부 좌회전 (남 -> 서)", "road": 2, "control_points": [[1.5, 0, -11], [1.5, 0, -6], [-6, 0, 1.5], [-11, 0, 1.5]] },
+    { "id": 44, "comment": "교차로 내부 좌회전 (북 -> 동)", "road": 2, "control_points": [[-1.5, 0, 11], [-1.5, 0, 6], [6, 0, -1.5], [11, 0, -1.5]] },
+
+    { "id": 51, "comment": "교차로 내부 우회전 (서 -> 남)", "road": 1, "control_points": [[-11, 0, -4.5], [-6, 0, -4.5], [-4.5, 0, -6], [-4.5, 0, -11]] },
+    { "id": 52, "comment": "교차로 내부 우회전 (동 -> 북)", "road": 1, "control_points": [[11, 0, 4.5], [6, 0, 4.5], [4.5, 0, 6], [4.5, 0, 11]] },
+    { "id": 53, "comment": "교차로 내부 우회전 (남 -> 동)", "road": 2, "control_points": [[4.5, 0, -11], [4.5, 0, -6], [6, 0, -4.5], [11, 0, -4.5]] },
+    { "id": 54, "comment": "교차로 내부 우회전 (북 -> 서)", "road": 2, "control_points": [[-4.5, 0, 11], [-4.5, 0, 6], [-6, 0, 4.5], [-11, 0, 4.5]] },
+
+
+    { "id": 61, "comment": "외곽 1차로 남측 직선 마디", "road": 3, "control_points": [[55, 0, -56], [50, 0, -56], [-50, 0, -56], [-55, 0, -56]] },
+    { "id": 63, "comment": "외곽 1차로 서측 직선 마디", "road": 3, "control_points": [[-56, 0, 55], [-56, 0, 50], [-56, 0, -50], [-56, 0, -55]] },
+    { "id": 65, "comment": "외곽 1차로 북측 직선 마디", "road": 3, "control_points": [[55, 0, 56], [50, 0, 56], [-50, 0, 56], [-55, 0, 56]] },
+    { "id": 67, "comment": "외곽 1차로 동측 직선 마디", "road": 3, "control_points": [[56, 0, -55], [56, 0, -50], [56, 0, 50], [56, 0, 55]] },
+
+    { "id": 71, "comment": "외곽 2차로 남측 직선 마디", "road": 3, "control_points": [[-55, 0, -59], [-50, 0, -59], [50, 0, -59], [55, 0, -59]] },
+    { "id": 73, "comment": "외곽 2차로 동측 직선 마디", "road": 3, "control_points": [[59, 0, 55], [59, 0, 50], [59, 0, -50], [59, 0, -55]] },
+    { "id": 75, "comment": "외곽 2차로 북측 직선 마디", "road": 3, "control_points": [[-55, 0, 59], [-50, 0, 59], [50, 0, 59], [55, 0, 59]] },
+    { "id": 77, "comment": "외곽 2차로 서측 직선 마디", "road": 3, "control_points": [[-59, 0, -55], [-59, 0, -50], [-59, 0, 50], [-59, 0, 55]] },
+
+
+    { "id": 62, "comment": "남서쪽 안쪽 코너", "road": 3, "control_points": [[-50, 0, -56], [-50, 0, -56], [-56, 0, -50], [-56, 0, -50]] },
+    { "id": 64, "comment": "북서쪽 안쪽 코너", "road": 3, "control_points": [[-56, 0, 50], [-56, 0, 50], [-50, 0, 56], [-50, 0, 56]] },
+    { "id": 66, "comment": "북동쪽 안쪽 코너", "road": 3, "control_points": [[-50, 0, 56], [-50, 0, 56], [56, 0, 50], [56, 0, 50]] },
+    { "id": 68, "comment": "남동쪽 안쪽 코너", "road": 3, "control_points": [[56, 0, -50], [56, 0, -50], [50, 0, -56], [50, 0, -56]] },
+
+    { "id": 72, "comment": "남동쪽 바깥쪽 코너", "road": 3, "control_points": [[50, 0, -59], [50, 0, -59], [59, 0, -50], [59, 0, -50]] },
+    { "id": 74, "comment": "북동쪽 바깥쪽 코너", "road": 3, "control_points": [[59, 0, 50], [59, 0, 50], [50, 0, 59], [50, 0, 59]] },
+    { "id": 76, "comment": "북서쪽 바깥쪽 코너", "road": 3, "control_points": [[-50, 0, 59], [-50, 0, 59], [-59, 0, 50], [-59, 0, 50]] },
+    { "id": 78, "comment": "남서쪽 바깥쪽 코너", "road": 3, "control_points": [[-59, 0, -50], [-59, 0, -50], [-50, 0, -59], [-50, 0, -59]] },
+
+
+    { "id": 91, "comment": "중앙 북측 2차로 -> 외곽 북측 바깥 수신점 (우회전 진출)", "road": 4, "control_points": [[4.5, 0, 45], [4.5, 0, 50], [4.5, 0, 59], [9.5, 0, 59]] },
+    { "id": 92, "comment": "중앙 북측 1차로 -> 외곽 북측 안쪽 수신점 (좌회전 진출)", "road": 4, "control_points": [[1.5, 0, 45], [1.5, 0, 50], [-1.5, 0, 56], [-6.5, 0, 56]] },
+    { "id": 93, "comment": "외곽 북측 안쪽 발신점 -> 중앙 북측 남행 1차로 (우회전 진입)", "road": 4, "control_points": [[6.5, 0, 56], [1.5, 0, 56], [-1.5, 0, 50], [-1.5, 0, 45]] },
+    { "id": 94, "comment": "외곽 북측 바깥 발신점 -> 중앙 북측 남행 2차로 (좌회전 진입)", "road": 4, "control_points": [[-9.5, 0, 59], [-4.5, 0, 59], [-4.5, 0, 50], [-4.5, 0, 45]] },
+
+    { "id": 95, "comment": "중앙 동측 2차로 -> 외곽 동측 바깥 수신점 (우회전 진출)", "road": 4, "control_points": [[45, 0, -4.5], [50, 0, -4.5], [59, 0, -4.5], [59, 0, -9.5]] },
+    { "id": 96, "comment": "중앙 동측 1차로 -> 외곽 동측 안쪽 수신점 (좌회전 진출)", "road": 4, "control_points": [[45, 0, -1.5], [50, 0, -1.5], [56, 0, -1.5], [56, 0, 3.5]] },
+    { "id": 97, "comment": "외곽 동측 바깥 발신점 -> 중앙 동측 서행 1차로 (좌회전 진입)", "road": 4, "control_points": [[59, 0, 6.5], [59, 0, 1.5], [50, 0, 1.5], [45, 0, 1.5]] },
+    { "id": 98, "comment": "외곽 동측 안쪽 발신점 -> 중앙 동측 서행 2차로 (우회전 진입)", "road": 4, "control_points": [[56, 0, -9.5], [56, 0, -4.5], [50, 0, 4.5], [45, 0, 4.5]] },
+
+    { "id": 99, "comment": "중앙 남측 2차로 -> 외곽 남측 바깥 수신점 (우회전 진출)", "road": 4, "control_points": [[-4.5, 0, -45], [-4.5, 0, -50], [-4.5, 0, -59], [-9.5, 0, -59]] },
+    { "id": 100, "comment": "중앙 남측 1차로 -> 외곽 남측 안쪽 수신점 (좌회전 진출)", "road": 4, "control_points": [[-1.5, 0, -45], [-1.5, 0, -50], [1.5, 0, -56], [6.5, 0, -56]] },
+    { "id": 101, "comment": "외곽 남측 바깥 발신점 -> 중앙 남측 북행 1차로 (좌회전 진입)", "road": 4, "control_points": [[-9.5, 0, -59], [-4.5, 0, -59], [1.5, 0, -50], [1.5, 0, -45]] },
+    { "id": 102, "comment": "외곽 남측 안쪽 발신점 -> 중앙 남측 북행 2차로 (우회전 진입)", "road": 4, "control_points": [[6.5, 0, -56], [1.5, 0, -56], [4.5, 0, -50], [4.5, 0, -45]] },
+
+    { "id": 103, "comment": "중앙 서측 1차로 -> 외곽 서측 바깥 수신점 (우회전 진출)", "road": 4, "control_points": [[-45, 0, 1.5], [-50, 0, 1.5], [-59, 0, 1.5], [-59, 0, 6.5]] },
+    { "id": 104, "comment": "중앙 서측 2차로 -> 외곽 서측 안쪽 수신점 (좌회전 진출)", "road": 4, "control_points": [[-45, 0, 4.5], [-50, 0, 4.5], [-56, 0, 4.5], [-56, 0, -4.5]] },
+    { "id": 105, "comment": "외곽 서측 안쪽 발신점 -> 중앙 서측 동행 1차로 (좌회전 진입)", "road": 4, "control_points": [[-56, 0, 6.5], [-56, 0, 1.5], [-50, 0, -1.5], [-45, 0, -1.5]] },
+    { "id": 106, "comment": "외곽 서측 바깥 발신점 -> 중앙 서측 동행 2차로 (우회전 진입)", "road": 4, "control_points": [[-59, 0, -9.5], [-59, 0, -4.5], [-50, 0, -4.5], [-45, 0, -4.5]] }
   ],
-  "nodes": [
-    { "id": 1, "position": [0,0,0], "lane" : 1, "type": "start", "lane_pos":0 },
-    { "id": 2, "position": [0,0,24], "lane" : 1, "type": "end", "lane_pos":1, "limit_speed":15  },
-    { "id": 3, "position": [0,0,24], "lane" : 4, "type": "start", "lane_pos":0  },
-    { "id": 4, "position": [-6,0,30], "lane" : 4, "type": "end", "lane_pos":1  },
-    { "id": 5, "position": [-6,0,30], "lane" : 2, "type": "start", "lane_pos":0  },
-    { "id": 6, "position": [-30,0,30], "lane" : 2, "type": "end", "lane_pos":1  },
-    { "id": 7, "position": [3,0,24], "lane" : 5, "type": "start", "lane_pos":0  },
-    { "id": 8, "position": [9,0,30], "lane" : 5, "type": "end", "lane_pos":1  },
-    { "id": 9, "position": [9,0,30], "lane" : 3, "type": "start", "lane_pos":0  },
-    { "id": 10, "position": [33,0,30], "lane" : 3, "type": "end", "lane_pos":1  },
-    { "id": 11, "position": [3,0,0], "lane" : 6, "type": "start", "lane_pos":0  },
-    { "id": 12, "position": [3,0,24], "lane" : 6, "type": "end", "lane_pos":1, "limit_speed":15  },
-    { "id": 13, "position": [0,0,12], "lane" : 1, "type": "changeLane", "lane_pos":0.5  },
-    { "id": 14, "position": [3,0,12], "lane" : 6, "type": "changeLane", "lane_pos":0.5  }
+"nodes": [
+    { "id": 1, "position": [-50, 0, -1.5], "lane": 11, "type": "t_junction_entry", "comment": "서측 외곽 안쪽(남행) 발신점에서 좌회전 진입받는 1차로 시작점" },
+    { "id": 5, "position": [-50, 0, -4.5], "lane": 12, "type": "t_junction_entry", "comment": "서측 외곽 바깥(북행) 발신점에서 우회전 진입받는 2차로 시작점" },
+    { "id": 12, "position": [-50, 0, 1.5], "lane": 17, "type": "t_junction_exit", "comment": "중앙 서측 1차로 끝 (서측 외곽 바깥 북행 수신점으로 우회전 진출)" },
+    { "id": 16, "position": [-50, 0, 4.5], "lane": 18, "type": "t_junction_exit", "comment": "중앙 서측 2차로 끝 (서측 외곽 안쪽 남행 수신점으로 좌회전 진출)" },
+
+    { "id": 2, "position": [-6, 0, -1.5], "lane": 11, "type": "intersection_entry" },
+    { "id": 6, "position": [-6, 0, -4.5], "lane": 12, "type": "intersection_entry" },
+    { "id": 11, "position": [-6, 0, 1.5], "lane": 17, "type": "intersection_exit" },
+    { "id": 15, "position": [-6, 0, 4.5], "lane": 18, "type": "intersection_exit" },
+
+    { "id": 3, "position": [6, 0, -1.5], "lane": 15, "type": "intersection_exit" },
+    { "id": 7, "position": [6, 0, -4.5], "lane": 16, "type": "intersection_exit" },
+    { "id": 10, "position": [6, 0, 1.5], "lane": 13, "type": "intersection_entry" },
+    { "id": 14, "position": [6, 0, 4.5], "lane": 14, "type": "intersection_entry" },
+
+    { "id": 4, "position": [50, 0, -1.5], "lane": 15, "type": "t_junction_exit", "comment": "중앙 동측 1차로 끝 (동측 외곽 안쪽 북행 수신점으로 좌회전 진출)" },
+    { "id": 8, "position": [50, 0, -4.5], "lane": 16, "type": "t_junction_exit", "comment": "중앙 동측 2차로 끝 (동측 외곽 바깥 남행 수신점으로 우회전 진출)" },
+    { "id": 9, "position": [50, 0, 1.5], "lane": 13, "type": "t_junction_entry", "comment": "동측 외곽 바깥(남행) 발신점에서 좌회전 진입받는 1차로 시작점" },
+    { "id": 13, "position": [50, 0, 4.5], "lane": 14, "type": "t_junction_entry", "comment": "동측 외곽 안쪽(북행) 발신점에서 우회전 진입받는 2차로 시작점" },
+
+
+    { "id": 17, "position": [1.5, 0, -50], "lane": 21, "type": "t_junction_entry", "comment": "남측 외곽 바깥(동행) 발신점에서 좌회전 진입받는 1차로 시작점" },
+    { "id": 21, "position": [4.5, 0, -50], "lane": 22, "type": "t_junction_entry", "comment": "남측 외곽 안쪽(서행) 발신점에서 우회전 진입받는 2차로 시작점" },
+    { "id": 28, "position": [-1.5, 0, -50], "lane": 27, "type": "t_junction_exit", "comment": "중앙 남측 1차로 끝 (남측 외곽 안쪽 서행 수신점으로 좌회전 진출)" },
+    { "id": 32, "position": [-4.5, 0, -50], "lane": 28, "type": "t_junction_exit", "comment": "중앙 남측 2차로 끝 (남측 외곽 바깥 동행 수신점으로 우회전 진출)" },
+
+    { "id": 18, "position": [1.5, 0, -6], "lane": 21, "type": "intersection_entry" },
+    { "id": 22, "position": [4.5, 0, -6], "lane": 22, "type": "intersection_entry" },
+    { "id": 27, "position": [-1.5, 0, -6], "lane": 27, "type": "intersection_exit" },
+    { "id": 31, "position": [-4.5, 0, -6], "lane": 28, "type": "intersection_exit" },
+
+    { "id": 19, "position": [1.5, 0, 6], "lane": 25, "type": "intersection_exit" },
+    { "id": 23, "position": [4.5, 0, 6], "lane": 26, "type": "intersection_exit" },
+    { "id": 26, "position": [-1.5, 0, 6], "lane": 23, "type": "intersection_entry" },
+    { "id": 30, "position": [-4.5, 0, 6], "lane": 24, "type": "intersection_entry" },
+
+    { "id": 20, "position": [1.5, 0, 50], "lane": 25, "type": "t_junction_exit", "comment": "중앙 북측 1차로 끝 (북측 외곽 안쪽 서행 수신점으로 좌회전 진출)" },
+    { "id": 24, "position": [4.5, 0, 50], "lane": 26, "type": "t_junction_exit", "comment": "중앙 북측 2차로 끝 (북측 외곽 바깥 동행 수신점으로 우회전 진출)" },
+    { "id": 25, "position": [-1.5, 0, 50], "lane": 23, "type": "t_junction_entry", "comment": "북측 외곽 안쪽(서행) 발신점에서 우회전 진입받는 1차로 시작점" },
+    { "id": 29, "position": [-4.5, 0, 50], "lane": 24, "type": "t_junction_entry", "comment": "북측 외곽 바깥(동행) 발신점에서 좌회전 진입받는 2차로 시작점" },
+
+
+    { "id": 101, "position": [50, 0, -56], "lane": 61, "type": "loop_node" },
+    { "id": 1015, "position": [1.5, 0, -56], "lane": 61, "type": "loop_fork", "comment": "중앙 남측 2차로(Node 21)로 우회전 시키는 발신점" },
+    { "id": 1016, "position": [-1.5, 0, -56], "lane": 61, "type": "loop_junction", "comment": "중앙 남측 1차로(Node 28)에서 좌회전 받는 수신점" },
+    { "id": 102, "position": [-50, 0, -56], "lane": 61, "type": "loop_node" },
+
+    { "id": 103, "position": [-56, 0, 50], "lane": 63, "type": "loop_node" },
+    { "id": 1035, "position": [-56, 0, 1.5], "lane": 63, "type": "loop_fork", "comment": "중앙 서측 1차로(Node 1)로 좌회전 시키는 발신점" },
+    { "id": 1036, "position": [-56, 0, 4.5], "lane": 63, "type": "loop_junction", "comment": "중앙 서측 2차로(Node 16)에서 좌회전 받는 수신점" },
+    { "id": 104, "position": [-56, 0, -50], "lane": 63, "type": "loop_node" },
+
+    { "id": 105, "position": [50, 0, 56], "lane": 65, "type": "loop_node" },
+    { "id": 1055, "position": [1.5, 0, 56], "lane": 65, "type": "loop_fork", "comment": "중앙 북측 1차로(Node 25)로 우회전 시키는 발신점" },
+    { "id": 1056, "position": [-1.5, 0, 56], "lane": 65, "type": "loop_junction", "comment": "중앙 북측 1차로(Node 20)에서 좌회전 받는 수신점" },
+    { "id": 106, "position": [-50, 0, 56], "lane": 65, "type": "loop_node" },
+
+    { "id": 107, "position": [56, 0, -50], "lane": 67, "type": "loop_node" },
+    { "id": 1075, "position": [56, 0, -4.5], "lane": 67, "type": "loop_fork", "comment": "중앙 동측 2차로(Node 13)로 우회전 시키는 발신점" },
+    { "id": 1076, "position": [56, 0, -1.5], "lane": 67, "type": "loop_junction", "comment": "중앙 동측 1차로(Node 4)에서 좌회전 받는 수신점" },
+    { "id": 108, "position": [56, 0, 50], "lane": 67, "type": "loop_node" },
+
+
+    { "id": 201, "position": [-50, 0, -59], "lane": 71, "type": "loop_node" },
+    { "id": 2015, "position": [-4.5, 0, -59], "lane": 71, "type": "loop_fork", "comment": "중앙 남측 1차로(Node 17)로 좌회전 시키는 발신점" },
+    { "id": 2016, "position": [-4.5, 0, -59], "lane": 71, "type": "loop_junction", "comment": "중앙 남측 2차로(Node 32)에서 우회전 받는 수신점" },
+    { "id": 202, "position": [50, 0, -59], "lane": 71, "type": "loop_node" },
+
+    { "id": 203, "position": [59, 0, 50], "lane": 73, "type": "loop_node" },
+    { "id": 2035, "position": [59, 0, 1.5], "lane": 73, "type": "loop_fork", "comment": "중앙 동측 1차로(Node 9)로 좌회전 시키는 발신점" },
+    { "id": 2036, "position": [59, 0, -4.5], "lane": 73, "type": "loop_junction", "comment": "중앙 동측 2차로(Node 8)에서 우회전 받는 수신점" },
+    { "id": 204, "position": [59, 0, -50], "lane": 73, "type": "loop_node" },
+
+    { "id": 206, "position": [-50, 0, 59], "lane": 75, "type": "loop_node" },
+    { "id": 2055, "position": [-4.5, 0, 59], "lane": 75, "type": "loop_fork", "comment": "중앙 북측 2차로(Node 29)로 좌회전 시키는 발신점" },
+    { "id": 2056, "position": [4.5, 0, 59], "lane": 75, "type": "loop_junction", "comment": "중앙 북측 2차로(Node 24)에서 우회전 받는 수신점" },
+    { "id": 205, "position": [50, 0, 59], "lane": 75, "type": "loop_node" },
+
+    { "id": 207, "position": [-59, 0, -50], "lane": 77, "type": "loop_node" },
+    { "id": 2075, "position": [-59, 0, -4.5], "lane": 77, "type": "loop_fork", "comment": "중앙 서측 2차로(Node 5)로 우회전 시키는 발신점" },
+    { "id": 2076, "position": [-59, 0, 1.5], "lane": 77, "type": "loop_junction", "comment": "중앙 서측 1차로(Node 12)에서 우회전 받는 수신점" },
+    { "id": 208, "position": [-59, 0, 50], "lane": 77, "type": "loop_node" }
   ],
-  "links": [
-    {  "id": 1, "source": 1, "target": 13, "length": 12 },
-    {  "id": 13, "source": 13, "target": 2, "length": 12 },
-    {  "id": 2, "source": 2, "target": 3, "length": 0 },
-    {  "id": 3, "source": 3, "target": 4, "length": 8.485281 },
-    {  "id": 4, "source": 4, "target": 5, "length": 0 },
-    {  "id": 5, "source": 5, "target": 6, "length": 24 },
-    {  "id": 6, "source": 12, "target": 7, "length": 0 },
-    {  "id": 7, "source": 7, "target": 8, "length": 8.485281 },
-    {  "id": 8, "source": 8, "target": 9, "length": 0 },
-    {  "id": 9, "source": 9, "target": 10, "length": 24 },
-    {  "id": 10, "source": 11, "target": 14, "length": 12 },
-    {  "id": 14, "source": 14, "target": 12, "length": 12 },
-    {  "id": 11, "source": 13, "target": 12, "length": 1 },
-    {  "id": 12, "source": 14, "target": 2, "length": 1 }
+"links": [
+    { "id": 1, "source": 1, "target": 2, "length": 44, "comment": "서측 진입 1차로 직선" },
+    { "id": 2, "source": 5, "target": 6, "length": 44, "comment": "서측 진입 2차로 직선" },
+    { "id": 3, "source": 11, "target": 12, "length": 44, "comment": "서측 진출 1차로 직선" },
+    { "id": 4, "source": 15, "target": 16, "length": 44, "comment": "서측 진출 2차로 직선" },
+
+    { "id": 5, "source": 3, "target": 4, "length": 44, "comment": "동측 진출 1차로 직선" },
+    { "id": 6, "source": 7, "target": 8, "length": 44, "comment": "동측 진출 2차로 직선" },
+    { "id": 7, "source": 9, "target": 10, "length": 44, "comment": "동측 진입 1차로 직선" },
+    { "id": 8, "source": 13, "target": 14, "length": 44, "comment": "동측 진입 2차로 직선" },
+
+    { "id": 9, "source": 17, "target": 18, "length": 44, "comment": "남측 진입 1차로 직선" },
+    { "id": 10, "source": 21, "target": 22, "length": 44, "comment": "남측 진입 2차로 직선" },
+    { "id": 11, "source": 27, "target": 28, "length": 44, "comment": "남측 진출 1차로 직선" },
+    { "id": 12, "source": 31, "target": 32, "length": 44, "comment": "남측 진출 2차로 직선" },
+
+    { "id": 13, "source": 19, "target": 20, "length": 44, "comment": "북측 진출 1차로 직선" },
+    { "id": 14, "source": 23, "target": 24, "length": 44, "comment": "북측 진출 2차로 직선" },
+    { "id": 15, "source": 25, "target": 26, "length": 44, "comment": "북측 진입 1차로 직선" },
+    { "id": 16, "source": 29, "target": 30, "length": 44, "comment": "북측 진입 2차로 직선" },
+
+
+    { "id": 21, "source": 2, "target": 3, "length": 12, "lane": 31, "comment": "교차로 내부 직진 (서->동): 서측진입1(2) -> 동측진출1(3)" },
+    { "id": 22, "source": 10, "target": 11, "length": 12, "lane": 32, "comment": "교차로 내부 직진 (동->서): 동측진입1(10) -> 서측진출1(11)" },
+    { "id": 23, "source": 18, "target": 19, "length": 12, "lane": 33, "comment": "교차로 내부 직진 (남->북): 남측진입1(18) -> 북측진출1(19)" },
+    { "id": 24, "source": 26, "target": 27, "length": 12, "lane": 34, "comment": "교차로 내부 직진 (북->남): 북측진입1(26) -> 남측진출1(27)" },
+
+    { "id": 31, "source": 2, "target": 19, "length": 10.5, "lane": 41, "comment": "교차로 내부 좌회전 (서->북): 서측진입1(2) -> 북측진출1(19)" },
+    { "id": 32, "source": 10, "target": 27, "length": 10.5, "lane": 42, "comment": "교차로 내부 좌회전 (동->남): 동측진입1(10) -> 남측진출1(27)" },
+    { "id": 33, "source": 18, "target": 11, "length": 10.5, "lane": 43, "comment": "교차로 내부 좌회전 (남->서): 남측진입1(18) -> 서측진출1(11)" },
+    { "id": 34, "source": 26, "target": 3, "length": 10.5, "lane": 44, "comment": "교차로 내부 좌회전 (북->동): 북측진입1(26) -> 동측진출1(3)" },
+
+    { "id": 41, "source": 6, "target": 31, "length": 2.35, "lane": 51, "comment": "교차로 내부 우회전 (서->남): 서측진입2(6) -> 남측진출2(31)" },
+    { "id": 42, "source": 14, "target": 23, "length": 2.35, "lane": 52, "comment": "교차로 내부 우회전 (동->북): 동측진입2(14) -> 북측진출2(23)" },
+    { "id": 43, "source": 22, "target": 7, "length": 2.35, "lane": 53, "comment": "교차로 내부 우회전 (남->동): 남측진입2(22) -> 동측진출2(7)" },
+    { "id": 44, "source": 30, "target": 15, "length": 2.35, "lane": 54, "comment": "교차로 내부 우회전 (북->서): 북측진입2(30) -> 서측진출2(15)" },
+
+
+    { "id": 1011, "source": 101, "target": 1015, "length": 48.5, "lane": 61, "comment": "외곽 1차로 남측 직선 전반" },
+    { "id": 1012, "source": 1015, "target": 1016, "length": 3.0, "lane": 61, "comment": "외곽 1차로 남측 삼거리 마디" },
+    { "id": 1013, "source": 1016, "target": 102, "length": 48.5, "lane": 61, "comment": "외곽 1차로 남측 직선 후반" },
+
+    { "id": 1031, "source": 103, "target": 1036, "length": 45.5, "lane": 63, "comment": "외곽 1차로 서측 직선 전반" },
+    { "id": 1032, "source": 1036, "target": 1035, "length": 3.0, "lane": 63, "comment": "외곽 1차로 서측 삼거리 마디" },
+    { "id": 1033, "source": 1035, "target": 104, "length": 51.5, "lane": 63, "comment": "외곽 1차로 서측 직선 후반" },
+
+    { "id": 1051, "source": 105, "target": 1055, "length": 48.5, "lane": 65, "comment": "외곽 1차로 북측 직선 전반" },
+    { "id": 1052, "source": 1055, "target": 1056, "length": 3.0, "lane": 65, "comment": "외곽 1차로 북측 삼거리 마디" },
+    { "id": 1053, "source": 1056, "target": 106, "length": 48.5, "lane": 65, "comment": "외곽 1차로 북측 직선 후반" },
+
+    { "id": 1071, "source": 107, "target": 1075, "length": 45.5, "lane": 67, "comment": "외곽 1차로 동측 직선 전반" },
+    { "id": 1072, "source": 1075, "target": 1076, "length": 3.0, "lane": 67, "comment": "외곽 1차로 동측 삼거리 마디" },
+    { "id": 1073, "source": 1076, "target": 108, "length": 51.5, "lane": 67, "comment": "외곽 1차로 동측 직선 후반" },
+
+    { "id": 2011, "source": 201, "target": 2015, "length": 45.5, "lane": 71, "comment": "외곽 2차로 남측 직선 전반" },
+    { "id": 2012, "source": 2015, "target": 2016, "length": 9.0, "lane": 71, "comment": "외곽 2차로 남측 삼거리 마디" },
+    { "id": 2013, "source": 2016, "target": 202, "length": 45.5, "lane": 71, "comment": "외곽 2차로 남측 직선 후반" },
+
+    { "id": 2031, "source": 203, "target": 2035, "length": 48.5, "lane": 73, "comment": "외곽 2차로 동측 직선 전반" },
+    { "id": 2032, "source": 2035, "target": 2036, "length": 3.0, "lane": 73, "comment": "외곽 2차로 동측 삼거리 마디" },
+    { "id": 2033, "source": 2036, "target": 204, "length": 48.5, "lane": 73, "comment": "외곽 2차로 동측 직선 후반" },
+
+    { "id": 2051, "source": 206, "target": 2055, "length": 45.5, "lane": 75, "comment": "외곽 2차로 북측 직선 전반" },
+    { "id": 2052, "source": 2055, "target": 2056, "length": 9.0, "lane": 75, "comment": "외곽 2차로 북측 삼거리 마디" },
+    { "id": 2053, "source": 2056, "target": 205, "length": 45.5, "lane": 75, "comment": "외곽 2차로 북측 직선 후반" },
+
+    { "id": 2071, "source": 207, "target": 2075, "length": 45.5, "lane": 77, "comment": "외곽 2차로 서측 직선 전반" },
+    { "id": 2072, "source": 2075, "target": 2076, "length": 9.0, "lane": 77, "comment": "외곽 2차로 서측 삼거리 마디" },
+    { "id": 2073, "source": 2076, "target": 208, "length": 45.5, "lane": 77, "comment": "외곽 2차로 서측 직선 후반" },
+
+
+    { "id": 111, "source": 104, "target": 102, "length": 9.42, "lane": 62, "comment": "남서쪽 안쪽 코너: 서측 안쪽 남행 끝(104) -> 남측 안쪽 서행 시작(102)" },
+    { "id": 112, "source": 103, "target": 106, "length": 9.42, "lane": 64, "comment": "북서쪽 안쪽 코너: 서측 안쪽 북행 끝(103) -> 북측 안쪽 서행 시작(106)" },
+    { "id": 113, "source": 105, "target": 108, "length": 9.42, "lane": 66, "comment": "북동쪽 안쪽 코너: 북측 안쪽 서행 끝(105) -> 동측 안쪽 북행 시작(108)" },
+    { "id": 114, "source": 107, "target": 101, "length": 9.42, "lane": 68, "comment": "남동쪽 안쪽 코너: 동측 안쪽 북행 끝(107) -> 남측 안쪽 서행 시작(101)" },
+
+    { "id": 211, "source": 202, "target": 204, "length": 14.13, "lane": 72, "comment": "남동쪽 바깥쪽 코너: 남측 바깥 동행 끝(202) -> 동측 바깥 남행 시작(204)" },
+    { "id": 212, "source": 203, "target": 205, "length": 14.13, "lane": 74, "comment": "북동쪽 바깥쪽 코너: 동측 바깥 남행 끝(203) -> 북측 바깥 동행 시작(205)" },
+    { "id": 213, "source": 206, "target": 208, "length": 14.13, "lane": 76, "comment": "북서쪽 바깥쪽 코너: 북측 바깥 동행 끝(206) -> 서측 바깥 북행 시작(208)" },
+    { "id": 214, "source": 207, "target": 201, "length": 14.13, "lane": 78, "comment": "남서쪽 바깥쪽 코너: 서측 바깥 북행 끝(207) -> 남측 바깥 동행 시작(201)" },
+
+
+    { "id": 501, "source": 24, "target": 1055, "length": 6.00, "lane": 91, "comment": "중앙 북측 바깥(2차로: [4.5,0,50]) 끝(24) -> 외곽 북측 안쪽 서행 시작점(1055) 우회전 진출" },
+    { "id": 502, "source": 20, "target": 2056, "length": 9.21, "lane": 92, "comment": "★교정완료★ 중앙 북측 안쪽(북행 1차로: [1.5,0,50]) 끝(20) -> 외곽 북측 바깥 동행 수신점(2056) 좌회전 진출" },
+    { "id": 503, "source": 1056, "target": 25, "length": 6.70, "lane": 93, "comment": "★교정완료★ 외곽 북측 안쪽 서행 수신점(1056) -> 중앙 북측 남행 안쪽(남행 1차로: [-1.5,0,50]) 시작(25) 우회전 진입" },
+    { "id": 2055, "source": 2055, "target": 29, "length": 9.21, "lane": 94, "comment": "외곽 북측 바깥 동행 발신점(2055) -> 중앙 북측 남행 바깥(2차로: [-4.5,0,50]) 시작(29) 좌회전 진입" },
+
+    { "id": 511, "source": 8, "target": 1075, "length": 6.00, "lane": 95, "comment": " 중앙 동측 바깥(2차로) 끝(8) -> 외곽 동측 안쪽 남행 시작점(1075) 우회전 진출" },
+    { "id": 512, "source": 4, "target": 2036, "length": 9.21, "lane": 96, "comment": "중앙 동측 안쪽(1차로) 끝(4) -> 외곽 동측 바깥 남행 수신점(2036) 좌회전 진출" },
+    { "id": 513, "source": 2035, "target": 9, "length": 6.70, "lane": 97, "comment": "외곽 동측 바깥 남행 발신점(2035) -> 중앙 동측 서행 안쪽(1차로) 시작(9) 좌회전 진입" },
+    { "id": 1076, "source": 1076, "target": 13, "length": 9.21, "lane": 98, "comment": "외곽 동측 안쪽 남행 수신점(1076) -> 중앙 동측 서행 바깥(2차로) 시작(13) 우회전 진입" },
+
+    { "id": 521, "source": 32, "target": 1015, "length": 6.00, "lane": 99, "comment": " 중앙 남측 바깥(2차로) 끝(32) -> 외곽 남측 안쪽 서행 시작점(1015) 우회전 진출" },
+    { "id": 522, "source": 28, "target": 2016, "length": 9.21, "lane": 100, "comment": "중앙 남측 안쪽(1차로) 끝(28) -> 외곽 남측 바깥 동행 수신점(2016) 좌회전 진출" },
+    { "id": 523, "source": 2015, "target": 17, "length": 6.70, "lane": 101, "comment": "외곽 남측 바깥 동행 발신점(2015) -> 중앙 남측 북행 안쪽(1차로) 시작(17) 좌회전 진입" },
+    { "id": 1016, "source": 1016, "target": 21, "length": 9.21, "lane": 102, "comment": "외곽 남측 안쪽 서행 수신점(1016) -> 중앙 남측 북행 바깥(2차로) 시작(21) 우회전 진입" },
+
+    { "id": 531, "source": 12, "target": 1035, "length": 6.00, "lane": 103, "comment": " 중앙 서측 바깥(2차로) 끝(12) -> 외곽 서측 안쪽 남행 시작점(1035) 우회전 진출" },
+    { "id": 532, "source": 16, "target": 2076, "length": 9.21, "lane": 104, "comment": "중앙 서측 안쪽(1차로) 끝(16) -> 외곽 서측 바깥 북행 수신점(2076) 좌회전 진출" },
+    { "id": 533, "source": 2075, "target": 1, "length": 6.70, "lane": 105, "comment": "외곽 서측 바깥 북행 발신점(2075) -> 중앙 서측 동행 안쪽(1차로) 시작(1) 좌회전 진입" },
+    { "id": 1036, "source": 1036, "target": 5, "length": 9.21, "lane": 106, "comment": "외곽 서측 안쪽 남행 수신점(1036) -> 중앙 서측 동행 바깥(2차로) 시작(5) 우회전 진입" }
   ]
 }
