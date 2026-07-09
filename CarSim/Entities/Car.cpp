@@ -341,14 +341,13 @@ void Car::CalculateSpeedProfile()
         float rampTime = std::clamp(t, 0.0f, ACCEL_RAMP_DURATION - rampStart);
         float rampEndProgress = rampStartProgress + rampTime / ACCEL_RAMP_DURATION;
 
-        float distance = calSpeed * rampTime +
-                         m_maxAccel * ACCEL_RAMP_DURATION * ACCEL_RAMP_DURATION * (GetAccelDistanceRatio(rampEndProgress) - startAccelDistanceRatio) -
-                         m_maxAccel * ACCEL_RAMP_DURATION * startAccelSpeedRatio * rampTime;
+        float distance = (calSpeed - m_maxAccel * ACCEL_RAMP_DURATION * startAccelSpeedRatio) * rampTime +
+                         m_maxAccel * ACCEL_RAMP_DURATION * ACCEL_RAMP_DURATION * (GetAccelDistanceRatio(rampEndProgress) - startAccelDistanceRatio);
         float rampEndSpeed = calSpeed + m_maxAccel * ACCEL_RAMP_DURATION * (GetAccelSpeedRatio(rampEndProgress) - startAccelSpeedRatio);
 
         // 풀악셀로 달리기
         float remainTime = t - rampTime;
-        float fullAccelSpeedTime = std::max(0.0f, (m_maxSpeed - rampEndSpeed) / m_maxAccel);
+        float fullAccelSpeedTime = std::max(0.0f, (m_maxSpeed - rampEndSpeed) / m_maxAccel);;
         float fullAccelTime = std::min(remainTime, fullAccelSpeedTime);
         float maxSpeed = rampEndSpeed + m_maxAccel * fullAccelTime;
         distance += (rampEndSpeed + maxSpeed) / 2.0f * fullAccelTime;
@@ -435,12 +434,10 @@ void Car::CalculateSpeedProfile()
     std::sort(samples.begin(), samples.end(), [](const RoadSample &a, const RoadSample &b)
               { return a.distance < b.distance; });
 
-    // 제동 램프 구간(0~BRAKE_RAMP_DURATION)의 시간평균 감속도는 최대치의 절반이므로,
-    // 목표 속도를 실제보다 빠르게(낙관적으로) 계산하지 않도록 항상 절반만 사용한다.
-    constexpr float BRAKE_RAMP_AVG_FACTOR = 0.5f;
+    // 감속 램프구간 때문에 최대감속 가속도의 0.3만 사용(매우 안전운전), 나중에 도로 빌드시 고정 룩업 테이블로 변경
+    constexpr float BRAKE_RAMP_AVG_FACTOR = 0.3f;
 
-    // 뒤에서부터 감속 계획 전파: i번째 샘플의 실제 목표 속도 = 그 지점 자체의 최대속도와,
-    // 그 뒤 모든 샘플까지 감속 가능한 속도 중 최솟값 (연속된 여러 커브를 전부 고려)
+    // 뒤에서부터 감속 계획 전파
     std::vector<float> speedCap(samples.size());
     if (!samples.empty())
     {
