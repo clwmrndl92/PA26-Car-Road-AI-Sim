@@ -138,6 +138,9 @@ void CarSim::UpdateCamera(float dt)
             cam1st->Pitch(io.MouseDelta.y * 0.01f);
             cam1st->RotateY(io.MouseDelta.x * 0.01f);
         }
+
+        if (io.MouseWheel != 0.0f)
+            cam1st->Translate(cam1st->GetLookAxis(), io.MouseWheel * 2.0f);
     }
 }
 void CarSim::UpdateUI(float dt)
@@ -280,11 +283,14 @@ void CarSim::InitRoadRenderer()
     for (auto const &lane : m_RoadDataManager.GetLanes())
     {
         std::vector<Vec3> splinePoints = lane->GetSpline().GetSplinePoints();
+        std::vector<Vec3> controlPoints = lane->GetSpline().GetControlPoints();
 
         std::vector<XMFLOAT3> centerline;
-        centerline.reserve(splinePoints.size());
+        centerline.reserve(splinePoints.size() + 2);
+        centerline.push_back(ToXMFLOAT3(controlPoints.front()));
         for (const Vec3 &p : splinePoints)
             centerline.push_back(ToXMFLOAT3(p));
+        centerline.push_back(ToXMFLOAT3(controlPoints.back()));
 
         Model *pGround = m_ModelManager.CreateFromGeometry("road" + std::to_string(lane->GetId()), Geometry::CreateRibbon(centerline, ROAD_WIDTH));
         pGround->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.22f, 0.22f, 0.22f, 1.0f));

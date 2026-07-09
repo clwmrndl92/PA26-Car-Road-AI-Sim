@@ -6,6 +6,17 @@
 #include <cmath>
 #include <imgui.h>
 #include <Core/DebugConsole.h>
+#include <Core/Assert.h>
+
+namespace
+{
+    // 저크 완화용 S자(smoothstep) 보간. 가속/제동 램프와 속도 프로파일 계산에서 공유.
+    float SmoothStep(float t)
+    {
+        t = std::clamp(t, 0.0f, 1.0f);
+        return t * t * (3.0f - 2.0f * t);
+    }
+} // namespace
 
 void Car::Init(const CarSpec &spec, const RoadDataManager *roadDataManager, JPH::Vec3 position)
 {
@@ -137,15 +148,40 @@ void Car::SetRotation(const DirectX::XMFLOAT4 &rotation)
     SetPosition(frontAxle); // re-derive the rear axle using the NEW rotation
 }
 
+void Car::EmergBrake()
+{
+    m_acceleration = -m_maxEmergBrake;
+    m_accelMode = AccelMode::Braking;
+    m_accelRampTime = 0.0f;
+}
 void Car::Accelerate(float desiredVelocity)
 {
+    // 저크 완화를 위해 가속도를 시간에 따라 선형이 아닌 S자(smoothstep)로 보간한다.
+    AccelMode targetMode = AccelMode::None;
     if (desiredVelocity > m_speed)
-        m_acceleration = std::min(std::max(m_acceleration, 0.0f) + ACCEL_RAMP_RATE * m_deltaTime, m_maxAcceleration);
+        targetMode = AccelMode::Accelerating;
     else if (desiredVelocity < m_speed)
-        m_acceleration = std::max(std::min(m_acceleration, 0.0f) - BRAKE_RAMP_RATE * m_deltaTime, -m_maxBrakeDeceleration);
-    else
+        targetMode = AccelMode::Braking;
+
+    if (m_accelMode != targetMode)
+    {
+        m_accelMode = targetMode;
+        m_accelRampTime = 0.0f;
+    }
+
+    if (m_accelMode == AccelMode::None)
+    {
         m_acceleration = 0.0f;
+        return;
+    }
+
+    float duration = (m_accelMode == AccelMode::Accelerating) ? ACCEL_RAMP_DURATION : BRAKE_RAMP_DURATION;
+    float maxLimit = (m_accelMode == AccelMode::Accelerating) ? m_maxAccel : -m_maxBrake;
+
+    m_accelRampTime += m_deltaTime;
+    m_acceleration = SmoothStep(m_accelRampTime / duration) * maxLimit;
 }
+
 void Car::Steer(float radian)
 {
     constexpr float STEER_RAMP_RATE = 0.4f; // todo: vary 0.3 (calm) ~ 1.0 (urgent) by input intensity
@@ -236,7 +272,7 @@ void Car::MoveSpeedProfile()
         if (!nextNode)
         {
             tailPosition = segmentNode->position;
-            tailSpeed = maxSpeed;
+            tailSpeed = (segmentNode == m_destNode) ? 0.0f : maxSpeed;
             break;
         }
 
@@ -256,7 +292,7 @@ void Car::MoveSpeedProfile()
     {
         size_t index = (m_profileIndex + offset) % SPEED_PROFILE_COUNT;
         float distance = (nextPosition - m_speedProfile[index].first).Length();
-        float entrySpeed = std::sqrt(nextSpeed * nextSpeed + 2.0f * m_maxBrakeDeceleration * distance);
+        float entrySpeed = std::sqrt(nextSpeed * nextSpeed + 2.0f * m_maxBrake * distance);
         m_speedProfile[index].second = std::min(m_speedProfile[index].second, entrySpeed);
 
         nextPosition = m_speedProfile[index].first;
@@ -267,8 +303,8 @@ void Car::MoveSpeedProfile()
     for (size_t offset = 1; offset < SPEED_PROFILE_COUNT; ++offset)
     {
         size_t index = (m_profileIndex + offset) % SPEED_PROFILE_COUNT;
-        float maxReachable = prevSpeed + m_maxAcceleration * deltaTime;
-        float minReachable = std::max(0.0f, prevSpeed - m_maxBrakeDeceleration * deltaTime);
+        float maxReachable = prevSpeed + m_maxAccel * deltaTime;
+        float minReachable = std::max(0.0f, prevSpeed - m_maxBrake * deltaTime);
         float speed = std::clamp(m_speedProfile[index].second, minReachable, maxReachable);
 
         m_speedProfile[index].second = speed;
@@ -284,19 +320,47 @@ void Car::CalculateSpeedProfile()
     m_speedProfile[m_profileIndex].second = calSpeed;
 
     float deltaTime = LOOK_PROFILE_TIME / SPEED_PROFILE_COUNT;
-    float accelTime = std::min((m_maxSpeed - calSpeed) / m_maxAcceleration, LOOK_PROFILE_TIME);
-    float speedAtAccelEnd = calSpeed + m_maxAcceleration * accelTime;
-    float lookDistance = (calSpeed + speedAtAccelEnd) / 2.0f * accelTime + m_maxSpeed * (LOOK_PROFILE_TIME - accelTime);
 
-    auto distanceAtTime = [&](float t)
+    // 가속 램프 도중이면 이미 경과한 시간(rampStart)부터 이어서 S자(SmoothStep) 가속 곡선을 그대로 적분한다.
+    // (지금 감속/정지 중이면 미래에 새로 램프가 시작된다고 보수적으로 가정)
+    float rampStart = (m_accelMode == AccelMode::Accelerating) ? std::min(m_accelRampTime, ACCEL_RAMP_DURATION) : 0.0f;
+    float rampStartProgress = rampStart / ACCEL_RAMP_DURATION;
+
+    // SmoothStep(τ)=3τ²-2τ³ 의 부정적분(F=∫SmoothStep, G=∫F). 속도/거리를 정확히 적분하는 데 사용.
+    auto GetAccelSpeedRatio = [](float nomalizedTime)
+    { return pow(nomalizedTime, 3) - 0.5f * pow(nomalizedTime, 4); };
+    auto GetAccelDistanceRatio = [](float nomalizedTime)
+    { return 0.25f * pow(nomalizedTime, 4) - 0.1f * pow(nomalizedTime, 5); };
+
+    float startAccelSpeedRatio = GetAccelSpeedRatio(rampStartProgress);
+    float startAccelDistanceRatio = GetAccelDistanceRatio(rampStartProgress);
+
+    auto accelDistanceAtTime = [&](float t)
     {
-        float tAccel = std::min(t, accelTime);
-        float speedAtTAccel = calSpeed + m_maxAcceleration * tAccel;
-        float distance = (calSpeed + speedAtTAccel) / 2.0f * tAccel;
-        if (t > accelTime)
-            distance += m_maxSpeed * (t - accelTime);
+        // 램프 구간
+        float rampTime = std::clamp(t, 0.0f, ACCEL_RAMP_DURATION - rampStart);
+        float rampEndProgress = rampStartProgress + rampTime / ACCEL_RAMP_DURATION;
+
+        float distance = calSpeed * rampTime +
+                         m_maxAccel * ACCEL_RAMP_DURATION * ACCEL_RAMP_DURATION * (GetAccelDistanceRatio(rampEndProgress) - startAccelDistanceRatio) -
+                         m_maxAccel * ACCEL_RAMP_DURATION * startAccelSpeedRatio * rampTime;
+        float rampEndSpeed = calSpeed + m_maxAccel * ACCEL_RAMP_DURATION * (GetAccelSpeedRatio(rampEndProgress) - startAccelSpeedRatio);
+
+        // 풀악셀로 달리기
+        float remainTime = t - rampTime;
+        float fullAccelSpeedTime = std::max(0.0f, (m_maxSpeed - rampEndSpeed) / m_maxAccel);
+        float fullAccelTime = std::min(remainTime, fullAccelSpeedTime);
+        float maxSpeed = rampEndSpeed + m_maxAccel * fullAccelTime;
+        distance += (rampEndSpeed + maxSpeed) / 2.0f * fullAccelTime;
+
+        // m_maxSpeed로 달리기
+        float maxSpeedTime = std::max(0.0f, remainTime - fullAccelSpeedTime);
+        distance += m_maxSpeed * maxSpeedTime;
+
         return distance;
     };
+
+    float lookDistance = accelDistanceAtTime(LOOK_PROFILE_TIME);
 
     constexpr float ROAD_SAMPLE_SPACING = 5.0f; // 도로 스캔 샘플 간격 (m)
     constexpr float LOCAL_WINDOW = 0.01f;       // 로컬 곡률 추정용 t-window
@@ -314,12 +378,10 @@ void Car::CalculateSpeedProfile()
     samples.reserve(static_cast<size_t>(lookDistance / ROAD_SAMPLE_SPACING) + 4);
     {
         float currentNodeT = m_currentSpline.GetSplinePosition(calPosition);
-        float currentNodeDistance = currentNodeT >= 0.0f
-                                        ? m_currentSpline.GetLength() * (1.0f - currentNodeT)
-                                        : (m_currentNode->position - calPosition).Length();
-        samples.push_back({currentNodeDistance,
-                           std::min(m_currentNode->GetLimitSpeed(), m_maxSpeed),
-                           m_currentNode->position});
+        Assert(currentNodeT >= 0.0f); // CalculateSpeedProfile 호출 전엔 항상 m_currentSpline이 세팅되어 있어야 함
+        float currentNodeDistance = m_currentSpline.GetLength() * (1.0f - currentNodeT);
+        float currentNodeSpeed = (m_currentNode == m_destNode) ? 0.0f : std::min(m_currentNode->GetLimitSpeed(), m_maxSpeed);
+        samples.push_back({currentNodeDistance, currentNodeSpeed, m_currentNode->position});
     }
     {
         const Spline *spline = &m_currentSpline;
@@ -361,7 +423,8 @@ void Car::CalculateSpeedProfile()
             if (!nextNode)
                 break;
 
-            samples.push_back({traveledDistance, std::min(nextNode->GetLimitSpeed(), m_maxSpeed), nextNode->position});
+            float nextNodeSpeed = (nextNode == m_destNode) ? 0.0f : std::min(nextNode->GetLimitSpeed(), m_maxSpeed);
+            samples.push_back({traveledDistance, nextNodeSpeed, nextNode->position});
 
             segmentNode = nextNode;
             segmentStart = nextNode->position;
@@ -372,6 +435,10 @@ void Car::CalculateSpeedProfile()
     std::sort(samples.begin(), samples.end(), [](const RoadSample &a, const RoadSample &b)
               { return a.distance < b.distance; });
 
+    // 제동 램프 구간(0~BRAKE_RAMP_DURATION)의 시간평균 감속도는 최대치의 절반이므로,
+    // 목표 속도를 실제보다 빠르게(낙관적으로) 계산하지 않도록 항상 절반만 사용한다.
+    constexpr float BRAKE_RAMP_AVG_FACTOR = 0.5f;
+
     // 뒤에서부터 감속 계획 전파: i번째 샘플의 실제 목표 속도 = 그 지점 자체의 최대속도와,
     // 그 뒤 모든 샘플까지 감속 가능한 속도 중 최솟값 (연속된 여러 커브를 전부 고려)
     std::vector<float> speedCap(samples.size());
@@ -381,7 +448,7 @@ void Car::CalculateSpeedProfile()
         for (size_t i = samples.size() - 1; i-- > 0;)
         {
             float distance = samples[i + 1].distance - samples[i].distance;
-            float entrySpeed = std::sqrt(speedCap[i + 1] * speedCap[i + 1] + 2.0f * m_maxBrakeDeceleration * distance);
+            float entrySpeed = std::sqrt(speedCap[i + 1] * speedCap[i + 1] + 2.0f * m_maxBrake * BRAKE_RAMP_AVG_FACTOR * distance);
             speedCap[i] = std::min(samples[i].maxSpeed, entrySpeed);
         }
     }
@@ -407,17 +474,33 @@ void Car::CalculateSpeedProfile()
         return {position, speed};
     };
 
-    // 이전 슬롯(deltaTime 전) 대비 가속/감속 한계를 넘지 못하게 스무딩
+    // 이전 슬롯(deltaTime 전) 대비 가속/감속 한계를 S자 램프로 반영해서 스무딩한다.
+    // 방향이 바뀌면 램프를 처음부터 다시 시작하고, 램프 구간 안에서는
+    // (구간 시작 시점의 낮은 가속도) x deltaTime 만큼만 허용해 과대평가를 피한다.
+    AccelMode phase = AccelMode::None;
+    float rampElapsed = 0.0f;
     float prevSpeed = calSpeed;
     for (size_t i = 1; i < SPEED_PROFILE_COUNT; ++i)
     {
         size_t index = (i + m_profileIndex) % SPEED_PROFILE_COUNT;
-        float distance = distanceAtTime(i * deltaTime);
+        float distance = accelDistanceAtTime(i * deltaTime);
         auto [position, speed] = sampleAt(distance);
 
         speed = std::min(speed, m_maxSpeed);
-        float maxReachable = prevSpeed + m_maxAcceleration * deltaTime;
-        float minReachable = std::max(0.0f, prevSpeed - m_maxBrakeDeceleration * deltaTime);
+
+        AccelMode direction = speed > prevSpeed   ? AccelMode::Accelerating
+                              : speed < prevSpeed ? AccelMode::Braking
+                                                  : AccelMode::None;
+        if (direction != phase)
+        {
+            phase = direction;
+            rampElapsed = 0.0f;
+        }
+
+        float maxReachable = prevSpeed + SmoothStep(rampElapsed / ACCEL_RAMP_DURATION) * m_maxAccel * deltaTime;
+        float minReachable = std::max(0.0f, prevSpeed - SmoothStep(rampElapsed / BRAKE_RAMP_DURATION) * m_maxBrake * deltaTime);
+        rampElapsed += deltaTime;
+
         speed = std::clamp(speed, minReachable, maxReachable);
 
         m_speedProfile[index].first = position;

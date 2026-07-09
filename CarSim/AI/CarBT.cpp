@@ -98,7 +98,7 @@ std::unique_ptr<BTNode> Car::DriveNode()
             Vec3 position = m_rigidbody.GetPosition();
 
             float currentNodeDistance = (m_currentNode->position - position).Length();
-            // DebugConsole::Get().Log("currentNodeDistance: " + std::to_string(currentNodeDistance));
+            DebugConsole::Get().Log("currentNodeDistance: " + std::to_string(currentNodeDistance));
             auto prevNode = m_currentNode;
             while (currentNodeDistance < 3.0f)
             {
@@ -164,7 +164,6 @@ std::unique_ptr<BTNode> Car::DriveNode()
             }
             float maxSpeed = CalcMaxSpeed(targetSteer) * 0.8f;
             float targetSpeed = min(m_speedProfile[m_profileIndex].second, maxSpeed);
-            DebugConsole::Get().Log("targetSpeed: " + std::to_string(targetSpeed * 3.6f));
 
             Accelerate(targetSpeed);
 

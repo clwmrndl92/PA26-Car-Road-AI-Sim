@@ -8,6 +8,7 @@
 #include <limits>
 #include <algorithm>
 #include <Core/DebugConsole.h>
+#include <Core/Assert.h>
 
 void RoadDataManager::Init(const string &filePath)
 {
@@ -59,6 +60,8 @@ void RoadDataManager::BuildRoadData(const string &filePath)
             controlPoints.push_back(Vec3(x, y, z));
         }
 
+        // Catmull-Rom 스플라인은 컨트롤 포인트가 4개 미만이면 빈 스플라인이 되어 이 레인이 통째로 무효화된다.
+        Assert(controlPoints.size() >= 4);
         auto lane = make_shared<Lane>(id, Spline(controlPoints), road);
         m_lanes.push_back(lane);
         laneById[id] = lane;

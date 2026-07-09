@@ -27,8 +27,9 @@ public:
     void SetFocused(bool focused) { m_isFocused = focused; }
     void SetDestination(std::shared_ptr<RoadNode> roadNode) { m_destNode = roadNode; }
 
-    // 조작 및 제어 인터페이스 (Control Interface)
+        // 조작 및 제어 인터페이스 (Control Interface)
     void Accelerate(float desiredVelocity);
+    void EmergBrake();
     void Steer(float desiredRadian);
     void ChangeGear(); // 속도가 낮을 때 전진/후진 기어 토글
 
@@ -63,15 +64,18 @@ private:
 
 private: // 멤버 변수 구역
     // 설정 및 스펙 상수/변수 (Constants & Specifications)
-    const float m_maxSpeed = 200.0f / 3.6f;                      // 200 km/h
-    const float m_maxAcceleration = (100.0f / 3.6f) / 10.0f;     // 0-100 km/h in 10s
-    const float m_maxBrakeDeceleration = (100.0f / 3.6f) / 3.0f; // 100-0 km/h in 3s
-    static constexpr float ACCEL_RAMP_RATE = 11.1f;              // reaches m_maxAcceleration in ~0.25s
-    static constexpr float BRAKE_RAMP_RATE = 55.6f;              // reaches m_maxBrakeDeceleration in ~0.17s
-    float m_wheelbase = 0.0f;                                    // 축거 (Init에서 설정)
-    float m_mass = 1.0f;                                         // 질량 (Init에서 설정)
-    float m_maxSteerAngle = ToRadians(45.0f);                    // 최대 조향각 (45도)
-    static constexpr float CURVE_SPEED_COEFF = 0.8f;             // 최대 코너링 속도 = CURVE_SPEED_COEFF * sqrt(R)
+    const float m_maxSpeed = 200.0f / 3.6f;           // 200 km/h
+    const float m_maxAccel = (100.0f / 3.6f) / 14.0f; // 0-100 km/h in 14s
+    const float m_maxBrake = (100.0f / 3.6f) / 15.0f;
+    const float m_maxEmergBrake = (100.0f / 3.6f) / 3.0f; // 100-0 km/h in 3s
+    float m_accelRampTime = 0.0f;                         // 현재 가속/제동 램프 시작 후 경과 시간 (S자 보간용)
+    static constexpr float ACCEL_RAMP_DURATION = 1.6f;
+    static constexpr float BRAKE_RAMP_DURATION = 2.5f;
+
+    float m_wheelbase = 0.0f;
+    float m_mass = 1.0f;
+    float m_maxSteerAngle = ToRadians(45.0f);        // 최대 조향각 (45도)
+    static constexpr float CURVE_SPEED_COEFF = 0.8f; // 최대 코너링 속도 = CURVE_SPEED_COEFF * sqrt(R)
 
     // 컴포넌트 및 AI 상태 (Components & Systems)
     const RoadDataManager *m_RoadDataManager = nullptr;
@@ -95,6 +99,13 @@ private: // 멤버 변수 구역
     float m_steerAngle = 0.0f;
     bool m_isReverse = false;
     float m_deltaTime = 0.0f;
+    enum class AccelMode
+    {
+        None,
+        Accelerating,
+        Braking
+    };
+    AccelMode m_accelMode = AccelMode::None;
 
     // 스폰 및 리셋 데이터 (Spawn / Reset Data)
     DirectX::XMFLOAT3 m_spawnPosition = {0.0f, 0.0f, 0.0f};

@@ -72,7 +72,7 @@ std::vector<Vec3> Spline::ComputeSplinePoints()
     if (n < 4)
         return splinePoints; // Not enough control points for Catmull-Rom spline
 
-    constexpr float MIN_PHANTOM_DISTANCE = 10.0f;
+    constexpr float MIN_PHANTOM_DISTANCE = 15.0f;
     auto ExtendPhantomPoint = [MIN_PHANTOM_DISTANCE](Vec3 &phantom, const Vec3 &neighbor)
     {
         Vec3 offset = phantom - neighbor;
