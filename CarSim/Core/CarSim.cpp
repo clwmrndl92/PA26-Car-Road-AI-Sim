@@ -236,12 +236,13 @@ bool CarSim::InitResource()
     // Car 1
     {
         auto car = std::make_shared<Car>();
-        car->Init(GetCarSpec(CarType::Car0), &m_RoadDataManager, JPH::Vec3(70.0f, 0.1f, -70.0f));
+        car->Init(GetCarSpec(CarType::Car0), &m_RoadDataManager, JPH::Vec3(70.0f, 0.1f, -50.0f));
         car->SetDrawCollider(true);
         car->SetDestination(m_RoadDataManager.GetNode(9));
 
         m_GameObjects.push_back(car);
         m_CarObjects.push_back(car);
+        FocusOnObject(car);
     }
 
     // // Car 2

@@ -16,6 +16,7 @@ public:
 
     // outShortfall(있으면): lookaheadDistance만큼 보기 전에 스플라인 끝에 닿아서 못 본 남은 거리.
     Vec3 GetLookaheadPoint(const Vec3 &position, float lookaheadDistance, float *outShortfall = nullptr) const;
+    Vec3 GetPositionAt(float t) const;
     Vec3 GetDirectionAt(float t) const;
     float GetMinRadiusAhead(float start, float end, float *outApexT = nullptr) const;
     bool IsStraight() const;

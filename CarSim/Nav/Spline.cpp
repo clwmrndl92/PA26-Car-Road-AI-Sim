@@ -144,6 +144,12 @@ Vec3 Spline::GetLookaheadPoint(const Vec3 &position, float lookaheadDistance, fl
     return splinePoints[lookaheadIndex];
 }
 
+Vec3 Spline::GetPositionAt(float t) const
+{
+    size_t splineIndex = m_splinePoints.size() * t;
+
+    return m_splinePoints[splineIndex];
+}
 Vec3 Spline::GetDirectionAt(float t) const
 {
     int n = static_cast<int>(m_controlPoints.size());
