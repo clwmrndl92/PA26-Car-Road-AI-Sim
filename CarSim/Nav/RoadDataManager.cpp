@@ -23,7 +23,6 @@ void RoadDataManager::BuildRoadData(const string &filePath)
         return;
 
     m_roads.clear();
-    m_lanes.clear();
     m_nodes.clear();
     m_edges.clear();
 
@@ -38,35 +37,6 @@ void RoadDataManager::BuildRoadData(const string &filePath)
         roadById[id] = road;
     }
 
-    map<int, shared_ptr<Lane>> laneById;
-    for (const nlohmann::json &laneJson : root.value("lanes", nlohmann::json::array()))
-    {
-        int id = laneJson.value("id", 0);
-        int roadId = laneJson.value("road", 0);
-
-        shared_ptr<Road> road;
-        auto roadIt = roadById.find(roadId);
-        if (roadIt != roadById.end())
-            road = roadIt->second;
-
-        vector<Vec3> controlPoints;
-        for (const nlohmann::json &point : laneJson.value("control_points", nlohmann::json::array()))
-        {
-            if (point.size() < 3)
-                continue;
-            float x = point[0].get<float>();
-            float y = point[1].get<float>();
-            float z = point[2].get<float>();
-            controlPoints.push_back(Vec3(x, y, z));
-        }
-
-        // Catmull-Rom 스플라인은 컨트롤 포인트가 4개 미만이면 빈 스플라인이 되어 이 레인이 통째로 무효화된다.
-        Assert(controlPoints.size() >= 4);
-        auto lane = make_shared<Lane>(id, Spline(controlPoints), road);
-        m_lanes.push_back(lane);
-        laneById[id] = lane;
-    }
-
     map<int, shared_ptr<RoadNode>> nodeById;
     for (const nlohmann::json &nodeJson : root.value("nodes", nlohmann::json::array()))
     {
@@ -77,18 +47,10 @@ void RoadDataManager::BuildRoadData(const string &filePath)
             continue;
         Vec3 position(posJson[0].get<float>(), posJson[1].get<float>(), posJson[2].get<float>());
 
-        int laneId = nodeJson.value("lane", 0);
-        shared_ptr<Lane> lane;
-        auto laneIt = laneById.find(laneId);
-        if (laneIt != laneById.end())
-            lane = laneIt->second;
-
         string typeStr = nodeJson.value("type", "normal");
         const auto &nodeTypeByName = GetRoadNodeTypeByName();
         auto nodeTypeIt = nodeTypeByName.find(typeStr);
         RoadNodeType nodeType = nodeTypeIt != nodeTypeByName.end() ? nodeTypeIt->second : RoadNodeType::Unkown;
-
-        float lanePosition = nodeJson.value("lane_pos", 0);
 
         float limitSpeed = nodeJson.value("limit_speed", 999) / 3.6f;
 
@@ -96,9 +58,7 @@ void RoadDataManager::BuildRoadData(const string &filePath)
         node->id = id;
         node->position = position;
         node->nodeType = nodeType;
-        node->lanePosition = lanePosition;
         node->limitSpeed = limitSpeed;
-        node->lane = lane;
 
         m_nodes.push_back(node);
         nodeById[id] = node;
@@ -120,6 +80,25 @@ void RoadDataManager::BuildRoadData(const string &filePath)
         edge->id = id;
         edge->endNode = targetIt->second;
         edge->length = length;
+
+        // "control_points"가 없으면(교차로 회전 등) 미리 만들어진 곡선이 없다는 뜻 -> 주행 중 동적으로 생성된다.
+        if (linkJson.contains("control_points"))
+        {
+            vector<Vec3> controlPoints;
+            for (const nlohmann::json &point : linkJson["control_points"])
+            {
+                if (point.size() < 3)
+                    continue;
+                float x = point[0].get<float>();
+                float y = point[1].get<float>();
+                float z = point[2].get<float>();
+                controlPoints.push_back(Vec3(x, y, z));
+            }
+
+            // Catmull-Rom 스플라인은 컨트롤 포인트가 4개 미만이면 빈 스플라인이 되어 이 엣지가 통째로 무효화된다.
+            Assert(controlPoints.size() >= 4);
+            edge->spline = Spline(controlPoints);
+        }
 
         sourceIt->second->edges.push_back(edge);
         m_edges.push_back(edge);
@@ -157,6 +136,7 @@ vector<shared_ptr<RoadNode>> RoadDataManager::FindPath(const shared_ptr<RoadNode
     {
         auto current = openList.top().second;
         openList.pop();
+        DebugConsole::Get().Log("find: " + std::to_string(current->id));
 
         if (visited.count(current->id))
             continue;

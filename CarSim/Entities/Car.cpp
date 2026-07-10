@@ -53,6 +53,14 @@ void Car::Init(const CarSpec &spec, const RoadDataManager *roadDataManager, JPH:
     pTargetMarker->materials[0].Set<float>("$Opacity", 1.0f);
     m_targetMarker.SetModel(pTargetMarker);
 
+    // Red sphere marking the BT's current destination node (m_destNode)
+    constexpr float DEST_MARKER_RADIUS = 0.6f;
+    Model *pDestMarker = ModelManager::Get().CreateFromGeometry("__dest_marker__:" + GetName(),
+                                                                Geometry::CreateSphere(DEST_MARKER_RADIUS));
+    pDestMarker->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f));
+    pDestMarker->materials[0].Set<float>("$Opacity", 1.0f);
+    m_destMarker.SetModel(pDestMarker);
+
     m_RoadDataManager = roadDataManager;
     m_BehaviourTree = BehaviourTree();
     m_BehaviourTree.root = BuildBehaviourTree();
@@ -120,6 +128,12 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
 
     if (m_targetMarker.GetModel())
         m_targetMarker.Draw(context, effect);
+
+    if (m_destNode && m_destMarker.GetModel())
+    {
+        m_destMarker.GetTransform().SetPosition(ToXMFLOAT3(m_destNode->position));
+        m_destMarker.Draw(context, effect);
+    }
 }
 
 Vec3 Car::GetPosition() const
@@ -277,10 +291,29 @@ void Car::MoveSpeedProfile()
         }
 
         maxSpeed = std::min(maxSpeed, nextNode->GetLimitSpeed());
+        shared_ptr<RoadEdge> edge = segmentNode->GetEdgeTo(nextNode->id);
         segmentNode = nextNode;
         segmentStart = nextNode->position;
-        spline = &segmentNode->lane->GetSpline();
         ++pathIndex;
+
+        if (!edge)
+        {
+            tailPosition = segmentNode->position;
+            tailSpeed = maxSpeed;
+            break;
+        }
+        if (edge->spline.GetControlPointCount() == 0)
+        {
+            // 곡선이 미리 만들어지지 않은 구간(교차로 회전 등): 곡률 없이 edge 길이만큼만 소모하고 다음으로 넘어간다.
+            remainingDistance -= edge->length;
+            if (remainingDistance <= 0.0f)
+            {
+                tailPosition = segmentNode->position;
+                tailSpeed = maxSpeed;
+                break;
+            }
+        }
+        spline = &edge->spline;
     }
 
     m_speedProfile[prevIndex] = {tailPosition, tailSpeed};
@@ -425,10 +458,20 @@ void Car::CalculateSpeedProfile()
             float nextNodeSpeed = (nextNode == m_destNode) ? 0.0f : std::min(nextNode->GetLimitSpeed(), m_maxSpeed);
             samples.push_back({traveledDistance, nextNodeSpeed, nextNode->position});
 
+            shared_ptr<RoadEdge> edge = segmentNode->GetEdgeTo(nextNode->id);
             segmentNode = nextNode;
             segmentStart = nextNode->position;
-            spline = &segmentNode->lane->GetSpline();
             ++pathIndex;
+
+            if (!edge)
+                break;
+            if (edge->spline.GetControlPointCount() == 0)
+            {
+                // 곡선이 없는 구간(교차로 회전 등): 곡률 샘플 없이 edge 길이만큼만 소모한다.
+                traveledDistance += edge->length;
+                remainingDistance -= edge->length;
+            }
+            spline = &edge->spline;
         }
     }
     std::sort(samples.begin(), samples.end(), [](const RoadSample &a, const RoadSample &b)

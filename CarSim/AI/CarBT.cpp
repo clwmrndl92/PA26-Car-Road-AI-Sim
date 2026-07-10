@@ -5,6 +5,13 @@
 #include <utility>
 #include <vector>
 
+namespace
+{
+    // 동적으로 스플라인을 이어붙일 때 양끝 기울기 점을 이 거리 미만으로 붙이면 기존 스플라인의
+    // 기울기(진행 방향)를 제대로 반영하지 못하고 너무 꺾여 보인다.
+    constexpr float MIN_TANGENT_DISTANCE = 5.0f;
+} // namespace
+
 std::unique_ptr<BTNode> Car::BuildBehaviourTree()
 {
     return MakeSequence(
@@ -48,10 +55,19 @@ std::unique_ptr<BTNode> Car::FindPathNode()
                 return BTStatus::Success;
             }
 
-            m_currentSpline = Spline({position - GetForwardAxis(),
+            Vec3 startDirection = (m_currentNode->position - position).Normalized();
+            if (m_path.size() > 1)
+            {
+                shared_ptr<RoadEdge> firstEdge = m_currentNode->GetEdgeTo(m_path[1]->id);
+                startDirection = (firstEdge && firstEdge->spline.GetControlPointCount() > 0)
+                                     ? firstEdge->spline.GetDirectionAt(0.0f)
+                                     : (m_path[1]->position - m_currentNode->position).Normalized();
+            }
+
+            m_currentSpline = Spline({position - GetForwardAxis() * MIN_TANGENT_DISTANCE,
                                       position,
                                       m_currentNode->position,
-                                      m_currentNode->position + m_currentNode->GetDirection()});
+                                      m_currentNode->position + startDirection * MIN_TANGENT_DISTANCE});
             RebuildSplineRender();
             CalculateSpeedProfile();
             return BTStatus::Success;
@@ -98,8 +114,9 @@ std::unique_ptr<BTNode> Car::DriveNode()
             Vec3 position = m_rigidbody.GetPosition();
 
             float currentNodeDistance = (m_currentNode->position - position).Length();
-            DebugConsole::Get().Log("currentNodeDistance: " + std::to_string(currentNodeDistance));
             auto prevNode = m_currentNode;
+            shared_ptr<RoadEdge> takenEdge;
+            DebugConsole::Get().Log("currentNodeDistance" + to_string(currentNodeDistance));
             while (currentNodeDistance < 3.0f)
             {
                 if (m_pathIndex + 1 >= m_path.size())
@@ -108,26 +125,46 @@ std::unique_ptr<BTNode> Car::DriveNode()
                     m_currentNode = nullptr;
                     return BTStatus::Failure;
                 }
+                shared_ptr<RoadNode> fromNode = m_currentNode;
                 m_currentNode = m_path[++m_pathIndex];
-                m_currentSpline = m_currentNode->lane->GetSpline();
+                takenEdge = fromNode->GetEdgeTo(m_currentNode->id);
+                if (takenEdge && takenEdge->spline.GetControlPointCount() > 0)
+                    m_currentSpline = takenEdge->spline;
                 currentNodeDistance = (m_currentNode->position - position).Length();
                 RebuildSplineRender();
             }
-            if (prevNode != m_currentNode && prevNode->nodeType == RoadNodeType::ChangeLane)
+            // 방금 지나온 엣지에 미리 만들어둔 곡선이 없으면(교차로 회전 등) 다음 구간 스플라인으로 부드럽게 붙여준다.
+            bool needsDynamicConnector = prevNode != m_currentNode &&
+                                         (!takenEdge || takenEdge->spline.GetControlPointCount() == 0);
+            if (needsDynamicConnector)
             {
+                // 차선변경 엣지(스플라인 없음)는 무조건 옆 차로의 스플라인에 붙는다.
+                // -> 지금 도착한 노드로 들어오는 다른 엣지 중 스플라인이 있는 걸 찾는다(옆 차로의 진짜 경로).
+                Spline targetSpline = m_currentSpline;
+                for (const shared_ptr<RoadEdge> &edge : m_RoadDataManager->GetEdges())
+                {
+                    shared_ptr<RoadNode> end = edge->endNode.lock();
+                    if (end == m_currentNode && edge->spline.GetControlPointCount() > 0)
+                    {
+                        targetSpline = edge->spline;
+                        break;
+                    }
+                }
+
                 float minRadius = powf(m_speed / CURVE_SPEED_COEFF, 2);
                 float width = m_RoadDataManager->ROAD_WIDTH;
                 float insideRoot = (4 * minRadius * width) - (width * width);
                 float L = insideRoot > 0 ? sqrt(insideRoot) : 5.0f;
 
-                Vec3 changePosition = m_currentSpline.GetLookaheadPoint(position, L);
-                float changeSplinePosition = m_currentSpline.GetSplinePosition(changePosition);
+                Vec3 changePosition = targetSpline.GetLookaheadPoint(position, L);
+                float changeSplinePosition = targetSpline.GetSplinePosition(changePosition);
 
-                auto changeLineSpline = Spline({position - GetForwardAxis(),
+                auto changeLineSpline = Spline({position - GetForwardAxis() * MIN_TANGENT_DISTANCE,
                                                 position,
                                                 changePosition,
-                                                changePosition + m_currentSpline.GetDirectionAt(changeSplinePosition)});
-                m_currentSpline.AddSplinePointsFront(changeLineSpline.GetSplinePoints(), changeSplinePosition);
+                                                changePosition + targetSpline.GetDirectionAt(changeSplinePosition) * MIN_TANGENT_DISTANCE});
+                targetSpline.AddSplinePointsFront(changeLineSpline.GetSplinePoints(), changeSplinePosition);
+                m_currentSpline = targetSpline;
                 RebuildSplineRender();
                 CalculateSpeedProfile();
             }
@@ -142,7 +179,19 @@ std::unique_ptr<BTNode> Car::DriveNode()
             constexpr float MIN_LOOKAHEAD_DISTANCE = 5.0f; // 저속/정지 시 최소 lookahead (m)
             constexpr float LOOKAHEAD_TIME = 0.5f;         // 몇 초 앞을 볼지
             float lookaheadDistance = std::max(MIN_LOOKAHEAD_DISTANCE, m_speed * LOOKAHEAD_TIME);
-            auto targetPosition = m_currentSpline.GetLookaheadPoint(position, lookaheadDistance);
+            float shortfall = 0.0f;
+            auto targetPosition = m_currentSpline.GetLookaheadPoint(position, lookaheadDistance, &shortfall);
+            // 지금 스플라인 끝까지 봐도 lookaheadDistance가 안 채워지면, 다음 엣지 스플라인으로 아예 넘어간다.
+            if (shortfall > 0.0f && m_pathIndex + 1 < m_path.size())
+            {
+                shared_ptr<RoadEdge> nextEdge = m_currentNode->GetEdgeTo(m_path[m_pathIndex + 1]->id);
+                if (nextEdge && nextEdge->spline.GetControlPointCount() > 0)
+                {
+                    m_currentSpline = nextEdge->spline;
+                    targetPosition = m_currentSpline.GetLookaheadPoint(position, lookaheadDistance);
+                    RebuildSplineRender();
+                }
+            }
             m_targetMarker.GetTransform().SetPosition(ToXMFLOAT3(targetPosition));
             float targetSteer = PurePursuit(targetPosition);
             Steer(targetSteer);

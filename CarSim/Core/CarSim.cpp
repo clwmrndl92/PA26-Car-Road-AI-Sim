@@ -236,9 +236,9 @@ bool CarSim::InitResource()
     // Car 1
     {
         auto car = std::make_shared<Car>();
-        car->Init(GetCarSpec(CarType::Car0), &m_RoadDataManager, JPH::Vec3(-10.0f, 0.1f, -10.0f));
+        car->Init(GetCarSpec(CarType::Car0), &m_RoadDataManager, JPH::Vec3(70.0f, 0.1f, -70.0f));
         car->SetDrawCollider(true);
-        car->SetDestination(m_RoadDataManager.GetNode(10));
+        car->SetDestination(m_RoadDataManager.GetNode(9));
 
         m_GameObjects.push_back(car);
         m_CarObjects.push_back(car);
@@ -278,21 +278,25 @@ void CarSim::InitRoadRenderer()
     constexpr float ROAD_WIDTH = 3.0f;
     constexpr float NODE_MARKER_RADIUS = 0.5f;
     constexpr float EDGE_LINE_HEIGHT = 0.1f;
+    constexpr float EDGE_TARGET_MARKER_SIZE = 0.5f;
+    constexpr float EDGE_TARGET_MARKER_PULLBACK = 0.8f; // 도착 노드 마커랑 안 겹치게 그 직전에 찍는 거리
+    constexpr float EDGE_TARGET_MARKER_HEIGHT = 0.3f;   // 땅에 파묻혀 안 보이지 않도록 라인보다 살짝 더 띄우는 높이
 
     m_RoadRenders.clear();
-    for (auto const &lane : m_RoadDataManager.GetLanes())
+    for (const auto &edge : m_RoadDataManager.GetEdges())
     {
-        std::vector<Vec3> splinePoints = lane->GetSpline().GetSplinePoints();
-        std::vector<Vec3> controlPoints = lane->GetSpline().GetControlPoints();
+        // control_points가 없는 엣지(교차로 회전 등)는 미리 그릴 도로 형상이 없다 -> 정적 렌더링에서는 건너뛴다.
+        if (edge->spline.GetControlPointCount() == 0)
+            continue;
+
+        std::vector<Vec3> splinePoints = edge->spline.GetSplinePoints();
 
         std::vector<XMFLOAT3> centerline;
-        centerline.reserve(splinePoints.size() + 2);
-        centerline.push_back(ToXMFLOAT3(controlPoints.front()));
+        centerline.reserve(splinePoints.size());
         for (const Vec3 &p : splinePoints)
             centerline.push_back(ToXMFLOAT3(p));
-        centerline.push_back(ToXMFLOAT3(controlPoints.back()));
 
-        Model *pGround = m_ModelManager.CreateFromGeometry("road" + std::to_string(lane->GetId()), Geometry::CreateRibbon(centerline, ROAD_WIDTH));
+        Model *pGround = m_ModelManager.CreateFromGeometry("road" + std::to_string(edge->id), Geometry::CreateRibbon(centerline, ROAD_WIDTH));
         pGround->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.22f, 0.22f, 0.22f, 1.0f));
         pGround->materials[0].Set<float>("$Opacity", 1.0f);
 
@@ -302,13 +306,14 @@ void CarSim::InitRoadRenderer()
 
     for (const auto &node : m_RoadDataManager.GetNodes())
     {
-        Model *pMarker = m_ModelManager.CreateFromGeometry("node_marker" + std::to_string(node->id), Geometry::CreateSphere(NODE_MARKER_RADIUS));
+        Model *pMarker = m_ModelManager.CreateFromGeometry("node_marker" + std::to_string(node->id), Geometry::CreateCircle(NODE_MARKER_RADIUS));
         pMarker->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f));
         pMarker->materials[0].Set<float>("$Opacity", 1.0f);
 
         RenderObject &nodeRender = m_RoadRenders.emplace_back();
         nodeRender.SetModel(pMarker);
-        nodeRender.GetTransform().SetPosition(ToXMFLOAT3(node->position));
+        // 도로 리본이랑 같은 높이(y=0)라 겹치면 z-fighting 날 수 있어서 살짝 띄운다.
+        nodeRender.GetTransform().SetPosition(ToXMFLOAT3(node->position + Vec3(0.0f, EDGE_LINE_HEIGHT, 0.0f)));
     }
 
     m_RoadEdgeRenders.clear();
@@ -329,6 +334,22 @@ void CarSim::InitRoadRenderer()
 
             RenderObject &edgeRender = m_RoadEdgeRenders.emplace_back();
             edgeRender.SetModel(pLine);
+
+            // 도착지점(target) 표시 -> 선만으로는 방향이 헷갈려서 끝점 직전에 노란 네모를 찍는다.
+            // (노드 마커랑 정확히 겹치면 안 보이니 target에서 source 쪽으로 살짝 당겨서 배치)
+            Vec3 pullback = to - from;
+            Vec3 targetMarkerPos = pullback.Length() > 1e-4f ? to - pullback.Normalized() * EDGE_TARGET_MARKER_PULLBACK : to;
+            targetMarkerPos += Vec3(0.0f, EDGE_TARGET_MARKER_HEIGHT, 0.0f);
+
+            Model *pTargetMarker = m_ModelManager.CreateFromGeometry("edge_target_marker" + std::to_string(edge->id), Geometry::CreatePlane(EDGE_TARGET_MARKER_SIZE, EDGE_TARGET_MARKER_SIZE));
+            pTargetMarker->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f));
+            pTargetMarker->materials[0].Set<float>("$Opacity", 1.0f);
+
+            // m_RoadEdgeRenders는 SetRenderLines()(라인 리스트)로 그려져서 삼각형 메쉬인 이 네모는
+            // 일반 삼각형 토폴로지로 그려지는 m_RoadRenders 쪽에 넣어야 한다.
+            RenderObject &targetMarkerRender = m_RoadRenders.emplace_back();
+            targetMarkerRender.SetModel(pTargetMarker);
+            targetMarkerRender.GetTransform().SetPosition(ToXMFLOAT3(targetMarkerPos));
         }
     }
 }
