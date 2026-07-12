@@ -14,8 +14,8 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE prevInstance,
     _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
 #endif
 
-    CarSim theApp(hInstance, L"CarSim", 1280, 720);
-    // EditApp theApp(hInstance, L"Edit", 1280, 720);
+    // CarSim theApp(hInstance, L"CarSim", 1280, 720);
+    EditApp theApp(hInstance, L"Edit", 1280, 720);
 
     if (!theApp.Init())
         return 0;
