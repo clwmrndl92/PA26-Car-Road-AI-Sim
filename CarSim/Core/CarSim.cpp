@@ -238,7 +238,7 @@ bool CarSim::InitResource()
         auto car = std::make_shared<Car>();
         car->Init(GetCarSpec(CarType::Car0), &m_RoadDataManager, JPH::Vec3(-10.0f, 0.1f, -10.0f));
         car->SetDrawCollider(true);
-        car->SetDestination(m_RoadDataManager.GetNode(10));
+        car->SetDestination(m_RoadDataManager.GetClosestLaneEnd(m_RoadDataManager.GetNode(10)->position));
 
         m_GameObjects.push_back(car);
         m_CarObjects.push_back(car);
@@ -287,10 +287,10 @@ void CarSim::InitRoadRenderer()
 
         std::vector<XMFLOAT3> centerline;
         centerline.reserve(splinePoints.size() + 2);
-        centerline.push_back(ToXMFLOAT3(controlPoints.front()));
+        // centerline.push_back(ToXMFLOAT3(controlPoints.front()));
         for (const Vec3 &p : splinePoints)
             centerline.push_back(ToXMFLOAT3(p));
-        centerline.push_back(ToXMFLOAT3(controlPoints.back()));
+        // centerline.push_back(ToXMFLOAT3(controlPoints.back()));
 
         Model *pGround = m_ModelManager.CreateFromGeometry("road" + std::to_string(lane->GetId()), Geometry::CreateRibbon(centerline, ROAD_WIDTH));
         pGround->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.22f, 0.22f, 0.22f, 1.0f));
@@ -311,19 +311,21 @@ void CarSim::InitRoadRenderer()
         nodeRender.GetTransform().SetPosition(ToXMFLOAT3(node->position));
     }
 
+    // 레인 그래프의 successor 연결(레인 끝 -> 다음 레인 시작)을 노란 선으로 시각화한다.
     m_RoadEdgeRenders.clear();
-    for (const auto &node : m_RoadDataManager.GetNodes())
+    int linkIndex = 0;
+    for (const auto &lane : m_RoadDataManager.GetLanes())
     {
-        for (const auto &edge : node->edges)
+        Vec3 from = lane->GetEndPoint() + Vec3(0.0f, EDGE_LINE_HEIGHT, 0.0f);
+        for (const auto &weakSucc : lane->GetSuccessors())
         {
-            auto endNode = edge->endNode.lock();
-            if (!endNode)
+            auto succ = weakSucc.lock();
+            if (!succ)
                 continue;
 
-            Vec3 from = node->position + Vec3(0.0f, EDGE_LINE_HEIGHT, 0.0f);
-            Vec3 to = endNode->position + Vec3(0.0f, EDGE_LINE_HEIGHT, 0.0f);
+            Vec3 to = succ->GetStartPoint() + Vec3(0.0f, EDGE_LINE_HEIGHT, 0.0f);
 
-            Model *pLine = m_ModelManager.CreateFromGeometry("edge_line" + std::to_string(edge->id), Geometry::CreateLine(ToXMFLOAT3(from), ToXMFLOAT3(to)));
+            Model *pLine = m_ModelManager.CreateFromGeometry("edge_line" + std::to_string(linkIndex++), Geometry::CreateLine(ToXMFLOAT3(from), ToXMFLOAT3(to)));
             pLine->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f));
             pLine->materials[0].Set<float>("$Opacity", 1.0f);
 

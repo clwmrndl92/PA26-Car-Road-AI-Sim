@@ -20,9 +20,9 @@ std::unique_ptr<BTNode> Car::FindPathNode()
     auto notSearch = std::make_unique<BTCondition>(
         [this]()
         {
-            if (m_destNode == nullptr)
+            if (m_destLane == nullptr)
                 return true;
-            if (m_currentNode == nullptr)
+            if (m_currentLane == nullptr)
                 return false;
             if (IsOffCourse())
                 return false;
@@ -34,25 +34,21 @@ std::unique_ptr<BTNode> Car::FindPathNode()
     auto searchPath = std::make_unique<BTAction>(
         [this]()
         {
-            if (m_currentNode != nullptr)
+            if (m_currentLane != nullptr)
                 return BTStatus::Success;
 
             Vec3 position = m_rigidbody.GetPosition();
-            m_currentNode = m_RoadDataManager->GetClosestNode(position);
-            m_path = m_RoadDataManager->FindPath(m_currentNode, m_destNode);
-            m_pathIndex = -1;
+            m_currentLane = m_RoadDataManager->GetClosestLane(position);
+            m_path = m_RoadDataManager->FindPath(m_currentLane, m_destLane);
+            m_pathIndex = 0; // path[0] == 시작(=현재) 레인
             if (m_path.empty())
             {
-                m_destNode = nullptr;
-                m_currentNode = nullptr;
+                m_destLane = nullptr;
+                m_currentLane = nullptr;
                 return BTStatus::Success;
             }
 
-            m_currentSpline = Spline({position - GetForwardAxis(),
-                                      position,
-                                      m_currentNode->position,
-                                      m_currentNode->position + m_currentNode->GetDirection()});
-            RebuildSplineRender();
+            MergeOntoLane(m_currentLane, position);
             CalculateSpeedProfile();
             return BTStatus::Success;
         });
@@ -68,7 +64,7 @@ std::unique_ptr<BTNode> Car::StopNode()
         [this]()
         {
             constexpr float ARRIVE_DISTANCE = 5.0f;
-            return m_destNode == nullptr || (m_destNode->position - m_rigidbody.GetPosition()).Length() < ARRIVE_DISTANCE;
+            return m_destLane == nullptr || (m_destLane->GetEndPoint() - m_rigidbody.GetPosition()).Length() < ARRIVE_DISTANCE;
         });
     shouldStop->name = "ShouldStop?";
 
@@ -80,8 +76,8 @@ std::unique_ptr<BTNode> Car::StopNode()
                 Accelerate(0.0f);
                 return BTStatus::Running;
             }
-            m_destNode = nullptr;
-            m_currentNode = nullptr;
+            m_destLane = nullptr;
+            m_currentLane = nullptr;
             return BTStatus::Success;
         });
     brake->name = "Stop";
@@ -97,38 +93,29 @@ std::unique_ptr<BTNode> Car::DriveNode()
             // path find
             Vec3 position = m_rigidbody.GetPosition();
 
-            float currentNodeDistance = (m_currentNode->position - position).Length();
-            DebugConsole::Get().Log("currentNodeDistance: " + std::to_string(currentNodeDistance));
-            auto prevNode = m_currentNode;
-            while (currentNodeDistance < 3.0f)
+            // 현재 레인의 끝에 다가가면 경로상 다음 레인으로 넘어간다.
+            float laneEndDistance = (m_currentLane->GetEndPoint() - position).Length();
+            // DebugConsole::Get().Log("laneEndDistance: " + std::to_string(laneEndDistance));
+            bool enteredByLaneChange = false;
+            while (laneEndDistance < 3.0f)
             {
                 if (m_pathIndex + 1 >= m_path.size())
                 {
-                    m_destNode = nullptr;
-                    m_currentNode = nullptr;
+                    m_destLane = nullptr;
+                    m_currentLane = nullptr;
                     return BTStatus::Failure;
                 }
-                m_currentNode = m_path[++m_pathIndex];
-                m_currentSpline = m_currentNode->lane->GetSpline();
-                currentNodeDistance = (m_currentNode->position - position).Length();
+                ++m_pathIndex;
+                m_currentLane = m_path[m_pathIndex].lane;
+                enteredByLaneChange = m_path[m_pathIndex].isLaneChange;
+                m_currentSpline = m_currentLane->GetSpline();
+                laneEndDistance = (m_currentLane->GetEndPoint() - position).Length();
                 RebuildSplineRender();
             }
-            if (prevNode != m_currentNode && prevNode->nodeType == RoadNodeType::ChangeLane)
+            // 차선변경으로 진입한 레인이면, 현재 위치에서 그 레인 위로 합류하는 연결 스플라인을 만든다.
+            if (enteredByLaneChange)
             {
-                float minRadius = powf(m_speed / CURVE_SPEED_COEFF, 2);
-                float width = m_RoadDataManager->ROAD_WIDTH;
-                float insideRoot = (4 * minRadius * width) - (width * width);
-                float L = insideRoot > 0 ? sqrt(insideRoot) : 5.0f;
-
-                Vec3 changePosition = m_currentSpline.GetLookaheadPoint(position, L);
-                float changeSplinePosition = m_currentSpline.GetSplinePosition(changePosition);
-
-                auto changeLineSpline = Spline({position - GetForwardAxis(),
-                                                position,
-                                                changePosition,
-                                                changePosition + m_currentSpline.GetDirectionAt(changeSplinePosition)});
-                m_currentSpline.AddSplinePointsFront(changeLineSpline.GetSplinePoints(), changeSplinePosition);
-                RebuildSplineRender();
+                MergeOntoLane(m_currentLane, position);
                 CalculateSpeedProfile();
             }
             return BTStatus::Success;
@@ -154,6 +141,7 @@ std::unique_ptr<BTNode> Car::DriveNode()
                 float profileSpeed = m_speedProfile[m_profileIndex].second;
                 if (IsOffCourse() || abs(profileSpeed - m_speed) > (5.0f / 3.6f))
                 {
+                    // Calculate/Move 둘 다 내부에서 m_profileIndex를 한 칸 전진시켜 두므로 호출부는 대칭이다.
                     CalculateSpeedProfile();
                 }
                 else
