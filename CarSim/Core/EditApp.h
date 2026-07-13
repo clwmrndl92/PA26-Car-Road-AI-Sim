@@ -20,6 +20,7 @@ public:
     EditApp(HINSTANCE hInstance, const std::wstring &windowName, int initWidth, int initHeight);
     ~EditApp();
 
+    void InitCamera() override;
     void UpdateScene(float dt) override;
     void UpdateCamera(float dt) override;
     void UpdateUI(float dt) override;
@@ -30,7 +31,21 @@ private:
     {
         None,
         Lane,
-        Node
+        Node,
+        Marking
+    };
+
+    enum class MarkingLineType
+    {
+        Solid,
+        Dashed
+    };
+
+    enum class MarkingColor
+    {
+        White,
+        Yellow,
+        Gray
     };
 
     struct EditLane
@@ -57,6 +72,19 @@ private:
         char description[128] = "";
     };
 
+    // Freehand road-marking line (lane paint, median, shoulder), independent of EditLane's
+    // topology data. Purely visual, saved to its own JSON (see SaveMarkingsToJson).
+    struct EditMarking
+    {
+        int id = -1;
+        MarkingLineType type = MarkingLineType::Solid;
+        float width = 0.15f;
+        MarkingColor color = MarkingColor::White;
+        float dashLength = 3.0f; // only used when type == Dashed
+        float dashGap = 5.0f;    // only used when type == Dashed
+        std::vector<DirectX::XMFLOAT3> points;
+    };
+
     // UI windows
     void DrawToolbarWindow();
     void DrawLaneListWindow();
@@ -64,33 +92,44 @@ private:
     void DrawRoadListWindow();
     void DrawNodeListWindow();
     void DrawNodeEditWindow();
+    void DrawMarkingListWindow();
+    void DrawMarkingEditWindow();
 
     // Interaction / rendering
     void UpdateDrag();
     void RebuildRenderObjects();
     void SaveToJson();
     void LoadFromJson(const std::filesystem::path &path);
+    void SaveMarkingsToJson();
+    void LoadMarkingsFromJson(const std::filesystem::path &path);
 
     std::vector<EditLane> m_Lanes;
     std::vector<EditRoad> m_Roads;
     std::vector<EditNode> m_Nodes;
+    std::vector<EditMarking> m_Markings;
     int m_NextLaneId = 1;
     int m_NextRoadId = 1;
     int m_NextNodeId = 1;
+    int m_NextMarkingId = 1;
 
     Selection m_Selection = Selection::None;
-    int m_SelectedLane = -1; // index into m_Lanes when m_Selection == Lane
-    int m_SelectedNode = -1; // index into m_Nodes when m_Selection == Node
+    int m_SelectedLane = -1;    // index into m_Lanes when m_Selection == Lane
+    int m_SelectedNode = -1;    // index into m_Nodes when m_Selection == Node
+    int m_SelectedMarking = -1; // index into m_Markings when m_Selection == Marking
     int m_DraggingPoint = -1;
 
     std::string m_LastSavePath;
+    std::string m_LastMarkingsSavePath;
 
     std::vector<RenderObject> m_PointRenders;   // control-point & node spheres
     std::vector<RenderObject> m_SplineRenders;  // red spline polylines (one per lane, always shown)
+    std::vector<RenderObject> m_MarkingRenders; // marking-line ribbons (solid/dashed), always shown
 
     static constexpr float CP_RADIUS = 0.4f;
     static constexpr float NODE_RADIUS = 0.5f;
     static constexpr float GRID_SNAP = 1.0f;
+    static constexpr float LANE_GRID_SNAP = 0.5f;
+    static constexpr float MARKING_GRID_SNAP = 0.05f;
 };
 
 #endif

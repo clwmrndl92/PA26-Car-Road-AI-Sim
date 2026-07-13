@@ -37,7 +37,7 @@ std::unique_ptr<BTNode> Car::FindPathNode()
             if (m_currentLane != nullptr)
                 return BTStatus::Success;
 
-            Vec3 position = m_rigidbody.GetPosition();
+            Vec3 position = GetPosition();
             m_currentLane = m_RoadDataManager->GetClosestLane(position);
             m_path = m_RoadDataManager->FindPath(m_currentLane, m_destLane);
             m_pathIndex = 0; // path[0] == 시작(=현재) 레인
@@ -64,7 +64,7 @@ std::unique_ptr<BTNode> Car::StopNode()
         [this]()
         {
             constexpr float ARRIVE_DISTANCE = 5.0f;
-            return m_destLane == nullptr || (m_destLane->GetEndPoint() - m_rigidbody.GetPosition()).Length() < ARRIVE_DISTANCE;
+            return m_destLane == nullptr || (m_destLane->GetEndPoint() - GetPosition()).Length() < ARRIVE_DISTANCE;
         });
     shouldStop->name = "ShouldStop?";
 
@@ -91,7 +91,17 @@ std::unique_ptr<BTNode> Car::DriveNode()
         [this]()
         {
             // path find
-            Vec3 position = m_rigidbody.GetPosition();
+            Vec3 position = GetPosition();
+
+            // 다음 레인이 차선변경이면, 레인 끝까지 기다리지 않고 바로 차선변경을 진행한다.
+            float laneStartDistance = (m_currentLane->GetEndPoint() - position).Length();
+            if (m_pathIndex + 1 < m_path.size() && m_path[m_pathIndex + 1].isLaneChange && laneStartDistance > 3.0f)
+            {
+                ++m_pathIndex;
+                MergeOntoLane(m_path[m_pathIndex].lane, position);
+                CalculateSpeedProfile();
+                return BTStatus::Success;
+            }
 
             // 현재 레인의 끝에 다가가면 경로상 다음 레인으로 넘어간다.
             float laneEndDistance = (m_currentLane->GetEndPoint() - position).Length();

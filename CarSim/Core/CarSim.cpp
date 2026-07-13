@@ -1,8 +1,10 @@
 #include "CarSim.h"
 #include <XUtil.h>
 #include <DXTrace.h>
+#include <Geometry.h>
 #include <Entities/Car.h>
 #include "DebugConsole.h"
+#include "Nav/Spline.h"
 
 using namespace DirectX;
 
@@ -21,6 +23,7 @@ bool CarSim::Init()
         return false;
 
     m_RoadDataManager.Init(NAV_DATA_DIR "/data.json");
+    m_MarkingDataManager.Init(NAV_DATA_DIR "/marking.json");
 
     if (!InitResource())
         return false;
@@ -193,6 +196,8 @@ void CarSim::DrawScene()
         obj->Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     for (auto &roadRender : m_RoadRenders)
         roadRender.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
+    for (auto &markingRender : m_MarkingRenders)
+        markingRender.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
 
     m_BasicEffect.SetRenderLines();
     if (m_ShowGridXZ)
@@ -231,6 +236,7 @@ bool CarSim::InitResource()
         m_GameObjects.push_back(road);
 
         InitRoadRenderer();
+        InitMarkingRenderer();
     }
 
     // Car 1
@@ -238,7 +244,7 @@ bool CarSim::InitResource()
         auto car = std::make_shared<Car>();
         car->Init(GetCarSpec(CarType::Car0), &m_RoadDataManager, JPH::Vec3(-10.0f, 0.1f, -10.0f));
         car->SetDrawCollider(true);
-        car->SetDestination(m_RoadDataManager.GetClosestLaneEnd(m_RoadDataManager.GetNode(10)->position));
+        car->SetDestination(m_RoadDataManager.GetClosestLaneEnd(m_RoadDataManager.GetNode(1)->position));
 
         m_GameObjects.push_back(car);
         m_CarObjects.push_back(car);
@@ -280,25 +286,6 @@ void CarSim::InitRoadRenderer()
     constexpr float EDGE_LINE_HEIGHT = 0.1f;
 
     m_RoadRenders.clear();
-    for (auto const &lane : m_RoadDataManager.GetLanes())
-    {
-        std::vector<Vec3> splinePoints = lane->GetSpline().GetSplinePoints();
-        std::vector<Vec3> controlPoints = lane->GetSpline().GetControlPoints();
-
-        std::vector<XMFLOAT3> centerline;
-        centerline.reserve(splinePoints.size() + 2);
-        // centerline.push_back(ToXMFLOAT3(controlPoints.front()));
-        for (const Vec3 &p : splinePoints)
-            centerline.push_back(ToXMFLOAT3(p));
-        // centerline.push_back(ToXMFLOAT3(controlPoints.back()));
-
-        Model *pGround = m_ModelManager.CreateFromGeometry("road" + std::to_string(lane->GetId()), Geometry::CreateRibbon(centerline, ROAD_WIDTH));
-        pGround->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.22f, 0.22f, 0.22f, 1.0f));
-        pGround->materials[0].Set<float>("$Opacity", 1.0f);
-
-        RenderObject &roadRender = m_RoadRenders.emplace_back();
-        roadRender.SetModel(pGround);
-    }
 
     for (const auto &node : m_RoadDataManager.GetNodes())
     {
@@ -332,5 +319,59 @@ void CarSim::InitRoadRenderer()
             RenderObject &edgeRender = m_RoadEdgeRenders.emplace_back();
             edgeRender.SetModel(pLine);
         }
+    }
+}
+
+void CarSim::InitMarkingRenderer()
+{
+    // Mirrors EditApp::RebuildRenderObjects' marking loop so the sim renders exactly what was
+    // authored: >=4 points get a Catmull-Rom spline centerline, 2-3 points are used as-is.
+    m_MarkingRenders.clear();
+    for (const auto &marking : m_MarkingDataManager.GetMarkings())
+    {
+        std::vector<XMFLOAT3> samples;
+        if (marking.points.size() >= 4)
+        {
+            Spline spline(marking.points);
+            for (const Vec3 &s : spline.GetSplinePoints())
+                samples.push_back(ToXMFLOAT3(s));
+        }
+        else
+        {
+            samples.reserve(marking.points.size());
+            for (const Vec3 &p : marking.points)
+                samples.push_back(ToXMFLOAT3(p));
+        }
+        if (samples.size() < 2)
+            continue;
+
+        for (XMFLOAT3 &s : samples)
+            s.y += 0.05f; // lift slightly above the road ribbon to avoid z-fighting
+
+        GeometryData geo = marking.type == MarkingLineType::Dashed
+                               ? Geometry::CreateDashedRibbon(samples, marking.width, marking.dashLength, marking.dashGap)
+                               : Geometry::CreateRibbon(samples, marking.width);
+        if (geo.vertices.empty())
+            continue;
+
+        Model *pMarking = m_ModelManager.CreateFromGeometry("marking_" + std::to_string(marking.id), geo);
+        XMFLOAT4 color;
+        switch (marking.color)
+        {
+        case MarkingColor::Yellow:
+            color = XMFLOAT4(1.0f, 0.85f, 0.0f, 1.0f);
+            break;
+        case MarkingColor::Gray:
+            color = XMFLOAT4(0.22f, 0.22f, 0.22f, 1.0f);
+            break;
+        default:
+            color = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+            break;
+        }
+        pMarking->materials[0].Set<XMFLOAT4>("$DiffuseColor", color);
+        pMarking->materials[0].Set<float>("$Opacity", 1.0f);
+
+        RenderObject &ro = m_MarkingRenders.emplace_back();
+        ro.SetModel(pMarking);
     }
 }
