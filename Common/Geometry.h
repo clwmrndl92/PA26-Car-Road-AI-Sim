@@ -22,9 +22,6 @@ namespace Geometry
     // Create sphere mesh data; larger levels and slices yield higher precision.
     GeometryData CreateSphere(float radius = 1.0f, uint32_t levels = 20, uint32_t slices = 20);
 
-    // Create a flat circle (disc) lying in the local XZ plane (y = 0), facing +Y. Larger slices yield higher precision.
-    GeometryData CreateCircle(float radius = 1.0f, uint32_t slices = 20);
-
     // Create box mesh data
     GeometryData CreateBox(float width = 2.0f, float height = 2.0f, float depth = 2.0f);
 

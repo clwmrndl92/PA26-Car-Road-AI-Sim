@@ -137,49 +137,6 @@ namespace Geometry
         return geoData;
     }
 
-    GeometryData CreateCircle(float radius, uint32_t slices)
-    {
-        using namespace DirectX;
-
-        GeometryData geoData;
-        uint32_t vertexCount = slices + 1;
-        uint32_t indexCount = 3 * slices;
-        geoData.vertices.resize(vertexCount);
-        geoData.normals.resize(vertexCount);
-        geoData.tangents.resize(vertexCount);
-        geoData.texcoords.resize(vertexCount);
-        geoData.indices16.resize(indexCount);
-
-        float per_theta = 2 * PI / slices;
-
-        // Center vertex
-        geoData.vertices[0] = XMFLOAT3(0.0f, 0.0f, 0.0f);
-        geoData.normals[0] = XMFLOAT3(0.0f, 1.0f, 0.0f);
-        geoData.tangents[0] = XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f);
-        geoData.texcoords[0] = XMFLOAT2(0.5f, 0.5f);
-
-        // Perimeter vertices
-        for (uint32_t i = 0; i < slices; ++i)
-        {
-            float theta = i * per_theta;
-            geoData.vertices[i + 1] = XMFLOAT3(radius * cosf(theta), 0.0f, radius * sinf(theta));
-            geoData.normals[i + 1] = XMFLOAT3(0.0f, 1.0f, 0.0f);
-            geoData.tangents[i + 1] = XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f);
-            geoData.texcoords[i + 1] = XMFLOAT2(cosf(theta) / 2 + 0.5f, sinf(theta) / 2 + 0.5f);
-        }
-
-        // Fan triangles; winding matches CreateCylinder's top cap (center, next, current) so the disc faces up (+Y).
-        uint32_t iIndex = 0;
-        for (uint32_t i = 0; i < slices; ++i)
-        {
-            geoData.indices16[iIndex++] = 0;
-            geoData.indices16[iIndex++] = 1 + (i + 1) % slices;
-            geoData.indices16[iIndex++] = 1 + i;
-        }
-
-        return geoData;
-    }
-
     GeometryData CreateBox(float width, float height, float depth)
     {
         using namespace DirectX;

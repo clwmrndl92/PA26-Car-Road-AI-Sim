@@ -108,15 +108,11 @@ std::vector<Vec3> Spline::ComputeSplinePoints()
     return splinePoints;
 }
 
-Vec3 Spline::GetLookaheadPoint(const Vec3 &position, float lookaheadDistance, float *outShortfall) const
+Vec3 Spline::GetLookaheadPoint(const Vec3 &position, float lookaheadDistance) const
 {
     const std::vector<Vec3> &splinePoints = m_splinePoints;
     if (splinePoints.empty())
-    {
-        if (outShortfall)
-            *outShortfall = lookaheadDistance;
         return position;
-    }
 
     float closestDistance = std::numeric_limits<float>::max();
     size_t closestIndex = 0;
@@ -139,8 +135,6 @@ Vec3 Spline::GetLookaheadPoint(const Vec3 &position, float lookaheadDistance, fl
         ++lookaheadIndex;
     }
 
-    if (outShortfall)
-        *outShortfall = std::max(0.0f, lookaheadDistance - accumulatedDistance);
     return splinePoints[lookaheadIndex];
 }
 

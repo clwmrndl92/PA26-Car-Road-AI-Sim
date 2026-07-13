@@ -121,7 +121,6 @@ private: // 멤버 변수 구역
     RenderObject m_frontTrailRender;
     RenderObject m_steerLine;
     RenderObject m_targetMarker;
-    RenderObject m_destMarker;
     RenderObject m_splineRender;
 };
 
