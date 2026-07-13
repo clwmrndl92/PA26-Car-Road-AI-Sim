@@ -25,9 +25,9 @@ public:
 
     // Getter / Setter (Accessors)
     void SetFocused(bool focused) { m_isFocused = focused; }
-    void SetDestination(std::shared_ptr<RoadEdge> roadNode) { m_destEdge = roadNode; }
+    void SetDestination(std::shared_ptr<RoadNode> roadNode) { m_destNode = roadNode; }
 
-    // 조작 및 제어 인터페이스 (Control Interface)
+        // 조작 및 제어 인터페이스 (Control Interface)
     void Accelerate(float desiredVelocity);
     void EmergBrake();
     void Steer(float desiredRadian);
@@ -81,9 +81,9 @@ private: // 멤버 변수 구역
     const RoadDataManager *m_RoadDataManager = nullptr;
     bool m_isFocused = false; // 포커스 여부 (입력 처리용)
     BehaviourTree m_BehaviourTree;
-    shared_ptr<RoadEdge> m_destEdge;
-    shared_ptr<RoadEdge> m_currentEdge;
-    vector<shared_ptr<RoadEdge>> m_path;
+    shared_ptr<RoadNode> m_destNode;
+    shared_ptr<RoadNode> m_currentNode;
+    vector<shared_ptr<RoadNode>> m_path;
     size_t m_pathIndex = 0;
     static constexpr float LOOK_PROFILE_TIME = 5.0f;
     static constexpr size_t SPEED_PROFILE_COUNT = 25;

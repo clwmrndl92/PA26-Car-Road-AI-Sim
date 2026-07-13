@@ -129,9 +129,9 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
     if (m_targetMarker.GetModel())
         m_targetMarker.Draw(context, effect);
 
-    if (m_destEdge && m_destMarker.GetModel())
+    if (m_destNode && m_destMarker.GetModel())
     {
-        m_destMarker.GetTransform().SetPosition(ToXMFLOAT3(m_destEdge->position));
+        m_destMarker.GetTransform().SetPosition(ToXMFLOAT3(m_destNode->position));
         m_destMarker.Draw(context, effect);
     }
 }
@@ -252,7 +252,7 @@ void Car::MoveSpeedProfile()
     float targetDistance = (SPEED_PROFILE_COUNT - 1) * deltaTime * m_speed;
 
     const Spline *spline = &m_currentSpline;
-    shared_ptr<RoadEdge> segmentNode = m_currentEdge;
+    shared_ptr<RoadNode> segmentNode = m_currentNode;
     size_t pathIndex = m_pathIndex;
     Vec3 segmentStart = m_rigidbody.GetPosition();
     float remainingDistance = targetDistance;
@@ -282,11 +282,11 @@ void Car::MoveSpeedProfile()
         }
 
         remainingDistance -= segmentDistance;
-        shared_ptr<RoadEdge> nextNode = (pathIndex + 1 < m_path.size()) ? m_path[pathIndex + 1] : nullptr;
+        shared_ptr<RoadNode> nextNode = (pathIndex + 1 < m_path.size()) ? m_path[pathIndex + 1] : nullptr;
         if (!nextNode)
         {
             tailPosition = segmentNode->position;
-            tailSpeed = (segmentNode == m_destEdge) ? 0.0f : maxSpeed;
+            tailSpeed = (segmentNode == m_destNode) ? 0.0f : maxSpeed;
             break;
         }
 
@@ -380,8 +380,7 @@ void Car::CalculateSpeedProfile()
 
         // 풀악셀로 달리기
         float remainTime = t - rampTime;
-        float fullAccelSpeedTime = std::max(0.0f, (m_maxSpeed - rampEndSpeed) / m_maxAccel);
-        ;
+        float fullAccelSpeedTime = std::max(0.0f, (m_maxSpeed - rampEndSpeed) / m_maxAccel);;
         float fullAccelTime = std::min(remainTime, fullAccelSpeedTime);
         float maxSpeed = rampEndSpeed + m_maxAccel * fullAccelTime;
         distance += (rampEndSpeed + maxSpeed) / 2.0f * fullAccelTime;
@@ -413,12 +412,12 @@ void Car::CalculateSpeedProfile()
         float currentNodeT = m_currentSpline.GetSplinePosition(calPosition);
         Assert(currentNodeT >= 0.0f); // CalculateSpeedProfile 호출 전엔 항상 m_currentSpline이 세팅되어 있어야 함
         float currentNodeDistance = m_currentSpline.GetLength() * (1.0f - currentNodeT);
-        float currentNodeSpeed = (m_currentEdge == m_destEdge) ? 0.0f : std::min(m_currentEdge->GetLimitSpeed(), m_maxSpeed);
-        samples.push_back({currentNodeDistance, currentNodeSpeed, m_currentEdge->position});
+        float currentNodeSpeed = (m_currentNode == m_destNode) ? 0.0f : std::min(m_currentNode->GetLimitSpeed(), m_maxSpeed);
+        samples.push_back({currentNodeDistance, currentNodeSpeed, m_currentNode->position});
     }
     {
         const Spline *spline = &m_currentSpline;
-        shared_ptr<RoadEdge> segmentNode = m_currentEdge;
+        shared_ptr<RoadNode> segmentNode = m_currentNode;
         size_t pathIndex = m_pathIndex;
         Vec3 segmentStart = calPosition;
         float traveledDistance = 0.0f;
@@ -452,11 +451,11 @@ void Car::CalculateSpeedProfile()
             if (remainingDistance <= 0.0f)
                 break;
 
-            shared_ptr<RoadEdge> nextNode = (pathIndex + 1 < m_path.size()) ? m_path[pathIndex + 1] : nullptr;
+            shared_ptr<RoadNode> nextNode = (pathIndex + 1 < m_path.size()) ? m_path[pathIndex + 1] : nullptr;
             if (!nextNode)
                 break;
 
-            float nextNodeSpeed = (nextNode == m_destEdge) ? 0.0f : std::min(nextNode->GetLimitSpeed(), m_maxSpeed);
+            float nextNodeSpeed = (nextNode == m_destNode) ? 0.0f : std::min(nextNode->GetLimitSpeed(), m_maxSpeed);
             samples.push_back({traveledDistance, nextNodeSpeed, nextNode->position});
 
             shared_ptr<RoadEdge> edge = segmentNode->GetEdgeTo(nextNode->id);

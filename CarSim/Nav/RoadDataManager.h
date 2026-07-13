@@ -18,7 +18,7 @@ public:
     void BuildRoadData(const string &filePath);
     shared_ptr<RoadNode> GetClosestNode(const Vec3 &position) const;
 
-    vector<shared_ptr<RoadEdge>> FindPath(const shared_ptr<RoadNode> &startNode, const shared_ptr<RoadNode> &destNode) const;
+    vector<shared_ptr<RoadNode>> FindPath(const shared_ptr<RoadNode> &startNode, const shared_ptr<RoadNode> &destNode) const;
 
 public:
     const vector<shared_ptr<RoadNode>> &GetNodes() const { return m_nodes; };
@@ -61,9 +61,6 @@ struct RoadEdge
     weak_ptr<RoadNode> endNode;
     float length;
     Spline spline; // 비어있으면(GetControlPointCount()==0) 미리 만들어진 곡선이 없다는 뜻 -> 주행 중 동적으로 생성
-    Vec3 GetEndPos() const
-    {
-    }
 };
 
 struct RoadNode
