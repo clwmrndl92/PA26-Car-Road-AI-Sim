@@ -45,7 +45,7 @@ void Car::Init(const CarSpec &spec, const RoadDataManager *roadDataManager, JPH:
     pLine->materials[0].Set<float>("$Opacity", 1.0f);
     m_steerLine.SetModel(pLine);
 
-    // Small red marker showing the BT's current lookahead target on the road
+    // Small red marker showing the current lookahead target on the road
     constexpr float TARGET_MARKER_SIZE = 0.5f;
     Model *pTargetMarker = ModelManager::Get().CreateFromGeometry("__target_marker__:" + GetName(),
                                                                   Geometry::CreatePlane(TARGET_MARKER_SIZE, TARGET_MARKER_SIZE));
@@ -54,8 +54,6 @@ void Car::Init(const CarSpec &spec, const RoadDataManager *roadDataManager, JPH:
     m_targetMarker.SetModel(pTargetMarker);
 
     m_RoadDataManager = roadDataManager;
-    m_BehaviourTree = BehaviourTree();
-    m_BehaviourTree.root = BuildBehaviourTree();
 
     for (auto &item : m_speedProfile)
     {
@@ -68,7 +66,20 @@ void Car::Update(float dt)
 {
     m_deltaTime = dt;
     m_currentTime += dt;
-    m_BehaviourTree.Tick();
+    UpdateMode();
+    UpdateFindPath();
+    switch (m_mode)
+    {
+    case DriveMode::Stop:
+        UpdateStop();
+        break;
+    case DriveMode::Park:
+        UpdatePark();
+        break;
+    case DriveMode::Drive:
+        UpdateDrive();
+        break;
+    }
     UpdateCar();
     UpdateDebugWindow();
     ApplyMotion();
@@ -671,10 +682,9 @@ void Car::UpdateDebugWindow()
         ImGui::Text("Steer: %.2f / %.2f", m_steerAngle, m_maxSteerAngle);
         ImGui::Text("ActualVel: %.2f", m_rigidbody.GetLinearVelocity().Length());
         ImGui::Text("DesiredVel: %.2f", ComputeDesiredVelocity().Length());
+        ImGui::Text("Mode: %s", DriveModeToString(m_mode));
     }
     ImGui::End();
-
-    m_BehaviourTree.Draw(("BT: " + GetName()).c_str());
 }
 
 void Car::UpdateTrail()

@@ -5,7 +5,6 @@
 #include <deque>
 #include <string>
 #include <array>
-#include "AI/BehaviourTree.h"
 #include <Nav/RoadDataManager.h>
 
 class Car : public GameObject
@@ -50,20 +49,40 @@ private:
                             const std::string &name, const DirectX::XMFLOAT4 &color);
     void RebuildSplineRender();
 
-    // 인공지능 / 행동 트리 (AI / Behavior Tree)
-    std::unique_ptr<BTNode> BuildBehaviourTree();
+    // 인공지능 / 주행 로직 (AI / Driving Logic)
+    // 최상위 주행 모드. 매 프레임 UpdateMode()가 (히스테리시스를 적용해) 한 번만 결정하고,
+    // Update()는 그 결과(m_mode)에 따라 해당 로직만 실행한다.
+    enum class DriveMode
+    {
+        Stop,
+        Park, // TODO: Reeds-Shepp 기반 진입/주차 로직과 연결 예정. 아직 DecideNextMode가 반환하지 않음.
+        Drive
+    };
 
     bool IsOffCourse();
 
-    std::unique_ptr<BTNode> FindPathNode();
+    // 모드 FSM: 매 프레임 한 번 돌며, 모드가 바뀔 때만 OnModeExit/OnModeEnter를 호출한다.
+    void UpdateMode();
+    DriveMode DecideNextMode() const;
+    void OnModeEnter(DriveMode mode);
+    void OnModeExit(DriveMode mode);
+    const char *DriveModeToString(DriveMode mode) const;
+
+    void UpdateFindPath();
 
     // 현재 위치에서 주어진 레인 위로 합류하는 연결 스플라인을 만들어 m_currentSpline에 세팅한다.
     void MergeOntoLane(const shared_ptr<Lane> &lane, const Vec3 &position);
 
-    std::unique_ptr<BTNode> StopNode();
+    void UpdateStop();
+    void UpdatePark();
     void MoveSpeedProfile();
     void CalculateSpeedProfile();
-    std::unique_ptr<BTNode> DriveNode();
+    void UpdateDrive();
+    // 경로상 다음 레인으로 넘어갈지 판단/처리. false면 경로가 끝난 것이므로 이번 프레임은 조향/가속 제어를 건너뛴다.
+    bool CheckPath();
+    // TODO: 센서 기반 장애물 회피. 지금은 항상 false를 반환해 DriveControl로 넘긴다.
+    bool TryAvoidObstacle();
+    void DriveControl();
 
 private: // 멤버 변수 구역
     // 설정 및 스펙 상수/변수 (Constants & Specifications)
@@ -83,7 +102,7 @@ private: // 멤버 변수 구역
     // 컴포넌트 및 AI 상태 (Components & Systems)
     const RoadDataManager *m_RoadDataManager = nullptr;
     bool m_isFocused = false; // 포커스 여부 (입력 처리용)
-    BehaviourTree m_BehaviourTree;
+    DriveMode m_mode = DriveMode::Stop;
     shared_ptr<Lane> m_destLane;
     shared_ptr<Lane> m_currentLane;
     vector<LaneStep> m_path;
