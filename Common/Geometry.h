@@ -57,6 +57,11 @@ namespace Geometry
     // (y taken from each point). Useful for roads/lanes built from spline sample points.
     GeometryData CreateRibbon(const std::vector<DirectX::XMFLOAT3>& centerPoints, float width);
 
+    // Create a dashed version of CreateRibbon: walks the centerline by arc length, alternating
+    // dashLength (drawn) / dashGap (empty) phases, and merges each drawn dash's ribbon into one mesh.
+    GeometryData CreateDashedRibbon(const std::vector<DirectX::XMFLOAT3>& centerPoints, float width,
+                                     float dashLength, float dashGap);
+
 }
 
 

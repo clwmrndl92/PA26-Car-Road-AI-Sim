@@ -25,7 +25,7 @@ public:
 
     // Getter / Setter (Accessors)
     void SetFocused(bool focused) { m_isFocused = focused; }
-    void SetDestination(std::shared_ptr<RoadNode> roadNode) { m_destNode = roadNode; }
+    void SetDestination(std::shared_ptr<Lane> lane) { m_destLane = lane; }
 
         // 조작 및 제어 인터페이스 (Control Interface)
     void Accelerate(float desiredVelocity);
@@ -57,6 +57,9 @@ private:
 
     std::unique_ptr<BTNode> FindPathNode();
 
+    // 현재 위치에서 주어진 레인 위로 합류하는 연결 스플라인을 만들어 m_currentSpline에 세팅한다.
+    void MergeOntoLane(const shared_ptr<Lane> &lane, const Vec3 &position);
+
     std::unique_ptr<BTNode> StopNode();
     void MoveSpeedProfile();
     void CalculateSpeedProfile();
@@ -81,9 +84,9 @@ private: // 멤버 변수 구역
     const RoadDataManager *m_RoadDataManager = nullptr;
     bool m_isFocused = false; // 포커스 여부 (입력 처리용)
     BehaviourTree m_BehaviourTree;
-    shared_ptr<RoadNode> m_destNode;
-    shared_ptr<RoadNode> m_currentNode;
-    vector<shared_ptr<RoadNode>> m_path;
+    shared_ptr<Lane> m_destLane;
+    shared_ptr<Lane> m_currentLane;
+    vector<LaneStep> m_path;
     size_t m_pathIndex = 0;
     static constexpr float LOOK_PROFILE_TIME = 5.0f;
     static constexpr size_t SPEED_PROFILE_COUNT = 25;

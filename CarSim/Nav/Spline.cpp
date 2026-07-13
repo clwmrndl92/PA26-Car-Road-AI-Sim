@@ -69,22 +69,45 @@ std::vector<Vec3> Spline::ComputeSplinePoints()
     std::vector<Vec3> splinePoints;
     m_length = 0.0f;
     int n = static_cast<int>(m_controlPoints.size());
-    if (n < 4)
+    if (n < 4) 
         return splinePoints; // Not enough control points for Catmull-Rom spline
 
-    constexpr float MIN_PHANTOM_DISTANCE = 15.0f;
-    auto ExtendPhantomPoint = [MIN_PHANTOM_DISTANCE](Vec3 &phantom, const Vec3 &neighbor)
+    // 양 끝 control point(phantom)은 그려지지 않고 끝점의 접선만 정한다.
+    // 진입 방향과 첫 실제 구간 사이 꺾임 각 θ가 클수록 팔을 tan로 길게 늘려 급한 cusp를 막는다.
+    // (90도에서 BASE, 직진이면 MIN으로 floor, 역방향 근처는 MAX로 캡)
+    auto AdjustPhantom = [](Vec3 &phantom, const Vec3 &endpoint, const Vec3 &interior)
     {
-        Vec3 offset = phantom - neighbor;
-        float distance = offset.Length();
-        if (distance > 1e-4f && distance < MIN_PHANTOM_DISTANCE)
-        {
-            phantom = neighbor + offset * (MIN_PHANTOM_DISTANCE / distance);
-        }
+        // 접선 길이를 pow(θ, CURVE_EXP)에 선형 보간: 45°->15, 150°->250.
+        // CURVE_EXP 작을수록 45° 직후 더 가파르게 오르다 완만해짐 (0.5=sqrt, 낮출수록 급).
+        constexpr float MIN_PHANTOM_DISTANCE = 15.0f;
+        constexpr float MAX_PHANTOM_DISTANCE = 300.0f;
+        constexpr float CURVE_EXP = 0.35f;
+        constexpr float ANGLE_45 = 0.785398f;  // 45° (rad)
+        constexpr float ANGLE_150 = 2.617994f; // 150° (rad)
+        constexpr float DIST_AT_45 = 15.0f;
+        constexpr float DIST_AT_150 = 250.0f;
+
+        Vec3 arm = phantom - endpoint;  // endpoint -> phantom (접선 팔 방향)
+        float armLen = arm.Length();
+        Vec3 seg = interior - endpoint; // endpoint -> 첫 실제 이웃 (곡선 진행 방향)
+        float segLen = seg.Length();
+        if (armLen < 1e-4f || segLen < 1e-4f)
+            return;
+        arm /= armLen;
+        seg /= segLen;
+
+        // 진입방향(-arm)과 곡선방향(seg) 사이 각: 직진이면 0, 정반대면 π.
+        float angle = std::acos(std::clamp(-arm.Dot(seg), -1.0f, 1.0f));
+        float k = std::pow(angle, CURVE_EXP);
+        float k1 = std::pow(ANGLE_45, CURVE_EXP);
+        float k2 = std::pow(ANGLE_150, CURVE_EXP);
+        float dist = DIST_AT_45 + (DIST_AT_150 - DIST_AT_45) * (k - k1) / (k2 - k1);
+        dist = std::clamp(dist, MIN_PHANTOM_DISTANCE, MAX_PHANTOM_DISTANCE);
+        phantom = endpoint + arm * dist; // 방향은 유지, 거리만 각도에 맞춰 조정
     };
 
-    ExtendPhantomPoint(m_controlPoints.front(), m_controlPoints[1]);
-    ExtendPhantomPoint(m_controlPoints.back(), m_controlPoints[n - 2]);
+    AdjustPhantom(m_controlPoints.front(), m_controlPoints[1], m_controlPoints[2]);
+    AdjustPhantom(m_controlPoints.back(), m_controlPoints[n - 2], m_controlPoints[n - 3]);
 
     Vec3 prevSplinePoint = m_controlPoints[1];
 

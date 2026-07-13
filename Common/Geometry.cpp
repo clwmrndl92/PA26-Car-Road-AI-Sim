@@ -1,4 +1,5 @@
 #include "Geometry.h"
+#include <algorithm>
 
 namespace Geometry
 {
@@ -791,6 +792,99 @@ namespace Geometry
             geoData.indices16.assign(indices.begin(), indices.end());
 
         return geoData;
+    }
+
+    GeometryData CreateDashedRibbon(const std::vector<DirectX::XMFLOAT3>& centerPoints, float width,
+                                     float dashLength, float dashGap)
+    {
+        using namespace DirectX;
+
+        GeometryData combined;
+        if (centerPoints.size() < 2 || dashLength <= 0.0f || dashGap < 0.0f)
+            return combined;
+
+        std::vector<uint32_t> combinedIndices;
+
+        // Appends one dash's ribbon (built via CreateRibbon) into the combined mesh,
+        // offsetting its indices so all dashes end up in a single draw call.
+        std::vector<XMFLOAT3> currentDash;
+        auto flushDash = [&]()
+        {
+            if (currentDash.size() >= 2)
+            {
+                GeometryData seg = CreateRibbon(currentDash, width);
+                uint32_t vertexOffset = static_cast<uint32_t>(combined.vertices.size());
+
+                combined.vertices.insert(combined.vertices.end(), seg.vertices.begin(), seg.vertices.end());
+                combined.normals.insert(combined.normals.end(), seg.normals.begin(), seg.normals.end());
+                combined.tangents.insert(combined.tangents.end(), seg.tangents.begin(), seg.tangents.end());
+                combined.texcoords.insert(combined.texcoords.end(), seg.texcoords.begin(), seg.texcoords.end());
+
+                if (!seg.indices32.empty())
+                {
+                    for (uint32_t idx : seg.indices32)
+                        combinedIndices.push_back(idx + vertexOffset);
+                }
+                else
+                {
+                    for (uint16_t idx : seg.indices16)
+                        combinedIndices.push_back(idx + vertexOffset);
+                }
+            }
+            currentDash.clear();
+        };
+
+        // Walk the centerline by arc length, alternating "on" (dash) / "off" (gap) phases of
+        // fixed length; each "on" phase becomes its own sub-polyline fed through CreateRibbon.
+        bool inDash = true;
+        float phaseDistance = 0.0f;
+        currentDash.push_back(centerPoints[0]);
+
+        for (size_t i = 0; i + 1 < centerPoints.size(); ++i)
+        {
+            XMVECTOR a = XMLoadFloat3(&centerPoints[i]);
+            XMVECTOR b = XMLoadFloat3(&centerPoints[i + 1]);
+            float segLen = XMVectorGetX(XMVector3Length(b - a));
+            if (segLen <= 1e-6f)
+                continue;
+
+            float segTraveled = 0.0f;
+            while (segTraveled < segLen)
+            {
+                float phaseLimit = inDash ? dashLength : dashGap;
+                float remainingInPhase = phaseLimit - phaseDistance;
+                float remainingInSeg = segLen - segTraveled;
+                float step = std::min(remainingInPhase, remainingInSeg);
+
+                segTraveled += step;
+                phaseDistance += step;
+
+                XMVECTOR pt = a + (b - a) * (segTraveled / segLen);
+                XMFLOAT3 ptF;
+                XMStoreFloat3(&ptF, pt);
+
+                if (inDash)
+                    currentDash.push_back(ptF);
+
+                if (phaseDistance >= phaseLimit - 1e-5f)
+                {
+                    if (inDash)
+                        flushDash();
+                    inDash = !inDash;
+                    phaseDistance = 0.0f;
+                    if (inDash)
+                        currentDash.push_back(ptF);
+                }
+            }
+        }
+        flushDash(); // line may end mid-dash
+
+        if (combinedIndices.size() > 65535)
+            combined.indices32 = std::move(combinedIndices);
+        else
+            combined.indices16.assign(combinedIndices.begin(), combinedIndices.end());
+
+        return combined;
     }
 
 }

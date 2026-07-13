@@ -1,68 +1,135 @@
 #ifndef EDITAPP_H
 #define EDITAPP_H
 
-#include <WinMin.h>
-#include "d3dApp.h"
-#include "Rendering/Effects.h"
-#include <Camera.h>
-#include <Collision.h>
-#include <RenderStates.h>
-#include <Texture2D.h>
-#include <Buffer.h>
-#include <ModelManager.h>
-#include <TextureManager.h>
+#include "GameApp.h"
+#include <vector>
 #include <string>
-#include "PhysicsSystem.h"
-#include "GameObject.h"
-#include "Nav/Spline.h"
+#include <filesystem>
 
-class EditApp : public D3DApp
+// Road data editor.
+// Reuses GameApp's window / free camera and adds:
+//  - lane / road / node list windows (Add -> auto id)
+//  - a per-lane edit window (road / left / right ids + control points)
+//  - a per-node edit window (type / description + draggable position)
+//  - control points & node positions rendered as spheres, drag-and-drop on the
+//    grid (1-unit snap); a red Catmull-Rom spline once a lane has >= 4 points
+//  - a fixed top-right toolbar with a Save button (-> Data/<timestamp>.json)
+class EditApp : public GameApp
 {
 public:
     EditApp(HINSTANCE hInstance, const std::wstring &windowName, int initWidth, int initHeight);
     ~EditApp();
 
-    bool Init();
-    void OnResize();
-    void UpdateScene(float dt);
+    void InitCamera() override;
+    void UpdateScene(float dt) override;
+    void UpdateCamera(float dt) override;
+    void UpdateUI(float dt) override;
     void DrawScene();
 
 private:
-    bool InitResource();
-    void UpdateSplineRender(const Spline &spline);
-    void UpdateRoadRender(const Spline &spline);
+    enum class Selection
+    {
+        None,
+        Lane,
+        Node,
+        Marking
+    };
 
-private:
-    TextureManager m_TextureManager;
-    ModelManager m_ModelManager;
+    enum class MarkingLineType
+    {
+        Solid,
+        Dashed
+    };
 
-    BasicEffect m_BasicEffect;
+    enum class MarkingColor
+    {
+        White,
+        Yellow,
+        Gray
+    };
 
-    std::unique_ptr<Depth2D> m_pDepthTexture;
+    struct EditLane
+    {
+        int id = -1;
+        int road = -1;
+        int left = -1;
+        int right = -1;
+        std::vector<DirectX::XMFLOAT3> points;
+    };
 
-    std::vector<std::shared_ptr<GameObject>> m_GameObjects;
+    struct EditRoad
+    {
+        int id = -1;
+        char name[64] = "road";
+        int speedLimit = 40;
+    };
 
-    PhysicsSystem m_Physics;
+    struct EditNode
+    {
+        int id = -1;
+        DirectX::XMFLOAT3 position{0.0f, 0.0f, 0.0f};
+        char type[32] = "end";
+        char description[128] = "";
+    };
 
-    std::shared_ptr<FreeCamera> m_pCamera;
-    float m_TopDownHeightMin = 6.0f;
-    float m_TopDownHeightMax = 100.0f;
+    // Freehand road-marking line (lane paint, median, shoulder), independent of EditLane's
+    // topology data. Purely visual, saved to its own JSON (see SaveMarkingsToJson).
+    struct EditMarking
+    {
+        int id = -1;
+        MarkingLineType type = MarkingLineType::Solid;
+        float width = 0.15f;
+        MarkingColor color = MarkingColor::White;
+        float dashLength = 3.0f; // only used when type == Dashed
+        float dashGap = 5.0f;    // only used when type == Dashed
+        std::vector<DirectX::XMFLOAT3> points;
+    };
 
-    RenderObject m_GridXZ;
-    RenderObject m_GridXY;
-    RenderObject m_GridYZ;
-    bool m_ShowGridXZ = false;
-    bool m_ShowGridXY = false;
-    bool m_ShowGridYZ = false;
+    // UI windows
+    void DrawToolbarWindow();
+    void DrawLaneListWindow();
+    void DrawLaneEditWindow();
+    void DrawRoadListWindow();
+    void DrawNodeListWindow();
+    void DrawNodeEditWindow();
+    void DrawMarkingListWindow();
+    void DrawMarkingEditWindow();
 
-    std::vector<RenderObject> m_RoadRenders;
+    // Interaction / rendering
+    void UpdateDrag();
+    void RebuildRenderObjects();
+    void SaveToJson();
+    void LoadFromJson(const std::filesystem::path &path);
+    void SaveMarkingsToJson();
+    void LoadMarkingsFromJson(const std::filesystem::path &path);
 
-    std::vector<Vec3> m_SplineControlPoints;
-    Spline m_Spline;
-    RenderObject m_SplineCurve;
-    bool m_SplineCurveVisible = false;
-    Model *m_pSplineMarkerModel = nullptr;
-    std::vector<RenderObject> m_SplineMarkers;
+    std::vector<EditLane> m_Lanes;
+    std::vector<EditRoad> m_Roads;
+    std::vector<EditNode> m_Nodes;
+    std::vector<EditMarking> m_Markings;
+    int m_NextLaneId = 1;
+    int m_NextRoadId = 1;
+    int m_NextNodeId = 1;
+    int m_NextMarkingId = 1;
+
+    Selection m_Selection = Selection::None;
+    int m_SelectedLane = -1;    // index into m_Lanes when m_Selection == Lane
+    int m_SelectedNode = -1;    // index into m_Nodes when m_Selection == Node
+    int m_SelectedMarking = -1; // index into m_Markings when m_Selection == Marking
+    int m_DraggingPoint = -1;
+
+    std::string m_LastSavePath;
+    std::string m_LastMarkingsSavePath;
+
+    std::vector<RenderObject> m_PointRenders;   // control-point & node spheres
+    std::vector<RenderObject> m_SplineRenders;  // red spline polylines (one per lane, always shown)
+    std::vector<RenderObject> m_MarkingRenders; // marking-line ribbons (solid/dashed), always shown
+
+    static constexpr float CP_RADIUS = 0.4f;
+    static constexpr float NODE_RADIUS = 0.5f;
+    static constexpr float GRID_SNAP = 1.0f;
+    static constexpr float LANE_GRID_SNAP = 0.5f;
+    static constexpr float MARKING_GRID_SNAP = 0.05f;
 };
 
 #endif

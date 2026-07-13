@@ -3,6 +3,7 @@
 
 #include "GameApp.h"
 #include "Entities/Car.h"
+#include "Nav/MarkingDataManager.h"
 
 class CarSim : public GameApp
 {
@@ -26,9 +27,11 @@ private:
     bool InitResource();
     void FocusOnObject(const std::shared_ptr<Car> &obj);
     void InitRoadRenderer();
+    void InitMarkingRenderer();
 
 private:
     RoadDataManager m_RoadDataManager;
+    MarkingDataManager m_MarkingDataManager;
 
     std::vector<std::shared_ptr<Car>> m_CarObjects;
 
@@ -38,6 +41,7 @@ private:
 
     std::vector<RenderObject> m_RoadRenders;
     std::vector<RenderObject> m_RoadEdgeRenders;
+    std::vector<RenderObject> m_MarkingRenders;
 };
 
 #endif

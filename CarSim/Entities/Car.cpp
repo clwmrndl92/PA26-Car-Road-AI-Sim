@@ -205,22 +205,49 @@ void Car::ChangeGear()
 
 bool Car::IsOffCourse()
 {
-    constexpr float OFF_COURSE_DISTANCE = 3.0f; // 스플라인과의 최대 허용 거리 (m)
+    constexpr float OFF_COURSE_DISTANCE = 5.0f;          // 스플라인과의 최대 허용 거리 (m)
+    constexpr float OFF_COURSE_ANGLE = ToRadians(90.0f); // 순간 조향각이 아니라 '회복 불가(역주행)' 감지용 고정 임계값
 
-    Vec3 position = m_rigidbody.GetPosition();
+    Vec3 position = GetPosition();
     Vec3 closestPoint = m_currentSpline.GetLookaheadPoint(position, 0.0f);
     float distance = (closestPoint - position).Length();
+    DebugConsole::Get().Log("IsOffCourse? distance " + to_string(distance));
     if (distance > OFF_COURSE_DISTANCE)
         return true;
 
-    float t = m_currentSpline.GetSplinePosition(position);
-    if (t < 0.0f)
+    // pure-pursuit가 실제 조향하는 기준인 lookahead 점 방향과 비교한다. (스플라인 순간 접선은 merge cusp 등에 휘둘림)
+    // 순간 heading 오차는 조향으로 흡수되므로, 90도를 넘는 '경로를 등진' 상태만 이탈로 본다.
+    float lookaheadDistance = std::max(5.0f, m_speed * 0.5f);
+    Vec3 toLookahead = m_currentSpline.GetLookaheadPoint(position, lookaheadDistance) - position;
+    if (toLookahead.Length() < 1e-4f)
         return false;
 
-    Vec3 splineDirection = m_currentSpline.GetDirectionAt(t);
-    float dot = std::clamp(GetForwardAxis().Dot(splineDirection), -1.0f, 1.0f);
-    float angleDiff = std::acos(dot);
-    return angleDiff > m_maxSteerAngle;
+    float dot = std::clamp(GetForwardAxis().Dot(toLookahead.Normalized()), -1.0f, 1.0f);
+    DebugConsole::Get().Log("IsOffCourse? angle " + to_string(std::acos(dot)));
+    return std::acos(dot) > OFF_COURSE_ANGLE;
+}
+
+void Car::MergeOntoLane(const shared_ptr<Lane> &lane, const Vec3 &position)
+{
+    m_currentLane = lane;
+    m_currentSpline = lane->GetSpline();
+
+    // 현재 위치에서 레인 위 전방 지점까지 짧은 연결 스플라인을 만들어 앞에 이어 붙여 부드럽게 합류한다.
+    float minRadius = powf(m_speed / CURVE_SPEED_COEFF, 2);
+    float width = m_RoadDataManager->ROAD_WIDTH;
+    float insideRoot = (4 * minRadius * width) - (width * width);
+    float L = insideRoot > 0 ? sqrt(insideRoot) : 5.0f;
+
+    Vec3 mergePoint = m_currentSpline.GetLookaheadPoint(position, L);
+    float mergeT = m_currentSpline.GetSplinePosition(mergePoint);
+
+    // phantom은 방향만 주면 된다 — 접선 세기(길이)는 Spline이 꺾임 각에 따라 tan로 자동 조정한다.
+    Spline connector({position - GetForwardAxis(),
+                      position,
+                      mergePoint,
+                      mergePoint + m_currentSpline.GetDirectionAt(mergeT)});
+    m_currentSpline.AddSplinePointsFront(connector.GetSplinePoints(), mergeT);
+    RebuildSplineRender();
 }
 
 void Car::MoveSpeedProfile()
@@ -238,7 +265,7 @@ void Car::MoveSpeedProfile()
     float targetDistance = (SPEED_PROFILE_COUNT - 1) * deltaTime * m_speed;
 
     const Spline *spline = &m_currentSpline;
-    shared_ptr<RoadNode> segmentNode = m_currentNode;
+    shared_ptr<Lane> segmentLane = m_currentLane;
     size_t pathIndex = m_pathIndex;
     Vec3 segmentStart = m_rigidbody.GetPosition();
     float remainingDistance = targetDistance;
@@ -268,18 +295,18 @@ void Car::MoveSpeedProfile()
         }
 
         remainingDistance -= segmentDistance;
-        shared_ptr<RoadNode> nextNode = (pathIndex + 1 < m_path.size()) ? m_path[pathIndex + 1] : nullptr;
-        if (!nextNode)
+        shared_ptr<Lane> nextLane = (pathIndex + 1 < m_path.size()) ? m_path[pathIndex + 1].lane : nullptr;
+        if (!nextLane)
         {
-            tailPosition = segmentNode->position;
-            tailSpeed = (segmentNode == m_destNode) ? 0.0f : maxSpeed;
+            tailPosition = segmentLane->GetEndPoint();
+            tailSpeed = (segmentLane == m_destLane) ? 0.0f : maxSpeed;
             break;
         }
 
-        maxSpeed = std::min(maxSpeed, nextNode->GetLimitSpeed());
-        segmentNode = nextNode;
-        segmentStart = nextNode->position;
-        spline = &segmentNode->lane->GetSpline();
+        maxSpeed = std::min(maxSpeed, nextLane->GetLimitSpeed());
+        segmentLane = nextLane;
+        segmentStart = nextLane->GetStartPoint();
+        spline = &nextLane->GetSpline();
         ++pathIndex;
     }
 
@@ -347,7 +374,8 @@ void Car::CalculateSpeedProfile()
 
         // 풀악셀로 달리기
         float remainTime = t - rampTime;
-        float fullAccelSpeedTime = std::max(0.0f, (m_maxSpeed - rampEndSpeed) / m_maxAccel);;
+        float fullAccelSpeedTime = std::max(0.0f, (m_maxSpeed - rampEndSpeed) / m_maxAccel);
+        ;
         float fullAccelTime = std::min(remainTime, fullAccelSpeedTime);
         float maxSpeed = rampEndSpeed + m_maxAccel * fullAccelTime;
         distance += (rampEndSpeed + maxSpeed) / 2.0f * fullAccelTime;
@@ -379,12 +407,12 @@ void Car::CalculateSpeedProfile()
         float currentNodeT = m_currentSpline.GetSplinePosition(calPosition);
         Assert(currentNodeT >= 0.0f); // CalculateSpeedProfile 호출 전엔 항상 m_currentSpline이 세팅되어 있어야 함
         float currentNodeDistance = m_currentSpline.GetLength() * (1.0f - currentNodeT);
-        float currentNodeSpeed = (m_currentNode == m_destNode) ? 0.0f : std::min(m_currentNode->GetLimitSpeed(), m_maxSpeed);
-        samples.push_back({currentNodeDistance, currentNodeSpeed, m_currentNode->position});
+        float currentNodeSpeed = (m_currentLane == m_destLane) ? 0.0f : std::min(m_currentLane->GetLimitSpeed(), m_maxSpeed);
+        samples.push_back({currentNodeDistance, currentNodeSpeed, m_currentLane->GetEndPoint()});
     }
     {
         const Spline *spline = &m_currentSpline;
-        shared_ptr<RoadNode> segmentNode = m_currentNode;
+        shared_ptr<Lane> segmentLane = m_currentLane;
         size_t pathIndex = m_pathIndex;
         Vec3 segmentStart = calPosition;
         float traveledDistance = 0.0f;
@@ -418,16 +446,21 @@ void Car::CalculateSpeedProfile()
             if (remainingDistance <= 0.0f)
                 break;
 
-            shared_ptr<RoadNode> nextNode = (pathIndex + 1 < m_path.size()) ? m_path[pathIndex + 1] : nullptr;
-            if (!nextNode)
+            shared_ptr<Lane> nextLane = (pathIndex + 1 < m_path.size()) ? m_path[pathIndex + 1].lane : nullptr;
+            if (!nextLane)
+            {
+                // 경로가 여기서 끝난다는 것은 이 레인이 destLane이라는 뜻: 진짜 정지 지점인 레인 끝에 0속도를 박는다.
+                if (segmentLane == m_destLane)
+                    samples.push_back({traveledDistance, 0.0f, segmentLane->GetEndPoint()});
                 break;
+            }
 
-            float nextNodeSpeed = (nextNode == m_destNode) ? 0.0f : std::min(nextNode->GetLimitSpeed(), m_maxSpeed);
-            samples.push_back({traveledDistance, nextNodeSpeed, nextNode->position});
+            float nextNodeSpeed = std::min(nextLane->GetLimitSpeed(), m_maxSpeed);
+            samples.push_back({traveledDistance, nextNodeSpeed, nextLane->GetStartPoint()});
 
-            segmentNode = nextNode;
-            segmentStart = nextNode->position;
-            spline = &segmentNode->lane->GetSpline();
+            segmentLane = nextLane;
+            segmentStart = nextLane->GetStartPoint();
+            spline = &nextLane->GetSpline();
             ++pathIndex;
         }
     }
@@ -679,7 +712,12 @@ void Car::UpdateTrail()
 void Car::RebuildTrailRender(RenderObject &render, const std::deque<DirectX::XMFLOAT3> &trail,
                              const std::string &name, const DirectX::XMFLOAT4 &color)
 {
+    constexpr float TRAIL_LINE_HEIGHT = 0.15f; // lift above the road edge lines (y = 0.1f)
+
     std::vector<DirectX::XMFLOAT3> points(trail.begin(), trail.end());
+    for (DirectX::XMFLOAT3 &point : points)
+        point.y += TRAIL_LINE_HEIGHT;
+
     Model *pModel = ModelManager::Get().CreateFromGeometry(name, Geometry::CreatePolyline(points));
     pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", color);
     pModel->materials[0].Set<float>("$Opacity", 1.0f);
@@ -695,10 +733,16 @@ void Car::RebuildSplineRender()
         return;
     }
 
+    constexpr float SPLINE_LINE_HEIGHT = 0.15f; // lift above the road edge lines (y = 0.1f)
+
     std::vector<DirectX::XMFLOAT3> points;
     points.reserve(splinePoints.size());
     for (const Vec3 &point : splinePoints)
-        points.push_back(ToXMFLOAT3(point));
+    {
+        DirectX::XMFLOAT3 p = ToXMFLOAT3(point);
+        p.y += SPLINE_LINE_HEIGHT;
+        points.push_back(p);
+    }
 
     Model *pModel = ModelManager::Get().CreateFromGeometry("__current_spline__:" + GetName(), Geometry::CreatePolyline(points));
     pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f));
