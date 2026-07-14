@@ -31,7 +31,7 @@ public:
     // 조작 및 제어 인터페이스 (Control Interface)
     void Accelerate(float desiredVelocity);
     void EmergBrake();
-    void Steer(float desiredRadian);
+    void Steer(float desiredRadian, float steerRamp = 0.4f);
     void ChangeGear(); // 속도가 낮을 때 전진/후진 기어 토글
     float GetSpeed() const { return m_speed; }
     float GetDeltaTime() const { return m_deltaTime; }
@@ -95,8 +95,8 @@ private:
     DriveMode DecideNextMode() const;
     void OnModeEnter(DriveMode mode);
     void OnModeExit(DriveMode mode);
-    // Park 모드의 RS 입/출차 경로를 계획하고 VehicleController에 실행시킨다.
-    // OnModeEnter(Park)(최초 진입)와 UpdatePark(주차칸 대기 중 새 목적지 발생) 양쪽에서 호출된다.
+    // Park 모드의 RS 입/출차 경로를 계획하고 VehicleController에 실행시킨다. 차가 완전히 멈춘
+    // 뒤(m_parkPlanPending 해소 시점)의 위치/방향을 시작점으로 써야 하므로 UpdatePark에서만 호출된다.
     void BeginParkPlan();
 
     void UpdateFindPath();
@@ -138,6 +138,7 @@ private:
     float m_mass = 1.0f;
     float m_maxSteerAngle = ToRadians(45.0f);        // 최대 조향각 (45도)
     static constexpr float CURVE_SPEED_COEFF = 0.8f; // 최대 코너링 속도 = CURVE_SPEED_COEFF * sqrt(R)
+    static constexpr float STEER_RAMP_RATE = 0.4f;
 
     // 컴포넌트 및 AI 상태 (Components & Systems)
     RoadDataManager *m_RoadDataManager = nullptr;
@@ -149,6 +150,9 @@ private:
     shared_ptr<RoadNode> m_parkSpot;        // 예약된 목표 주차칸(있는 동안은 "이 자리에 주차 중/주차 예정")
     shared_ptr<RoadNode> m_pendingParkNode; // 예약 전, 도착하면 그때 주차칸을 예약할 목표 Park 노드
     bool m_isExitingPark = false;           // 이번 Park 계획이 출차(주차칸->레인)인지, 입차(레인->주차칸)인지
+    // Park 모드에 막 진입해서 정지 대기 중인지. true인 동안은 RS 계획을 세우지 않고 감속만 하다가,
+    // 완전히 멈추면(m_speed==0) 그 위치/방향을 시작점으로 BeginParkPlan을 호출한다.
+    bool m_parkPlanPending = false;
     vector<LaneStep> m_path;
     size_t m_pathIndex = 0;
     static constexpr float LOOK_PROFILE_TIME = 5.0f;

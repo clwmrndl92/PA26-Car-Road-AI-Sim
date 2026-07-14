@@ -82,7 +82,8 @@ void Car::OnModeEnter(DriveMode mode)
     }
     else if (mode == DriveMode::Park)
     {
-        BeginParkPlan();
+        // 도착 즉시 RS를 계산하지 않고, 완전히 멈출 때까지 기다린다 (UpdatePark에서 처리).
+        m_parkPlanPending = true;
     }
 }
 
@@ -232,6 +233,18 @@ void Car::UpdateStop()
 
 void Car::UpdatePark()
 {
+    if (m_parkPlanPending)
+    {
+        // 완전히 정지할 때까지는 RS 계획을 세우지 않고 감속만 한다.
+        if (m_speed > 0.0f)
+        {
+            Accelerate(0.0f);
+            return;
+        }
+        m_parkPlanPending = false;
+        BeginParkPlan();
+    }
+
     m_vehicleController.Tick(*this);
     if (!m_vehicleController.IsFinished())
         return;

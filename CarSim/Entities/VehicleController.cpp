@@ -1,5 +1,6 @@
 #include "VehicleController.h"
 #include "Car.h"
+#include <cmath>
 
 void VehicleController::BeginPlan(std::vector<std::unique_ptr<VehicleSegment>> segments)
 {
@@ -33,6 +34,13 @@ void VehicleController::Tick(Car &car)
             return;
         }
         car.ChangeGear();
+        return;
+    }
+    std::optional<float> requiredSteer = m_segments[m_index]->GetRequiredSteerAngle();
+    if (requiredSteer.has_value() && std::fabs(car.GetSteerAngle() - *requiredSteer) > STEER_ALIGN_TOLERANCE &&
+        car.GetSpeed() > 0.0f)
+    {
+        car.EmergBrake();
         return;
     }
 

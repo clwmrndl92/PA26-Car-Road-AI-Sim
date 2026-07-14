@@ -230,14 +230,12 @@ void Car::Accelerate(float desiredVelocity)
     m_acceleration = SmoothStep(m_accelRampTime / duration) * maxLimit;
 }
 
-void Car::Steer(float radian)
+void Car::Steer(float radian, float steerRamp)
 {
-    constexpr float STEER_RAMP_RATE = 0.4f; // todo: vary 0.3 (calm) ~ 1.0 (urgent) by input intensity
-
     if (m_steerAngle > radian)
-        m_steerAngle -= STEER_RAMP_RATE * m_deltaTime;
+        m_steerAngle -= steerRamp * m_deltaTime;
     else if (m_steerAngle < radian)
-        m_steerAngle += STEER_RAMP_RATE * m_deltaTime;
+        m_steerAngle += steerRamp * m_deltaTime;
     else if (m_steerAngle > 0.0f) // Return to center
         m_steerAngle = std::max(m_steerAngle - m_deltaTime, 0.0f);
     else
