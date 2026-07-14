@@ -13,7 +13,7 @@ namespace Geometry
         using namespace DirectX;
 
         GeometryData geoData;
-        
+
         uint32_t vertexCount = 2 + (levels - 1) * (slices + 1);
         uint32_t indexCount = 6 * (levels - 1) * slices;
         geoData.vertices.resize(vertexCount);
@@ -37,7 +37,6 @@ namespace Geometry
         geoData.normals[vIndex] = XMFLOAT3(0.0f, 1.0f, 0.0f);
         geoData.tangents[vIndex] = XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f);
         geoData.texcoords[vIndex++] = XMFLOAT2(0.0f, 0.0f);
-
 
         for (uint32_t i = 1; i < levels; ++i)
         {
@@ -65,7 +64,6 @@ namespace Geometry
         geoData.tangents[vIndex] = XMFLOAT4(-1.0f, 0.0f, 0.0f, 1.0f);
         geoData.texcoords[vIndex++] = XMFLOAT2(0.0f, 1.0f);
 
-
         // Insert indices
         if (levels > 1)
         {
@@ -85,7 +83,6 @@ namespace Geometry
                 }
             }
         }
-
 
         for (uint32_t i = 1; i < levels - 1; ++i)
         {
@@ -111,7 +108,6 @@ namespace Geometry
                     geoData.indices16[iIndex++] = i * (slices + 1) + j;
                     geoData.indices16[iIndex++] = (i - 1) * (slices + 1) + j;
                 }
-                
             }
         }
 
@@ -213,14 +209,14 @@ namespace Geometry
         }
 
         geoData.indices16.resize(36);
-        
+
         uint16_t indices[] = {
-            0, 1, 2, 2, 3, 0,		// Right face (+X face)
-            4, 5, 6, 6, 7, 4,		// Left face (-X face)
-            8, 9, 10, 10, 11, 8,	// Top face (+Y face)
-            12, 13, 14, 14, 15, 12,	// Bottom face (-Y face)
+            0, 1, 2, 2, 3, 0,       // Right face (+X face)
+            4, 5, 6, 6, 7, 4,       // Left face (-X face)
+            8, 9, 10, 10, 11, 8,    // Top face (+Y face)
+            12, 13, 14, 14, 15, 12, // Bottom face (-Y face)
             16, 17, 18, 18, 19, 16, // Back face (+Z face)
-            20, 21, 22, 22, 23, 20	// Front face (-Z face)
+            20, 21, 22, 22, 23, 20  // Front face (-Z face)
         };
         memcpy_s(geoData.indices16.data(), sizeof indices, indices, sizeof indices);
 
@@ -345,7 +341,6 @@ namespace Geometry
                 geoData.texcoords[vIndex++] = XMFLOAT2(u, v);
             }
 
-
             // Insert top cap triangle indices
             for (uint32_t i = 1; i <= slices; ++i)
             {
@@ -361,7 +356,6 @@ namespace Geometry
                     geoData.indices16[iIndex++] = offset + i % (slices + 1) + 1;
                     geoData.indices16[iIndex++] = offset + i;
                 }
-
             }
 
             // Insert bottom cap triangle indices
@@ -382,7 +376,6 @@ namespace Geometry
                 }
             }
         }
-        
 
         return geoData;
     }
@@ -390,7 +383,7 @@ namespace Geometry
     GeometryData CreateCone(float radius, float height, uint32_t slices)
     {
         using namespace DirectX;
-        
+
         GeometryData geoData;
 
         uint32_t vertexCount = 3 * slices + 1;
@@ -409,7 +402,7 @@ namespace Geometry
         float theta = 0.0f;
         float per_theta = 2 * PI / slices;
         float len = sqrtf(height * height + radius * radius);
-        
+
         //
         // Cone lateral surface
         //
@@ -454,7 +447,7 @@ namespace Geometry
                 }
             }
         }
-        
+
         //
         // Cone base
         //
@@ -468,13 +461,13 @@ namespace Geometry
                 theta = i * per_theta;
 
                 geoData.vertices[vIndex] = XMFLOAT3(radius * cosf(theta), -h2, radius * sinf(theta)),
-                    geoData.normals[vIndex] = XMFLOAT3(0.0f, -1.0f, 0.0f);
+                geoData.normals[vIndex] = XMFLOAT3(0.0f, -1.0f, 0.0f);
                 geoData.tangents[vIndex] = XMFLOAT4(-1.0f, 0.0f, 0.0f, 1.0f);
                 geoData.texcoords[vIndex++] = XMFLOAT2(cosf(theta) / 2 + 0.5f, sinf(theta) / 2 + 0.5f);
             }
             // Insert cone base center vertex
             geoData.vertices[vIndex] = XMFLOAT3(0.0f, -h2, 0.0f),
-                geoData.normals[vIndex] = XMFLOAT3(0.0f, -1.0f, 0.0f);
+            geoData.normals[vIndex] = XMFLOAT3(0.0f, -1.0f, 0.0f);
             geoData.texcoords[vIndex++] = XMFLOAT2(0.5f, 0.5f);
 
             // Insert indices
@@ -493,15 +486,13 @@ namespace Geometry
                     geoData.indices16[iIndex++] = offset + i % slices;
                     geoData.indices16[iIndex++] = offset + (i + 1) % slices;
                 }
-
             }
         }
-        
 
         return geoData;
     }
 
-    GeometryData CreatePlane(const DirectX::XMFLOAT2& planeSize, const DirectX::XMFLOAT2& maxTexCoord)
+    GeometryData CreatePlane(const DirectX::XMFLOAT2 &planeSize, const DirectX::XMFLOAT2 &maxTexCoord)
     {
         return CreatePlane(planeSize.x, planeSize.y, maxTexCoord.x, maxTexCoord.y);
     }
@@ -511,12 +502,11 @@ namespace Geometry
         using namespace DirectX;
 
         GeometryData geoData;
-        
+
         geoData.vertices.resize(4);
         geoData.normals.resize(4);
         geoData.tangents.resize(4);
         geoData.texcoords.resize(4);
-
 
         uint32_t vIndex = 0;
         geoData.vertices[vIndex] = XMFLOAT3(-width / 2, 0.0f, -depth / 2);
@@ -539,15 +529,15 @@ namespace Geometry
         geoData.tangents[vIndex] = XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f);
         geoData.texcoords[vIndex++] = XMFLOAT2(texU, texV);
 
-        geoData.indices16 = { 0, 1, 2, 2, 3, 0 };
+        geoData.indices16 = {0, 1, 2, 2, 3, 0};
 
         return geoData;
     }
 
-    GeometryData CreateGrid(const DirectX::XMFLOAT2& gridSize, const DirectX::XMUINT2& slices, const DirectX::XMFLOAT2& maxTexCoord, 
-        const std::function<float(float, float)>& heightFunc, 
-        const std::function<DirectX::XMFLOAT3(float, float)>& normalFunc, 
-        const std::function<DirectX::XMFLOAT4(float, float)>& colorFunc)
+    GeometryData CreateGrid(const DirectX::XMFLOAT2 &gridSize, const DirectX::XMUINT2 &slices, const DirectX::XMFLOAT2 &maxTexCoord,
+                            const std::function<float(float, float)> &heightFunc,
+                            const std::function<DirectX::XMFLOAT3(float, float)> &normalFunc,
+                            const std::function<DirectX::XMFLOAT4(float, float)> &colorFunc)
     {
         using namespace DirectX;
 
@@ -625,22 +615,21 @@ namespace Geometry
                     geoData.indices16[iIndex++] = i * (slices.x + 1) + j + 1;
                     geoData.indices16[iIndex++] = i * (slices.x + 1) + j;
                 }
-                
             }
         }
 
         return geoData;
     }
 
-    GeometryData CreateLine(const DirectX::XMFLOAT3& from, const DirectX::XMFLOAT3& to)
+    GeometryData CreateLine(const DirectX::XMFLOAT3 &from, const DirectX::XMFLOAT3 &to)
     {
         using namespace DirectX;
 
         GeometryData geoData;
-        geoData.vertices = { from, to };
-        geoData.normals = { XMFLOAT3(0.0f, 1.0f, 0.0f), XMFLOAT3(0.0f, 1.0f, 0.0f) };
-        geoData.texcoords = { XMFLOAT2(0.0f, 0.0f), XMFLOAT2(0.0f, 0.0f) };
-        geoData.indices16 = { 0, 1 };
+        geoData.vertices = {from, to};
+        geoData.normals = {XMFLOAT3(0.0f, 1.0f, 0.0f), XMFLOAT3(0.0f, 1.0f, 0.0f)};
+        geoData.texcoords = {XMFLOAT2(0.0f, 0.0f), XMFLOAT2(0.0f, 0.0f)};
+        geoData.indices16 = {0, 1};
         return geoData;
     }
 
@@ -683,7 +672,7 @@ namespace Geometry
         return geoData;
     }
 
-    GeometryData CreatePolyline(const std::vector<DirectX::XMFLOAT3>& points)
+    GeometryData CreatePolyline(const std::vector<DirectX::XMFLOAT3> &points)
     {
         using namespace DirectX;
 
@@ -713,7 +702,7 @@ namespace Geometry
         return geoData;
     }
 
-    GeometryData CreateRibbon(const std::vector<DirectX::XMFLOAT3>& centerPoints, float width)
+    GeometryData CreateRibbon(const std::vector<DirectX::XMFLOAT3> &centerPoints, float width)
     {
         using namespace DirectX;
 
@@ -794,8 +783,8 @@ namespace Geometry
         return geoData;
     }
 
-    GeometryData CreateDashedRibbon(const std::vector<DirectX::XMFLOAT3>& centerPoints, float width,
-                                     float dashLength, float dashGap)
+    GeometryData CreateDashedRibbon(const std::vector<DirectX::XMFLOAT3> &centerPoints, float width,
+                                    float dashLength, float dashGap)
     {
         using namespace DirectX;
 

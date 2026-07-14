@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include "Spline.h"
 #include "Lane.h"
 #include "Road.h"
@@ -35,12 +36,17 @@ public:
     const vector<shared_ptr<RoadNode>> &GetNodes() const { return m_nodes; };
     const shared_ptr<RoadNode> GetNode(int nodeId) const;
 
+    // parkNodeId(Park 타입 노드)의 children 중 아직 예약되지 않은 ParkSpot을 하나 찾아 예약하고
+    // 반환한다. 빈 자리가 없으면 nullptr. 예약 상태는 정적 도로 데이터(RoadNode)와 분리해서
+    // 여기서만 관리한다.
+    shared_ptr<RoadNode> TryReserveParkSpot(int parkNodeId);
+    // spotNodeId의 예약을 해제한다 (출차 완료 시 호출).
+    void ReleaseParkSpot(int spotNodeId);
+
 public:
-    static constexpr float ROAD_WIDTH = 3.0f;
-    // 두 레인의 끝점/시작점이 이 거리 안이면 이어진 것으로 본다 (좌표가 0.5 격자라 여유 충분).
-    static constexpr float CONNECT_EPSILON = 0.1f;
-    // 차선변경(좌/우 인접 레인으로 이동) 간선의 비용. 잦은 차선변경을 억제한다.
-    static constexpr float LANE_CHANGE_COST = 15.0f;
+    static constexpr float ROAD_WIDTH = 3.2f;       // 차선 폭
+    static constexpr float CONNECT_EPSILON = 0.1f;  // 두 레인의 끝점/시작점이 이 거리 안이면 이어진 것으로 본다.
+    static constexpr float LANE_CHANGE_COST = 5.0f; // 차선변경(좌/우 인접 레인으로 이동) 간선의 비용
 
 private:
     // 레인 끝점 <-> 다른 레인 시작점을 공간 매칭해 successors를 자동 구성한다.
@@ -50,26 +56,22 @@ private:
     vector<shared_ptr<Lane>> m_lanes;
     vector<shared_ptr<Road>> m_roads;
     vector<shared_ptr<RoadNode>> m_nodes;
+    unordered_set<int> m_reservedParkSpotIds; // 예약된(다른 차가 목표로 잡은) ParkSpot 노드 id
 };
 
 enum class RoadNodeType
 {
     Unkown,
-    Start,
-    End,
-    Stop,
-    ChangeLane
+    Park,
+    ParkSpot
 };
 
 inline const unordered_map<string, RoadNodeType> &GetRoadNodeTypeByName()
 {
     static const unordered_map<string, RoadNodeType> map = {
         {"unknown", RoadNodeType::Unkown},
-        {"start", RoadNodeType::Start},
-        {"end", RoadNodeType::End},
-        {"stop", RoadNodeType::Stop},
-        {"changeLane", RoadNodeType::ChangeLane},
-    };
+        {"park", RoadNodeType::Park},
+        {"park_spot", RoadNodeType::ParkSpot}};
     return map;
 }
 
@@ -78,11 +80,9 @@ struct RoadNode
 {
     int id;
     Vec3 position;
-    RoadNodeType nodeType = RoadNodeType::End;
-    float lanePosition = 1.0f;
-    shared_ptr<Lane> lane;
-    float limitSpeed = 999.0f;
-
-    Vec3 GetDirection() const { return lane->GetSpline().GetDirectionAt(lanePosition); }
-    float GetLimitSpeed() const { return min(limitSpeed, lane->GetRoad()->GetSpeedLimit()); }
+    Vec3 direction;
+    RoadNodeType nodeType = RoadNodeType::Unkown;
+    // 예: Park 노드가 자기 소유의 ParkSpot 노드들을 참조 (소유는 RoadDataManager가 하므로
+    // Lane의 left/right처럼 weak_ptr로만 참조해 순환참조 누수를 막는다).
+    vector<weak_ptr<RoadNode>> children;
 };

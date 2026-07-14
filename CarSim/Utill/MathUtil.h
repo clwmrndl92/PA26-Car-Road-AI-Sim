@@ -24,8 +24,17 @@ inline std::string ToString(Vec3 v)
 {
     return std::to_string(v.GetX()) + " " + std::to_string(v.GetY()) + " " + std::to_string(v.GetZ());
 }
+inline std::string ToString(float f)
+{
+    return std::to_string(f);
+}
 
 constexpr float ToRadians(float degrees)
 {
     return degrees * (3.14159265358979323846f / 180.0f);
+}
+
+constexpr float ToDegrees(float radians)
+{
+    return radians * (180.0f / 3.14159265358979323846f);
 }

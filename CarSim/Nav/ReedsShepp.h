@@ -38,4 +38,10 @@ namespace ReedsShepp
     Path GetOptimalPath(const Vec3 &start, float startAngleDeg,
                         const Vec3 &end, float endAngleDeg,
                         float turningRadius);
+
+    // path를 start/startAngleDeg에서 시작해 실제 월드 좌표 폴리라인으로 샘플링한다 (디버그 렌더링용).
+    // ArcMoveSegment/Car::ApplyMotion과 같은 부호 규약(기어와 무관하게 Left/Right가 같은 곡률 방향)을
+    // 그대로 따른다.
+    std::vector<Vec3> SamplePath(const Path &path, const Vec3 &start, float startAngleDeg,
+                                 float turningRadius, float sampleSpacing = 0.5f);
 }

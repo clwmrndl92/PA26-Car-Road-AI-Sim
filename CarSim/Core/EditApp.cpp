@@ -251,8 +251,8 @@ void EditApp::RebuildRenderObjects()
             s.y += 0.05f; // lift slightly above the ground (below the lane spline's +0.1f lift)
 
         GeometryData geo = marking.type == MarkingLineType::Dashed
-                                ? Geometry::CreateDashedRibbon(samples, marking.width, marking.dashLength, marking.dashGap)
-                                : Geometry::CreateRibbon(samples, marking.width);
+                               ? Geometry::CreateDashedRibbon(samples, marking.width, marking.dashLength, marking.dashGap)
+                               : Geometry::CreateRibbon(samples, marking.width);
         if (geo.vertices.empty())
             continue;
 
@@ -393,13 +393,15 @@ void EditApp::SaveToJson()
     root["nodes"] = json::array();
     for (const auto &n : m_Nodes)
     {
-        root["nodes"].push_back({{"id", n.id},
-                                 {"position", {n.position.x, n.position.y, n.position.z}},
-                                 {"type", n.type},
-                                 {"description", n.description}});
+        json jn;
+        jn["id"] = n.id;
+        jn["position"] = {n.position.x, n.position.y, n.position.z};
+        jn["direction"] = {n.direction.x, n.direction.y, n.direction.z};
+        jn["type"] = n.type;
+        if (!n.children.empty())
+            jn["child"] = n.children;
+        root["nodes"].push_back(jn);
     }
-
-    std::filesystem::create_directories("Data");
 
     std::time_t t = std::time(nullptr);
     std::tm tm{};
@@ -407,7 +409,7 @@ void EditApp::SaveToJson()
     char stamp[32];
     std::strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", &tm);
 
-    std::string path = std::string("Data/") + stamp + ".json";
+    std::string path = std::string(NAV_DATA_DIR "/") + stamp + ".json";
     std::ofstream ofs(path);
     if (ofs)
     {
@@ -476,8 +478,12 @@ void EditApp::LoadFromJson(const std::filesystem::path &path)
         const auto &pos = jn.value("position", nlohmann::json::array());
         if (pos.is_array() && pos.size() >= 3)
             n.position = XMFLOAT3(pos[0].get<float>(), pos[1].get<float>(), pos[2].get<float>());
-        copyStr(n.type, sizeof(n.type), jn.value("type", std::string("end")));
-        copyStr(n.description, sizeof(n.description), jn.value("description", std::string("")));
+        const auto &dir = jn.value("direction", nlohmann::json::array());
+        if (dir.is_array() && dir.size() >= 3)
+            n.direction = XMFLOAT3(dir[0].get<float>(), dir[1].get<float>(), dir[2].get<float>());
+        copyStr(n.type, sizeof(n.type), jn.value("type", std::string("unknown")));
+        for (const auto &childIdJson : jn.value("child", nlohmann::json::array()))
+            n.children.push_back(childIdJson.get<int>());
         m_Nodes.push_back(n);
     }
 
@@ -512,7 +518,8 @@ void EditApp::SaveMarkingsToJson()
         jm["id"] = m.id;
         jm["type"] = (m.type == MarkingLineType::Dashed) ? "dashed" : "solid";
         jm["width"] = m.width;
-        jm["color"] = m.color == MarkingColor::Yellow ? "yellow" : m.color == MarkingColor::Gray ? "gray" : "white";
+        jm["color"] = m.color == MarkingColor::Yellow ? "yellow" : m.color == MarkingColor::Gray ? "gray"
+                                                                                                 : "white";
         jm["dash_length"] = m.dashLength;
         jm["dash_gap"] = m.dashGap;
 
@@ -529,7 +536,7 @@ void EditApp::SaveMarkingsToJson()
         root["markings"].push_back(jm);
     }
 
-    std::filesystem::create_directories("Data/Markings");
+    std::filesystem::create_directories(NAV_DATA_DIR "/");
 
     std::time_t t = std::time(nullptr);
     std::tm tm{};
@@ -537,7 +544,7 @@ void EditApp::SaveMarkingsToJson()
     char stamp[32];
     std::strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", &tm);
 
-    std::string path = std::string("Data/Markings/") + stamp + ".json";
+    std::string path = std::string(NAV_DATA_DIR "/") + stamp + "marking.json";
     std::ofstream ofs(path);
     if (ofs)
     {
@@ -575,7 +582,8 @@ void EditApp::LoadMarkingsFromJson(const std::filesystem::path &path)
         m.type = (jm.value("type", std::string("solid")) == "dashed") ? MarkingLineType::Dashed : MarkingLineType::Solid;
         m.width = jm.value("width", 0.15f);
         std::string colorStr = jm.value("color", std::string("white"));
-        m.color = (colorStr == "yellow") ? MarkingColor::Yellow : (colorStr == "gray") ? MarkingColor::Gray : MarkingColor::White;
+        m.color = (colorStr == "yellow") ? MarkingColor::Yellow : (colorStr == "gray") ? MarkingColor::Gray
+                                                                                       : MarkingColor::White;
         m.dashLength = jm.value("dash_length", 3.0f);
         m.dashGap = jm.value("dash_gap", 5.0f);
         for (const auto &pt : jm.value("points", nlohmann::json::array()))
@@ -642,9 +650,9 @@ void EditApp::DrawToolbarWindow()
             std::error_code ec;
 
             std::vector<fs::path> files;
-            if (fs::exists("Data", ec))
+            if (fs::exists(NAV_DATA_DIR, ec))
             {
-                for (const auto &entry : fs::directory_iterator("Data", ec))
+                for (const auto &entry : fs::directory_iterator(NAV_DATA_DIR, ec))
                 {
                     if (entry.is_regular_file() && entry.path().extension() == ".json")
                         files.push_back(entry.path());
@@ -656,7 +664,7 @@ void EditApp::DrawToolbarWindow()
 
             if (files.empty())
             {
-                ImGui::TextDisabled("No .json in Data/");
+                ImGui::TextDisabled("No .json in " NAV_DATA_DIR "/");
             }
             else
             {
@@ -689,9 +697,9 @@ void EditApp::DrawToolbarWindow()
             std::error_code ec;
 
             std::vector<fs::path> files;
-            if (fs::exists("Data/Markings", ec))
+            if (fs::exists(NAV_DATA_DIR "/", ec))
             {
-                for (const auto &entry : fs::directory_iterator("Data/Markings", ec))
+                for (const auto &entry : fs::directory_iterator(NAV_DATA_DIR "/", ec))
                 {
                     if (entry.is_regular_file() && entry.path().extension() == ".json")
                         files.push_back(entry.path());
@@ -702,7 +710,7 @@ void EditApp::DrawToolbarWindow()
 
             if (files.empty())
             {
-                ImGui::TextDisabled("No .json in Data/Markings/");
+                ImGui::TextDisabled("No .json in " NAV_DATA_DIR "/");
             }
             else
             {
@@ -945,8 +953,43 @@ void EditApp::DrawNodeEditWindow()
         if (ImGui::InputFloat3("Position", pos))
             node.position = XMFLOAT3(pos[0], pos[1], pos[2]);
         ImGui::TextDisabled("(or drag the yellow sphere)");
-        ImGui::InputText("type", node.type, sizeof(node.type));
-        ImGui::InputText("description", node.description, sizeof(node.description));
+
+        float dir[3] = {node.direction.x, node.direction.y, node.direction.z};
+        if (ImGui::InputFloat3("Direction", dir))
+            node.direction = XMFLOAT3(dir[0], dir[1], dir[2]);
+        ImGui::TextDisabled("(ParkSpot's target heading; unused by other types)");
+
+        // RoadDataManager::GetRoadNodeTypeByName()이 인식하는 값만 골라 오타를 방지한다.
+        static const char *typeNames[] = {"unknown", "park", "park_spot"};
+        int typeIdx = 0;
+        for (int i = 0; i < IM_ARRAYSIZE(typeNames); ++i)
+        {
+            if (std::string(node.type) == typeNames[i])
+            {
+                typeIdx = i;
+                break;
+            }
+        }
+        if (ImGui::Combo("type", &typeIdx, typeNames, IM_ARRAYSIZE(typeNames)))
+            snprintf(node.type, sizeof(node.type), "%s", typeNames[typeIdx]);
+
+        ImGui::Separator();
+        ImGui::Text("Children (e.g. Park -> ParkSpot ids)");
+        int eraseIdx = -1;
+        for (int i = 0; i < (int)node.children.size(); ++i)
+        {
+            ImGui::PushID(i);
+            ImGui::SetNextItemWidth(100.0f);
+            ImGui::InputInt("##child", &node.children[i]);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("X"))
+                eraseIdx = i;
+            ImGui::PopID();
+        }
+        if (eraseIdx >= 0)
+            node.children.erase(node.children.begin() + eraseIdx);
+        if (ImGui::Button("Add Child"))
+            node.children.push_back(0);
     }
     ImGui::End();
 

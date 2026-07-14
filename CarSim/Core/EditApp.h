@@ -10,10 +10,10 @@
 // Reuses GameApp's window / free camera and adds:
 //  - lane / road / node list windows (Add -> auto id)
 //  - a per-lane edit window (road / left / right ids + control points)
-//  - a per-node edit window (type / description + draggable position)
+//  - a per-node edit window (type / direction / children + draggable position)
 //  - control points & node positions rendered as spheres, drag-and-drop on the
 //    grid (1-unit snap); a red Catmull-Rom spline once a lane has >= 4 points
-//  - a fixed top-right toolbar with a Save button (-> Data/<timestamp>.json)
+//  - a fixed top-right toolbar with a Save button (-> CarSim/Nav/<timestamp>.json)
 class EditApp : public GameApp
 {
 public:
@@ -68,8 +68,12 @@ private:
     {
         int id = -1;
         DirectX::XMFLOAT3 position{0.0f, 0.0f, 0.0f};
-        char type[32] = "end";
-        char description[128] = "";
+        // Park/ParkSpot처럼 자기만의 목표 heading이 필요한 노드용. RoadDataManager의 RoadNode와
+        // 필드를 맞춘 것 (기본값도 로더의 fallback인 +X와 동일).
+        DirectX::XMFLOAT3 direction{1.0f, 0.0f, 0.0f};
+        char type[32] = "unknown"; // "unknown" | "park" | "park_spot" (RoadNodeType과 매칭)
+        // 예: Park 노드가 자기 소유의 ParkSpot 노드 id들을 참조 (RoadNode::children과 같은 개념).
+        std::vector<int> children;
     };
 
     // Freehand road-marking line (lane paint, median, shoulder), independent of EditLane's

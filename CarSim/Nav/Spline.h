@@ -15,6 +15,7 @@ public:
     float GetLength() const { return m_length; }
 
     Vec3 GetLookaheadPoint(const Vec3 &position, float lookaheadDistance) const;
+    Vec3 GetPositionAt(float t) const;
     Vec3 GetDirectionAt(float t) const;
     float GetMinRadiusAhead(float start, float end, float *outApexT = nullptr) const;
     bool IsStraight() const;

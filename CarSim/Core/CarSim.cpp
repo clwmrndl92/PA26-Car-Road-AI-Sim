@@ -244,7 +244,7 @@ bool CarSim::InitResource()
         auto car = std::make_shared<Car>();
         car->Init(GetCarSpec(CarType::Car0), &m_RoadDataManager, JPH::Vec3(-10.0f, 0.1f, -10.0f));
         car->SetDrawCollider(true);
-        car->SetDestination(m_RoadDataManager.GetClosestLaneEnd(m_RoadDataManager.GetNode(1)->position));
+        car->SetDestination(m_RoadDataManager.GetNode(1));
 
         m_GameObjects.push_back(car);
         m_CarObjects.push_back(car);
@@ -281,7 +281,7 @@ void CarSim::InitCamera()
 }
 void CarSim::InitRoadRenderer()
 {
-    constexpr float ROAD_WIDTH = 3.0f;
+    constexpr float ROAD_WIDTH = RoadDataManager::ROAD_WIDTH;
     constexpr float NODE_MARKER_RADIUS = 0.5f;
     constexpr float EDGE_LINE_HEIGHT = 0.1f;
 

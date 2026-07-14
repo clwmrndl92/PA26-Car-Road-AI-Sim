@@ -1,17 +1,19 @@
 #pragma once
 #include "Core/GameObject.h"
 #include "CarSpec.h"
+#include "VehicleController.h"
 #include <cmath>
 #include <deque>
 #include <string>
 #include <array>
 #include <Nav/RoadDataManager.h>
+#include "Nav/ReedsShepp.h"
 
 class Car : public GameObject
 {
 public:
     // 생명주기 및 초기화 (Lifecycle & Initialization)
-    void Init(const CarSpec &spec, const RoadDataManager *roadDataManager, JPH::Vec3 position = JPH::Vec3::sZero());
+    void Init(const CarSpec &spec, RoadDataManager *roadDataManager, JPH::Vec3 position = JPH::Vec3::sZero());
 
     // 부모 클래스 오버라이드 함수 (Overrides)
     void Update(float dt) override;
@@ -24,13 +26,22 @@ public:
 
     // Getter / Setter (Accessors)
     void SetFocused(bool focused) { m_isFocused = focused; }
-    void SetDestination(std::shared_ptr<Lane> lane) { m_destLane = lane; }
+    void SetDestination(const shared_ptr<RoadNode> &parkNode);
 
-        // 조작 및 제어 인터페이스 (Control Interface)
+    // 조작 및 제어 인터페이스 (Control Interface)
     void Accelerate(float desiredVelocity);
     void EmergBrake();
     void Steer(float desiredRadian);
     void ChangeGear(); // 속도가 낮을 때 전진/후진 기어 토글
+    float GetSpeed() const { return m_speed; }
+    float GetDeltaTime() const { return m_deltaTime; }
+    bool IsReverse() const { return m_isReverse; }
+    // Steer()가 램프 중인 실제 현재 조향각 (목표각과 다를 수 있음 - ArcMoveSegment가 정렬 여부 판단에 사용).
+    float GetSteerAngle() const { return m_steerAngle; }
+
+    // VehicleSegment(SplineFollowSegment)가 호출하는 정속주행 제어 한 틱. VehicleController를
+    // 통해서만 호출되도록 의도된 것이라 AI 흐름 밖에서 직접 부르지 않는다.
+    void DriveControl();
 
 private:
     // 내부 물리 및 제어 로직 (Internal Physics & Control)
@@ -44,31 +55,55 @@ private:
 
     // 디버그 및 트레일(자국) 렌더링 (Debug & Rendering Helpers)
     void UpdateDebugWindow();
+    // 1~4초 뒤 목표 속도/위치를 보여주는 ImGui 창. 목표 위치는 노란 구 마커로도 표시한다.
+    void UpdateSpeedProfileWindow();
     void UpdateTrail();
     void RebuildTrailRender(RenderObject &render, const std::deque<DirectX::XMFLOAT3> &trail,
                             const std::string &name, const DirectX::XMFLOAT4 &color);
     void RebuildSplineRender();
-
-    // 인공지능 / 주행 로직 (AI / Driving Logic)
-    // 최상위 주행 모드. 매 프레임 UpdateMode()가 (히스테리시스를 적용해) 한 번만 결정하고,
-    // Update()는 그 결과(m_mode)에 따라 해당 로직만 실행한다.
-    enum class DriveMode
-    {
-        Stop,
-        Park, // TODO: Reeds-Shepp 기반 진입/주차 로직과 연결 예정. 아직 DecideNextMode가 반환하지 않음.
-        Drive
-    };
+    // Park 계획(OnModeEnter(Park))이 세워질 때 RS 경로 폴리라인 + 목표 위치/방향을 바닥에 그린다.
+    void RebuildParkDebugRender(const ReedsShepp::Path &path, const Vec3 &startPos, float startAngleDeg,
+                                float turningRadius, const Vec3 &targetPos, float targetAngleDeg);
 
     bool IsOffCourse();
 
+    // 현재 향하고 있는 park 목표 노드. 예약이 이미 됐으면 m_parkSpot, 아직이면 m_pendingParkNode.
+    // 어느 쪽이든 "park 관련 목적지가 있다"만 확인하면 되는 곳(DecideNextMode의 도착 판정 등)에서 쓴다.
+    shared_ptr<RoadNode> GetParkTargetNode() const { return m_parkSpot ? m_parkSpot : m_pendingParkNode; }
+
     // 모드 FSM: 매 프레임 한 번 돌며, 모드가 바뀔 때만 OnModeExit/OnModeEnter를 호출한다.
+    enum class DriveMode
+    {
+        Stop,
+        Park, // Reeds-Shepp 기반 입차/출차. m_parkSpot이 있을 때만 DecideNextMode가 진입시킴.
+        Drive
+    };
+    const char *Car::DriveModeToString(DriveMode mode) const
+    {
+        switch (mode)
+        {
+        case DriveMode::Stop:
+            return "Stop";
+        case DriveMode::Park:
+            return "Park";
+        case DriveMode::Drive:
+            return "Drive";
+        }
+        return "?";
+    }
     void UpdateMode();
     DriveMode DecideNextMode() const;
     void OnModeEnter(DriveMode mode);
     void OnModeExit(DriveMode mode);
-    const char *DriveModeToString(DriveMode mode) const;
+    // Park 모드의 RS 입/출차 경로를 계획하고 VehicleController에 실행시킨다.
+    // OnModeEnter(Park)(최초 진입)와 UpdatePark(주차칸 대기 중 새 목적지 발생) 양쪽에서 호출된다.
+    void BeginParkPlan();
 
     void UpdateFindPath();
+    // m_currentLane이 이미 정해진 상태에서 m_destLane까지 경로를 찾아 m_path/m_currentSpline을
+    // 채운다. 도달 불가능하면 destLane/currentLane을 비운다. UpdateFindPath와 출차 완료
+    // (UpdatePark) 양쪽에서 공유.
+    void EnterCurrentLane();
 
     // 현재 위치에서 주어진 레인 위로 합류하는 연결 스플라인을 만들어 m_currentSpline에 세팅한다.
     void MergeOntoLane(const shared_ptr<Lane> &lane, const Vec3 &position);
@@ -80,11 +115,16 @@ private:
     void UpdateDrive();
     // 경로상 다음 레인으로 넘어갈지 판단/처리. false면 경로가 끝난 것이므로 이번 프레임은 조향/가속 제어를 건너뛴다.
     bool CheckPath();
-    // TODO: 센서 기반 장애물 회피. 지금은 항상 false를 반환해 DriveControl로 넘긴다.
+    // TODO: 센서 기반 장애물 회피. 지금은 항상 false를 반환해 VehicleController로 넘긴다.
     bool TryAvoidObstacle();
-    void DriveControl();
 
-private: // 멤버 변수 구역
+public:
+    // 차선 진입 허용 오차/임계값 (예: 현재 타깃 차선에 안착했는지 확인하는 기준)
+    static constexpr float LANE_ENTRY_THRESHOLD = 5.0f;
+    // 다음 차선으로 완전히 넘어가는(전환되는) 임계값
+    static constexpr float LANE_TRANSITION_THRESHOLD = 2.0f;
+
+private:
     // 설정 및 스펙 상수/변수 (Constants & Specifications)
     const float m_maxSpeed = 200.0f / 3.6f;           // 200 km/h
     const float m_maxAccel = (100.0f / 3.6f) / 14.0f; // 0-100 km/h in 14s
@@ -100,11 +140,15 @@ private: // 멤버 변수 구역
     static constexpr float CURVE_SPEED_COEFF = 0.8f; // 최대 코너링 속도 = CURVE_SPEED_COEFF * sqrt(R)
 
     // 컴포넌트 및 AI 상태 (Components & Systems)
-    const RoadDataManager *m_RoadDataManager = nullptr;
+    RoadDataManager *m_RoadDataManager = nullptr;
     bool m_isFocused = false; // 포커스 여부 (입력 처리용)
     DriveMode m_mode = DriveMode::Stop;
+    VehicleController m_vehicleController; // DriveMode가 세운 계획(세그먼트)을 실제로 실행
     shared_ptr<Lane> m_destLane;
     shared_ptr<Lane> m_currentLane;
+    shared_ptr<RoadNode> m_parkSpot;        // 예약된 목표 주차칸(있는 동안은 "이 자리에 주차 중/주차 예정")
+    shared_ptr<RoadNode> m_pendingParkNode; // 예약 전, 도착하면 그때 주차칸을 예약할 목표 Park 노드
+    bool m_isExitingPark = false;           // 이번 Park 계획이 출차(주차칸->레인)인지, 입차(레인->주차칸)인지
     vector<LaneStep> m_path;
     size_t m_pathIndex = 0;
     static constexpr float LOOK_PROFILE_TIME = 5.0f;
@@ -144,6 +188,10 @@ private: // 멤버 변수 구역
     RenderObject m_steerLine;
     RenderObject m_targetMarker;
     RenderObject m_splineRender;
+    RenderObject m_parkPathRender;                     // Park 계획(RS 경로) 폴리라인
+    RenderObject m_parkTargetMarker;                   // Park 목표 위치
+    RenderObject m_parkTargetLine;                     // Park 목표 방향
+    std::array<RenderObject, 4> m_speedProfileMarkers; // 1~4초 뒤 속도 프로파일 목표 위치 (노란 구)
 };
 
 static float CalcMaxSteerAngle(float speed)

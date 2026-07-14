@@ -69,7 +69,7 @@ std::vector<Vec3> Spline::ComputeSplinePoints()
     std::vector<Vec3> splinePoints;
     m_length = 0.0f;
     int n = static_cast<int>(m_controlPoints.size());
-    if (n < 4) 
+    if (n < 4)
         return splinePoints; // Not enough control points for Catmull-Rom spline
 
     // 양 끝 control point(phantom)은 그려지지 않고 끝점의 접선만 정한다.
@@ -87,7 +87,7 @@ std::vector<Vec3> Spline::ComputeSplinePoints()
         constexpr float DIST_AT_45 = 15.0f;
         constexpr float DIST_AT_150 = 250.0f;
 
-        Vec3 arm = phantom - endpoint;  // endpoint -> phantom (접선 팔 방향)
+        Vec3 arm = phantom - endpoint; // endpoint -> phantom (접선 팔 방향)
         float armLen = arm.Length();
         Vec3 seg = interior - endpoint; // endpoint -> 첫 실제 이웃 (곡선 진행 방향)
         float segLen = seg.Length();
@@ -161,6 +161,16 @@ Vec3 Spline::GetLookaheadPoint(const Vec3 &position, float lookaheadDistance) co
     return splinePoints[lookaheadIndex];
 }
 
+Vec3 Spline::GetPositionAt(float t) const
+{
+    if (m_splinePoints.empty())
+        return Vec3(0.0f, 0.0f, 0.0f);
+
+    // t=1.0이면 size()가 나와 배열 끝을 벗어나므로 마지막 인덱스로 클램프한다.
+    int lastIndex = static_cast<int>(m_splinePoints.size()) - 1;
+    int index = std::clamp(static_cast<int>(static_cast<float>(m_splinePoints.size()) * t), 0, lastIndex);
+    return m_splinePoints[index];
+}
 Vec3 Spline::GetDirectionAt(float t) const
 {
     int n = static_cast<int>(m_controlPoints.size());

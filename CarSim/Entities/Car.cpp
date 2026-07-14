@@ -18,15 +18,13 @@ namespace
     }
 } // namespace
 
-void Car::Init(const CarSpec &spec, const RoadDataManager *roadDataManager, JPH::Vec3 position)
+void Car::Init(const CarSpec &spec, RoadDataManager *roadDataManager, JPH::Vec3 position)
 {
     SetName(spec.name);
     m_render.SetModel(ModelManager::Get().CreateFromFile(spec.modelPath));
     SetRenderOffset(ToXMFLOAT3(spec.renderOffset));
     m_wheelbase = spec.wheelbase;
 
-    // `position` is the front axle; GameObject::Init() below seeds the rigidbody from
-    // m_transform, which must hold the rear axle, so convert before creating the body.
     DirectX::XMFLOAT3 fwd = m_transform.GetForwardAxis();
     m_transform.SetPosition(position.GetX() - fwd.x * m_wheelbase,
                             position.GetY() - fwd.y * m_wheelbase,
@@ -38,14 +36,32 @@ void Car::Init(const CarSpec &spec, const RoadDataManager *roadDataManager, JPH:
     m_spawnRotation = m_transform.GetRotationQuat();
     m_mass = spec.mass;
 
-    // Line sticking out the front of the car, showing the current steering direction
+    m_RoadDataManager = roadDataManager;
+
+    // 실제 RoadDataManager에 등록된(예약 관리되는) 자리는 아니지만, "지금 여기서부터 출발했다"는
+    // 자세를 들고 있어야 최초 출발도 RS 출차 매커니즘을 그대로 탈 수 있다. id는 예약 시스템이
+    // 신경쓰지 않는 값(-1)으로 둔다.
+    m_parkSpot = make_shared<RoadNode>();
+    m_parkSpot->id = -1;
+    // 노드 위치는 다른 RoadNode와 마찬가지로 앞바퀴축(GetPosition()) 기준. 뒷바퀴축은 회전(RS
+    // 등 kinematic) 계산에서만 쓰고, 여기선 변환하지 않는다 (OnModeEnter(Park)에서 필요시 변환).
+    m_parkSpot->position = GetPosition();
+    m_parkSpot->direction = GetForwardAxis();
+    m_parkSpot->nodeType = RoadNodeType::ParkSpot;
+
+    for (auto &item : m_speedProfile)
+    {
+        item.first = Vec3::sZero();
+        item.second = 0.0f;
+    }
+
+    // DEBUG
     Model *pLine = ModelManager::Get().CreateFromGeometry("__steer_line__:" + GetName(),
-                                                          Geometry::CreateLine(DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f), DirectX::XMFLOAT3(0.0f, 0.0f, 6.0f)));
+                                                          Geometry::CreateLine(DirectX::XMFLOAT3(0.0f, 0.15f, 0.0f), DirectX::XMFLOAT3(0.0f, 0.15f, 6.0f)));
     pLine->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f));
     pLine->materials[0].Set<float>("$Opacity", 1.0f);
     m_steerLine.SetModel(pLine);
 
-    // Small red marker showing the current lookahead target on the road
     constexpr float TARGET_MARKER_SIZE = 0.5f;
     Model *pTargetMarker = ModelManager::Get().CreateFromGeometry("__target_marker__:" + GetName(),
                                                                   Geometry::CreatePlane(TARGET_MARKER_SIZE, TARGET_MARKER_SIZE));
@@ -53,21 +69,29 @@ void Car::Init(const CarSpec &spec, const RoadDataManager *roadDataManager, JPH:
     pTargetMarker->materials[0].Set<float>("$Opacity", 1.0f);
     m_targetMarker.SetModel(pTargetMarker);
 
-    m_RoadDataManager = roadDataManager;
+    // Park(RS) 목표 위치 마커 — 위치만 바뀌므로 모델은 한 번만 만들어두고 재사용한다.
+    Model *pParkTargetMarker = ModelManager::Get().CreateFromGeometry("__park_target_marker__:" + GetName(),
+                                                                      Geometry::CreatePlane(TARGET_MARKER_SIZE, TARGET_MARKER_SIZE));
+    pParkTargetMarker->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f));
+    pParkTargetMarker->materials[0].Set<float>("$Opacity", 1.0f);
+    m_parkTargetMarker.SetModel(pParkTargetMarker);
 
-    for (auto &item : m_speedProfile)
-    {
-        item.first = Vec3::sZero();
-        item.second = 0.0f;
-    }
+    // 속도 프로파일 1~4초 뒤 목표 위치 마커 (노란 구, 모델 하나를 4개 RenderObject가 공유)
+    constexpr float SPEED_PROFILE_MARKER_RADIUS = 0.3f;
+    Model *pSpeedProfileMarker = ModelManager::Get().CreateFromGeometry("__speed_profile_marker__:" + GetName(),
+                                                                        Geometry::CreateSphere(SPEED_PROFILE_MARKER_RADIUS, 8, 8));
+    pSpeedProfileMarker->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f));
+    pSpeedProfileMarker->materials[0].Set<float>("$Opacity", 1.0f);
+    for (RenderObject &marker : m_speedProfileMarkers)
+        marker.SetModel(pSpeedProfileMarker);
 }
 
 void Car::Update(float dt)
 {
     m_deltaTime = dt;
     m_currentTime += dt;
+    UpdateFindPath(); // Update Mode 보다 먼저 실행돼야함
     UpdateMode();
-    UpdateFindPath();
     switch (m_mode)
     {
     case DriveMode::Stop:
@@ -82,6 +106,7 @@ void Car::Update(float dt)
     }
     UpdateCar();
     UpdateDebugWindow();
+    UpdateSpeedProfileWindow();
     ApplyMotion();
     UpdateTrail();
 }
@@ -90,7 +115,8 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
 {
     GameObject::Draw(context, effect);
 
-    if (m_drawCollider && (m_rearTrailRender.GetModel() || m_frontTrailRender.GetModel() || m_splineRender.GetModel()))
+    if (m_drawCollider && (m_rearTrailRender.GetModel() || m_frontTrailRender.GetModel() || m_splineRender.GetModel() ||
+                           m_parkPathRender.GetModel() || m_parkTargetLine.GetModel()))
     {
         if (auto *pBasic = dynamic_cast<BasicEffect *>(&effect))
         {
@@ -101,6 +127,10 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
                 m_frontTrailRender.Draw(context, effect);
             if (m_splineRender.GetModel())
                 m_splineRender.Draw(context, effect);
+            if (m_parkPathRender.GetModel())
+                m_parkPathRender.Draw(context, effect);
+            if (m_parkTargetLine.GetModel())
+                m_parkTargetLine.Draw(context, effect);
             pBasic->SetRenderDefault();
         }
     }
@@ -131,6 +161,13 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
 
     if (m_targetMarker.GetModel())
         m_targetMarker.Draw(context, effect);
+    if (m_parkTargetMarker.GetModel())
+        m_parkTargetMarker.Draw(context, effect);
+    for (RenderObject &marker : m_speedProfileMarkers)
+    {
+        if (marker.GetModel())
+            marker.Draw(context, effect);
+    }
 }
 
 Vec3 Car::GetPosition() const
@@ -222,7 +259,6 @@ bool Car::IsOffCourse()
     Vec3 position = GetPosition();
     Vec3 closestPoint = m_currentSpline.GetLookaheadPoint(position, 0.0f);
     float distance = (closestPoint - position).Length();
-    DebugConsole::Get().Log("IsOffCourse? distance " + to_string(distance));
     if (distance > OFF_COURSE_DISTANCE)
         return true;
 
@@ -234,7 +270,6 @@ bool Car::IsOffCourse()
         return false;
 
     float dot = std::clamp(GetForwardAxis().Dot(toLookahead.Normalized()), -1.0f, 1.0f);
-    DebugConsole::Get().Log("IsOffCourse? angle " + to_string(std::acos(dot)));
     return std::acos(dot) > OFF_COURSE_ANGLE;
 }
 
@@ -249,14 +284,50 @@ void Car::MergeOntoLane(const shared_ptr<Lane> &lane, const Vec3 &position)
     float insideRoot = (4 * minRadius * width) - (width * width);
     float L = insideRoot > 0 ? sqrt(insideRoot) : 5.0f;
 
-    Vec3 mergePoint = m_currentSpline.GetLookaheadPoint(position, L);
+    // L이 현재 레인 안에서 안 나오면(레인이 짧으면) 경로상 다음 레인까지 봐서 병합 목표 지점/방향을
+    // 잡는다 (CalculateSpeedProfile/MoveSpeedProfile의 레인-워크와 같은 패턴).
+    const Spline *spline = &m_currentSpline;
+    size_t pathIndex = m_pathIndex;
+    Vec3 segmentStart = position;
+    float remaining = L;
+    Vec3 mergePoint = position;
+    Vec3 mergeDirection = GetForwardAxis();
+
+    while (true)
+    {
+        float startT = spline->GetSplinePosition(segmentStart);
+        float splineLength = spline->GetLength();
+        float distanceToEnd = splineLength > 0.0f ? (1.0f - startT) * splineLength : 0.0f;
+
+        if (splineLength <= 0.0f || remaining <= distanceToEnd)
+        {
+            float t = splineLength > 0.0f ? std::clamp(startT + remaining / splineLength, 0.0f, 1.0f) : startT;
+            mergePoint = spline->GetPositionAt(t);
+            mergeDirection = spline->GetDirectionAt(t);
+            break;
+        }
+
+        remaining -= distanceToEnd;
+        shared_ptr<Lane> nextLane = (pathIndex + 1 < m_path.size()) ? m_path[pathIndex + 1].lane : nullptr;
+        if (!nextLane)
+        {
+            mergePoint = spline->GetPositionAt(1.0f);
+            mergeDirection = spline->GetDirectionAt(1.0f);
+            break;
+        }
+
+        spline = &nextLane->GetSpline();
+        segmentStart = nextLane->GetStartPoint();
+        ++pathIndex;
+    }
+
     float mergeT = m_currentSpline.GetSplinePosition(mergePoint);
 
     // phantom은 방향만 주면 된다 — 접선 세기(길이)는 Spline이 꺾임 각에 따라 tan로 자동 조정한다.
     Spline connector({position - GetForwardAxis(),
                       position,
                       mergePoint,
-                      mergePoint + m_currentSpline.GetDirectionAt(mergeT)});
+                      mergePoint + mergeDirection});
     m_currentSpline.AddSplinePointsFront(connector.GetSplinePoints(), mergeT);
     RebuildSplineRender();
 }
@@ -687,6 +758,32 @@ void Car::UpdateDebugWindow()
     ImGui::End();
 }
 
+void Car::UpdateSpeedProfileWindow()
+{
+    if (!m_drawCollider || !m_isFocused)
+        return;
+
+    constexpr float PROFILE_STEP_TIME = LOOK_PROFILE_TIME / SPEED_PROFILE_COUNT; // 0.2초
+    constexpr float MARKER_HEIGHT = 0.3f;                                        // 도로/스플라인 디버그 선보다 위로 띄움
+
+    if (ImGui::Begin(("Speed Profile: " + GetName()).c_str()))
+    {
+        for (int sec = 1; sec <= 4; ++sec)
+        {
+            size_t offset = static_cast<size_t>(sec / PROFILE_STEP_TIME + 0.5f);
+            size_t index = (m_profileIndex + offset) % SPEED_PROFILE_COUNT;
+            const auto &[position, speed] = m_speedProfile[index];
+
+            ImGui::Text("%d초 뒤: %.1f km/h", sec, speed * 3.6f);
+
+            DirectX::XMFLOAT3 markerPos = ToXMFLOAT3(position);
+            markerPos.y += MARKER_HEIGHT;
+            m_speedProfileMarkers[sec - 1].GetTransform().SetPosition(markerPos);
+        }
+    }
+    ImGui::End();
+}
+
 void Car::UpdateTrail()
 {
     if (!m_drawCollider) // only track/rebuild the trail for cars actually shown in debug view
@@ -758,4 +855,62 @@ void Car::RebuildSplineRender()
     pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f));
     pModel->materials[0].Set<float>("$Opacity", 1.0f);
     m_splineRender.SetModel(pModel);
+}
+
+void Car::RebuildParkDebugRender(const ReedsShepp::Path &path, const Vec3 &startPos, float startAngleDeg,
+                                 float turningRadius, const Vec3 &targetPos, float targetAngleDeg)
+{
+    constexpr float DEBUG_LINE_HEIGHT = 0.15f;
+
+    // RS 경로 폴리라인 (보라색)
+    std::vector<Vec3> pathPoints = ReedsShepp::SamplePath(path, startPos, startAngleDeg, turningRadius);
+    if (pathPoints.size() < 2)
+    {
+        m_parkPathRender.SetModel(nullptr);
+    }
+    else
+    {
+        std::vector<DirectX::XMFLOAT3> points;
+        points.reserve(pathPoints.size());
+        for (const Vec3 &point : pathPoints)
+        {
+            DirectX::XMFLOAT3 p = ToXMFLOAT3(point);
+            p.y += DEBUG_LINE_HEIGHT;
+            points.push_back(p);
+        }
+
+        Model *pPathModel = ModelManager::Get().CreateFromGeometry("__park_path__:" + GetName(), Geometry::CreatePolyline(points));
+        pPathModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(1.0f, 0.0f, 1.0f, 1.0f));
+        pPathModel->materials[0].Set<float>("$Opacity", 1.0f);
+        m_parkPathRender.SetModel(pPathModel);
+    }
+
+    // 목표 위치 마커 (초록 평면, 모델은 Init에서 이미 만들어둠)
+    DirectX::XMFLOAT3 markerPos = ToXMFLOAT3(targetPos);
+    markerPos.y += DEBUG_LINE_HEIGHT;
+    m_parkTargetMarker.GetTransform().SetPosition(markerPos);
+
+    // 목표 방향 선 (초록 선) — 매번 targetPos/targetAngleDeg가 바뀌므로 그때그때 새로 만든다.
+    constexpr float TARGET_LINE_LENGTH = 6.0f;
+    float targetAngleRad = ToRadians(targetAngleDeg);
+    Vec3 targetDir(cosf(targetAngleRad), 0.0f, sinf(targetAngleRad));
+    DirectX::XMFLOAT3 lineStart = ToXMFLOAT3(targetPos);
+    DirectX::XMFLOAT3 lineEnd = ToXMFLOAT3(targetPos + targetDir * TARGET_LINE_LENGTH);
+    lineStart.y += DEBUG_LINE_HEIGHT;
+    lineEnd.y += DEBUG_LINE_HEIGHT;
+
+    Model *pTargetLineModel = ModelManager::Get().CreateFromGeometry("__park_target_line__:" + GetName(),
+                                                                     Geometry::CreateLine(lineStart, lineEnd));
+    pTargetLineModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f));
+    pTargetLineModel->materials[0].Set<float>("$Opacity", 1.0f);
+    m_parkTargetLine.SetModel(pTargetLineModel);
+}
+
+void Car::SetDestination(const shared_ptr<RoadNode> &destNode)
+{
+    m_destLane = m_RoadDataManager->GetClosestLaneEnd(destNode->position);
+    if (destNode->nodeType == RoadNodeType::Park)
+    {
+        m_pendingParkNode = destNode;
+    }
 }

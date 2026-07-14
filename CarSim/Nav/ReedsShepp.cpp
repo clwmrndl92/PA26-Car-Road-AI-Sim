@@ -22,8 +22,10 @@ namespace ReedsShepp
         double Mod2Pi(double theta)
         {
             theta = std::fmod(theta, 2.0 * PI);
-            if (theta < -PI) return theta + 2.0 * PI;
-            if (theta >= PI) return theta - 2.0 * PI;
+            if (theta < -PI)
+                return theta + 2.0 * PI;
+            if (theta >= PI)
+                return theta - 2.0 * PI;
             return theta;
         }
 
@@ -44,8 +46,8 @@ namespace ReedsShepp
 
         // start(x1,y1,theta1)를 원점/각도 0으로 하는 좌표계에서 end의 좌표를 계산.
         void ChangeOfBasis(double x1, double y1, double theta1Deg,
-                            double x2, double y2, double theta2Deg,
-                            double &outX, double &outY, double &outThetaDeg)
+                           double x2, double y2, double theta2Deg,
+                           double &outX, double &outY, double &outThetaDeg)
         {
             double theta1 = DegToRad(theta1Deg);
             double dx = x2 - x1;
@@ -393,8 +395,10 @@ namespace ReedsShepp
             Path result = path;
             for (auto &e : result)
             {
-                if (e.steering == Steering::Left) e.steering = Steering::Right;
-                else if (e.steering == Steering::Right) e.steering = Steering::Left;
+                if (e.steering == Steering::Left)
+                    e.steering = Steering::Right;
+                else if (e.steering == Steering::Right)
+                    e.steering = Steering::Left;
             }
             return result;
         }
@@ -417,12 +421,14 @@ namespace ReedsShepp
             for (auto &path : paths)
             {
                 path.erase(std::remove_if(path.begin(), path.end(),
-                                           [](const PathElement &e) { return e.param == 0.0f; }),
+                                          [](const PathElement &e)
+                                          { return e.param == 0.0f; }),
                            path.end());
             }
 
             paths.erase(std::remove_if(paths.begin(), paths.end(),
-                                        [](const Path &p) { return p.empty(); }),
+                                       [](const Path &p)
+                                       { return p.empty(); }),
                         paths.end());
 
             return paths;
@@ -470,5 +476,68 @@ namespace ReedsShepp
         for (auto &e : result)
             e.param *= turningRadius;
         return result;
+    }
+
+    std::vector<Vec3> SamplePath(const Path &path, const Vec3 &start, float startAngleDeg,
+                                 float turningRadius, float sampleSpacing)
+    {
+        std::vector<Vec3> points;
+        if (path.empty() || turningRadius <= 0.0f || sampleSpacing <= 0.0f)
+            return points;
+
+        double x = start.GetX();
+        double z = start.GetZ();
+        double y = start.GetY();
+        double theta = DegToRad(startAngleDeg);
+
+        points.push_back(Vec3(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)));
+
+        for (const PathElement &element : path)
+        {
+            double g = (element.gear == Gear::Backward) ? -1.0 : 1.0;
+            double kappaLabel = 0.0;
+            if (element.steering == Steering::Left)
+                kappaLabel = 1.0 / turningRadius;
+            else if (element.steering == Steering::Right)
+                kappaLabel = -1.0 / turningRadius;
+
+            int sampleCount = std::max(1, static_cast<int>(element.param / sampleSpacing));
+            double ds = element.param / sampleCount;
+
+            if (std::fabs(kappaLabel) < 1e-9)
+            {
+                // 직선: 현재 heading 방향으로 기어에 따른 부호만큼 전진.
+                for (int i = 1; i <= sampleCount; ++i)
+                {
+                    double s = ds * i;
+                    double px = x + g * s * std::cos(theta);
+                    double pz = z + g * s * std::sin(theta);
+                    points.push_back(Vec3(static_cast<float>(px), static_cast<float>(y), static_cast<float>(pz)));
+                }
+                x += g * element.param * std::cos(theta);
+                z += g * element.param * std::sin(theta);
+            }
+            else
+            {
+                // 곡선: 원 중심은 기어와 무관하게 고정, 헤딩만 기어에 따라 반대 방향으로 돈다.
+                double invKappa = 1.0 / kappaLabel;
+                double cx = x - invKappa * std::sin(theta);
+                double cz = z + invKappa * std::cos(theta);
+                double kappaActual = g * kappaLabel;
+                for (int i = 1; i <= sampleCount; ++i)
+                {
+                    double s = ds * i;
+                    double th = theta + kappaActual * s;
+                    double px = cx + invKappa * std::sin(th);
+                    double pz = cz - invKappa * std::cos(th);
+                    points.push_back(Vec3(static_cast<float>(px), static_cast<float>(y), static_cast<float>(pz)));
+                }
+                theta += kappaActual * element.param;
+                x = cx + invKappa * std::sin(theta);
+                z = cz - invKappa * std::cos(theta);
+            }
+        }
+
+        return points;
     }
 }
