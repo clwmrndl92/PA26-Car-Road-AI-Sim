@@ -80,15 +80,14 @@
     {"control_points":[[51.5,0.0,13.0],[51.5,0.0,12.5],[51.5,0.0,-12.5],[51.5,0.0,-13.0]],"id":323,"road":1},
     {"control_points":[[-13.0,0.0,51.5],[-12.5,0.0,51.5],[12.5,0.0,51.5],[13.0,0.0,51.5]],"id":324,"road":1},
     {"control_points":[[13.0,0.0,-51.5],[12.5,0.0,-51.5],[-12.5,0.0,-51.5],[-13.0,0.0,-51.5]],"id":325,"road":1},
-    
     {"control_points":[[-52.0,0.0,12.5],[-51.5,0.0,12.5],[-35.0,0.0,12.5],[-30.0,0.0,12.5]],"id":1000,"road":1}
   ],
   "nodes": [
     {"child":[2,3,4,5],"direction":[1.0,0.0,0.0],"id":1,"position":[-35.0,0.0,12.5],"type":"park"},
-    {"direction":[0.0,0.0,-1.0],"id":2,"position":[-45.0,0.0,21.0],"type":"park_spot"},
-    {"direction":[0.0,0.0,-1.0],"id":3,"position":[-35.0,0.0,21.0],"type":"park_spot"},
-    {"direction":[0.0,0.0,-1.0],"id":4,"position":[-25.0,0.0,21.0],"type":"park_spot"},
-    {"direction":[0.0,0.0,-1.0],"id":5,"position":[-15.0,0.0,21.0],"type":"park_spot"}
+    {"direction":[0.0,0.0,-1.0],"id":2,"position":[-46.25,0.0,21.0],"type":"park_spot"},
+    {"direction":[0.0,0.0,-1.0],"id":3,"position":[-33.75,0.0,21.0],"type":"park_spot"},
+    {"direction":[0.0,0.0,-1.0],"id":4,"position":[-23.75,0.0,21.0],"type":"park_spot"},
+    {"direction":[0.0,0.0,-1.0],"id":5,"position":[-13.75,0.0,21.0],"type":"park_spot"}
   ],
   "roads": [
     {"id":1,"name":"road","speed_limit":40}

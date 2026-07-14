@@ -511,17 +511,23 @@ void EditApp::SaveMarkingsToJson()
     using nlohmann::json;
     json root;
 
+    // Round in double (not float) so e.g. 53.2f's inherent float imprecision doesn't survive
+    // into the json dump as 53.20000076293945 — the rounded double matches the double literal
+    // 53.2 exactly, which the json library's shortest-round-trip printer renders cleanly.
+    auto round2 = [](double v)
+    { return std::round(v * 100.0) / 100.0; };
+
     root["markings"] = json::array();
     for (const auto &m : m_Markings)
     {
         json jm;
         jm["id"] = m.id;
         jm["type"] = (m.type == MarkingLineType::Dashed) ? "dashed" : "solid";
-        jm["width"] = m.width;
+        jm["width"] = round2(m.width);
         jm["color"] = m.color == MarkingColor::Yellow ? "yellow" : m.color == MarkingColor::Gray ? "gray"
                                                                                                  : "white";
-        jm["dash_length"] = m.dashLength;
-        jm["dash_gap"] = m.dashGap;
+        jm["dash_length"] = round2(m.dashLength);
+        jm["dash_gap"] = round2(m.dashGap);
 
         // Non-gray (white/yellow) lane paint needs to sit above gray asphalt-colored lines to
         // render on top of them, so bump its saved y instead of leaving it at the drawn y.
@@ -529,7 +535,7 @@ void EditApp::SaveMarkingsToJson()
         for (const auto &p : m.points)
         {
             float y = (m.color == MarkingColor::Gray) ? p.y : 0.01f;
-            pts.push_back({p.x, y, p.z});
+            pts.push_back({round2(p.x), round2(y), round2(p.z)});
         }
         jm["points"] = pts;
 
