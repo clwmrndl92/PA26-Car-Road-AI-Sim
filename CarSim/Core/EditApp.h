@@ -32,7 +32,8 @@ private:
         None,
         Lane,
         Node,
-        Marking
+        Marking,
+        Obstacle
     };
 
     enum class MarkingLineType
@@ -89,6 +90,17 @@ private:
         std::vector<DirectX::XMFLOAT3> points;
     };
 
+    // 회전된 사각형 장애물. RoadDataManager/HybridAStar::Obstacle과 필드를 맞췄다(length=heading
+    // 방향 전체 길이, width=수직 방향 전체 폭, rotation=도, atan2(z,x) 규약, ReedsShepp와 동일).
+    struct EditObstacle
+    {
+        int id = -1;
+        DirectX::XMFLOAT3 position{0.0f, 0.0f, 0.0f};
+        float length = 4.0f;
+        float width = 2.0f;
+        float rotation = 0.0f;
+    };
+
     // UI windows
     void DrawToolbarWindow();
     void DrawLaneListWindow();
@@ -98,6 +110,8 @@ private:
     void DrawNodeEditWindow();
     void DrawMarkingListWindow();
     void DrawMarkingEditWindow();
+    void DrawObstacleListWindow();
+    void DrawObstacleEditWindow();
 
     // Interaction / rendering
     void UpdateDrag();
@@ -111,26 +125,31 @@ private:
     std::vector<EditRoad> m_Roads;
     std::vector<EditNode> m_Nodes;
     std::vector<EditMarking> m_Markings;
+    std::vector<EditObstacle> m_Obstacles;
     int m_NextLaneId = 1;
     int m_NextRoadId = 1;
     int m_NextNodeId = 1;
     int m_NextMarkingId = 1;
+    int m_NextObstacleId = 1;
 
     Selection m_Selection = Selection::None;
-    int m_SelectedLane = -1;    // index into m_Lanes when m_Selection == Lane
-    int m_SelectedNode = -1;    // index into m_Nodes when m_Selection == Node
-    int m_SelectedMarking = -1; // index into m_Markings when m_Selection == Marking
+    int m_SelectedLane = -1;     // index into m_Lanes when m_Selection == Lane
+    int m_SelectedNode = -1;     // index into m_Nodes when m_Selection == Node
+    int m_SelectedMarking = -1;  // index into m_Markings when m_Selection == Marking
+    int m_SelectedObstacle = -1; // index into m_Obstacles when m_Selection == Obstacle
     int m_DraggingPoint = -1;
 
     std::string m_LastSavePath;
     std::string m_LastMarkingsSavePath;
 
-    std::vector<RenderObject> m_PointRenders;   // control-point & node spheres
-    std::vector<RenderObject> m_SplineRenders;  // red spline polylines (one per lane, always shown)
-    std::vector<RenderObject> m_MarkingRenders; // marking-line ribbons (solid/dashed), always shown
+    std::vector<RenderObject> m_PointRenders;    // control-point & node spheres
+    std::vector<RenderObject> m_SplineRenders;   // red spline polylines (one per lane, always shown)
+    std::vector<RenderObject> m_MarkingRenders;  // marking-line ribbons (solid/dashed), always shown
+    std::vector<RenderObject> m_ObstacleRenders; // blue obstacle rectangle outlines, always shown
 
     static constexpr float CP_RADIUS = 0.4f;
     static constexpr float NODE_RADIUS = 0.5f;
+    static constexpr float OBSTACLE_MARKER_RADIUS = 0.5f;
     static constexpr float GRID_SNAP = 1.0f;
     static constexpr float LANE_GRID_SNAP = 0.5f;
     static constexpr float MARKING_GRID_SNAP = 0.05f;

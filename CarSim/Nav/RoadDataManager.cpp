@@ -25,6 +25,7 @@ void RoadDataManager::BuildRoadData(const string &filePath)
     m_roads.clear();
     m_lanes.clear();
     m_nodes.clear();
+    m_obstacles.clear();
 
     map<int, shared_ptr<Road>> roadById;
     for (const nlohmann::json &roadJson : root.value("roads", nlohmann::json::array()))
@@ -132,6 +133,24 @@ void RoadDataManager::BuildRoadData(const string &filePath)
             if (childIt != nodeById.end())
                 nodeIt->second->children.push_back(childIt->second);
         }
+    }
+
+    // obstacles(임시): 실제 인식 파이프라인이 들어오기 전까지, 손으로 채운 사각형 장애물 목록.
+    // "position":[x,y,z], "size":[length,width](전체 길이/폭, heading 방향 기준), "rotation"(도, ReedsShepp와
+    // 같은 atan2(z,x) 규약).
+    for (const nlohmann::json &obstacleJson : root.value("obstacles", nlohmann::json::array()))
+    {
+        const nlohmann::json &posJson = obstacleJson.value("position", nlohmann::json::array());
+        const nlohmann::json &sizeJson = obstacleJson.value("size", nlohmann::json::array());
+        if (posJson.size() < 3 || sizeJson.size() < 2)
+            continue;
+
+        HybridAStar::Obstacle obstacle;
+        obstacle.center = Vec3(posJson[0].get<float>(), posJson[1].get<float>(), posJson[2].get<float>());
+        obstacle.halfLength = sizeJson[0].get<float>() * 0.5f;
+        obstacle.halfWidth = sizeJson[1].get<float>() * 0.5f;
+        obstacle.headingDeg = obstacleJson.value("rotation", 0.0f);
+        m_obstacles.push_back(obstacle);
     }
 
     BuildLaneAdjacency();

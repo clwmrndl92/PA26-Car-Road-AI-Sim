@@ -8,6 +8,7 @@
 #include <array>
 #include <Nav/RoadDataManager.h>
 #include "Nav/ReedsShepp.h"
+#include "Nav/HybridAStar.h"
 
 class Car : public GameObject
 {
@@ -75,8 +76,10 @@ private:
     enum class DriveMode
     {
         Stop,
-        Park, // Reeds-Shepp 기반 입차/출차. m_parkSpot이 있을 때만 DecideNextMode가 진입시킴.
-        Drive
+        Park,  // Reeds-Shepp 기반 입차/출차. m_parkSpot이 있을 때만 DecideNextMode가 진입시킴.
+        Drive,
+        Avoid // Hybrid A* 기반 장애물 회피 우회. TryAvoidObstacle이 막혔다고 판단하고 차가 완전히
+              // 멈추면(m_avoidPending) DecideNextMode가 진입시킴.
     };
     const char *Car::DriveModeToString(DriveMode mode) const
     {
@@ -88,6 +91,8 @@ private:
             return "Park";
         case DriveMode::Drive:
             return "Drive";
+        case DriveMode::Avoid:
+            return "Avoid";
         }
         return "?";
     }
@@ -98,6 +103,12 @@ private:
     // Park 모드의 RS 입/출차 경로를 계획하고 VehicleController에 실행시킨다. 차가 완전히 멈춘
     // 뒤(m_parkPlanPending 해소 시점)의 위치/방향을 시작점으로 써야 하므로 UpdatePark에서만 호출된다.
     void BeginParkPlan();
+    // Avoid 모드의 Hybrid A* 우회 경로를 계획하고 VehicleController에 실행시킨다. 차가 완전히
+    // 멈춘 뒤(m_avoidPending 해소 시점)의 위치/방향을 시작점으로 쓴다. OnModeEnter(Avoid)에서만 호출.
+    void BeginAvoidPlan();
+    // 충돌판정용 차량 형상(휠베이스/최대조향각/피벗-바디중심 오프셋/반길이/반폭). HybridAStar와
+    // TryAvoidObstacle 양쪽에서 같은 값을 쓰려고 뽑아둔 헬퍼.
+    HybridAStar::VehicleShape BuildVehicleShape() const;
 
     void UpdateFindPath();
     // m_currentLane이 이미 정해진 상태에서 m_destLane까지 경로를 찾아 m_path/m_currentSpline을
@@ -110,12 +121,15 @@ private:
 
     void UpdateStop();
     void UpdatePark();
+    void UpdateAvoid();
     void MoveSpeedProfile();
     void CalculateSpeedProfile();
     void UpdateDrive();
     // 경로상 다음 레인으로 넘어갈지 판단/처리. false면 경로가 끝난 것이므로 이번 프레임은 조향/가속 제어를 건너뛴다.
     bool CheckPath();
-    // TODO: 센서 기반 장애물 회피. 지금은 항상 false를 반환해 VehicleController로 넘긴다.
+    // 코리도어(스플라인 lookahead)가 장애물에 막혔는지 매 프레임 감시. 막혔으면 감속/정지시키고
+    // (반환값 true, VehicleController::Tick은 이번 프레임 건너뜀), 완전히 멈추면 m_avoidPending을
+    // 켜서 다음 프레임 DecideNextMode가 Avoid 모드(Hybrid A* 우회)로 전환하게 한다.
     bool TryAvoidObstacle();
 
 public:
@@ -136,6 +150,7 @@ private:
 
     float m_wheelbase = 0.0f;
     float m_mass = 1.0f;
+    Vec3 m_halfExtents = Vec3::sZero(); // 충돌판정용 차체 반크기(x=반폭, z=반길이). CarSpec::halfExtents.
     float m_maxSteerAngle = ToRadians(45.0f);        // 최대 조향각 (45도)
     static constexpr float CURVE_SPEED_COEFF = 0.8f; // 최대 코너링 속도 = CURVE_SPEED_COEFF * sqrt(R)
     static constexpr float STEER_RAMP_RATE = 0.4f;
@@ -153,6 +168,11 @@ private:
     // Park 모드에 막 진입해서 정지 대기 중인지. true인 동안은 RS 계획을 세우지 않고 감속만 하다가,
     // 완전히 멈추면(m_speed==0) 그 위치/방향을 시작점으로 BeginParkPlan을 호출한다.
     bool m_parkPlanPending = false;
+    // TryAvoidObstacle이 코리도어가 막혔다고 보고 차를 완전히 세운 뒤 켜는 플래그. true면
+    // DecideNextMode가 다음 프레임에 Avoid로 전환하고 OnModeEnter(Avoid)가 BeginAvoidPlan을 호출한다.
+    bool m_avoidPending = false;
+    // Hybrid A* 재계획을 프레임마다 재시도하지 않도록 하는 쿨다운(초). BeginAvoidPlan이 실패했을 때만 의미가 있다.
+    float m_avoidReplanCooldown = 0.0f;
     vector<LaneStep> m_path;
     size_t m_pathIndex = 0;
     static constexpr float LOOK_PROFILE_TIME = 5.0f;

@@ -5,6 +5,7 @@
 #include "Spline.h"
 #include "Lane.h"
 #include "Road.h"
+#include "HybridAStar.h"
 
 using namespace std;
 
@@ -35,6 +36,9 @@ public:
     const vector<shared_ptr<Lane>> &GetLanes() const { return m_lanes; };
     const vector<shared_ptr<RoadNode>> &GetNodes() const { return m_nodes; };
     const shared_ptr<RoadNode> GetNode(int nodeId) const;
+    // data.json의 "obstacles"(임시 데이터: 실제 장애물 인식 파이프라인이 들어오기 전까지 손으로 채운
+    // 사각형 목록)를 그대로 반환한다. 실시간 회피의 코리도어 검사 등에서 쓴다.
+    const vector<HybridAStar::Obstacle> &GetObstacles() const { return m_obstacles; }
 
     // parkNodeId(Park 타입 노드)의 children 중 아직 예약되지 않은 ParkSpot을 하나 찾아 예약하고
     // 반환한다. 빈 자리가 없으면 nullptr. 예약 상태는 정적 도로 데이터(RoadNode)와 분리해서
@@ -56,6 +60,7 @@ private:
     vector<shared_ptr<Lane>> m_lanes;
     vector<shared_ptr<Road>> m_roads;
     vector<shared_ptr<RoadNode>> m_nodes;
+    vector<HybridAStar::Obstacle> m_obstacles;
     unordered_set<int> m_reservedParkSpotIds; // 예약된(다른 차가 목표로 잡은) ParkSpot 노드 id
 };
 

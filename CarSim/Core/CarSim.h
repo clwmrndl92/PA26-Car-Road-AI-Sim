@@ -42,6 +42,7 @@ private:
     std::vector<RenderObject> m_RoadRenders;
     std::vector<RenderObject> m_RoadEdgeRenders;
     std::vector<RenderObject> m_MarkingRenders;
+    std::vector<RenderObject> m_ObstacleRenders; // data.json의 obstacles를 파란 사각형 외곽선으로 시각화
 };
 
 #endif

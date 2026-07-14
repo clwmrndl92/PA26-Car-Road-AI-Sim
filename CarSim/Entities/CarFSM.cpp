@@ -2,6 +2,7 @@
 #include "VehicleSegment.h"
 #include "Core/DebugConsole.h"
 #include "Nav/ReedsShepp.h"
+#include "Nav/HybridAStar.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -47,6 +48,12 @@ Car::DriveMode Car::DecideNextMode() const
             return DriveMode::Park;
     }
 
+    if (m_mode == DriveMode::Avoid)
+    {
+        if (!m_vehicleController.IsFinished())
+            return DriveMode::Avoid;
+    }
+
     constexpr float ARRIVE_DISTANCE = 5.0f;
     bool arrived = m_destLane != nullptr && (m_destLane->GetEndPoint() - GetPosition()).Length() < ARRIVE_DISTANCE;
 
@@ -84,6 +91,12 @@ void Car::OnModeEnter(DriveMode mode)
     {
         // 도착 즉시 RS를 계산하지 않고, 완전히 멈출 때까지 기다린다 (UpdatePark에서 처리).
         m_parkPlanPending = true;
+    }
+    else if (mode == DriveMode::Avoid)
+    {
+        // Avoid는 TryAvoidObstacle이 이미 차를 완전히 세운 뒤에만 m_avoidPending을 켜므로, Park와
+        // 달리 정지 대기 없이 바로 계획을 세운다.
+        BeginAvoidPlan();
     }
 }
 
@@ -163,7 +176,9 @@ void Car::BeginParkPlan()
         targetPos = m_parkSpot->position - m_parkSpot->direction.Normalized() * m_wheelbase;
     }
 
-    ReedsShepp::Path path = ReedsShepp::GetOptimalPath(startPos, startAngleDeg, targetPos, targetAngleDeg, turningRadius);
+    HybridAStar::VehicleShape shape = BuildVehicleShape();
+    const std::vector<HybridAStar::Obstacle> &obstacles = m_RoadDataManager->GetObstacles();
+    ReedsShepp::Path path = HybridAStar::FindPath(startPos, startAngleDeg, targetPos, targetAngleDeg, obstacles, shape);
     m_vehicleController.BeginPlan(BuildParkSegments(path, m_maxSteerAngle));
     RebuildParkDebugRender(path, startPos, startAngleDeg, turningRadius, targetPos, targetAngleDeg);
 
@@ -176,6 +191,82 @@ void Car::BeginParkPlan()
         const char *gearName = element.gear == ReedsShepp::Gear::Forward ? "Forward" : "Backward";
         DebugConsole::Get().Log(std::string("  ") + steerName + " " + gearName + " param=" + to_string(element.param));
     }
+}
+
+HybridAStar::VehicleShape Car::BuildVehicleShape() const
+{
+    HybridAStar::VehicleShape shape;
+    shape.wheelbase = m_wheelbase;
+    shape.maxSteerAngleDeg = ToDegrees(m_maxSteerAngle);
+    shape.pivotToCenter = m_colliderOffset.z;
+    shape.halfWidth = m_halfExtents.GetX();
+    shape.halfLength = m_halfExtents.GetZ();
+    return shape;
+}
+
+void Car::BeginAvoidPlan()
+{
+    m_avoidPending = false;
+
+    Vec3 startPos = m_rigidbody.GetPosition();
+    float startAngleDeg = DirectionToAngleDeg(GetForwardAxis());
+
+    // 목표: 지금 레인의 스플라인을 따라 장애물을 완전히 지나칠 만큼(코리도어보다 넉넉히) 앞의 지점.
+    // 레인을 벗어나지 않고 그 위의 한 점으로 잡아두면, 우회가 끝난 뒤 별도 처리 없이 그냥 Drive로
+    // 돌아가 기존 m_currentLane/m_path를 그대로 이어서 쓸 수 있다.
+    constexpr float AVOID_GOAL_DISTANCE = 25.0f;
+    const std::vector<Vec3> &splinePoints = m_currentSpline.GetSplinePoints();
+
+    Vec3 targetPos = startPos;
+    float targetAngleDeg = startAngleDeg;
+    bool foundGoal = false;
+
+    if (splinePoints.size() >= 2)
+    {
+        size_t startIndex = 0;
+        float closestDistance = std::numeric_limits<float>::max();
+        for (size_t i = 0; i < splinePoints.size(); ++i)
+        {
+            float distance = (splinePoints[i] - startPos).Length();
+            if (distance < closestDistance)
+            {
+                closestDistance = distance;
+                startIndex = i;
+            }
+        }
+
+        Vec3 prevPoint = startPos;
+        float traveled = 0.0f;
+        for (size_t i = startIndex; i < splinePoints.size(); ++i)
+        {
+            const Vec3 &point = splinePoints[i];
+            traveled += (point - prevPoint).Length();
+            if (traveled >= AVOID_GOAL_DISTANCE)
+            {
+                targetPos = point;
+                targetAngleDeg = DirectionToAngleDeg(point - prevPoint);
+                foundGoal = true;
+                break;
+            }
+            prevPoint = point;
+        }
+    }
+
+    if (!foundGoal)
+        return; // 레인 끝이 코앞이라 우회 목표를 못 잡음 -- 다음 프레임 Drive로 돌아가 다시 판단한다.
+
+    HybridAStar::VehicleShape shape = BuildVehicleShape();
+    const std::vector<HybridAStar::Obstacle> &obstacles = m_RoadDataManager->GetObstacles();
+
+    ReedsShepp::Path path = HybridAStar::FindPath(startPos, startAngleDeg, targetPos, targetAngleDeg, obstacles, shape);
+    m_vehicleController.BeginPlan(BuildParkSegments(path, m_maxSteerAngle));
+
+    DebugConsole::Get().Log("Avoid path segments: " + to_string(path.size()));
+}
+
+void Car::UpdateAvoid()
+{
+    m_vehicleController.Tick(*this);
 }
 
 void Car::OnModeExit(DriveMode mode)
@@ -285,7 +376,76 @@ void Car::UpdateDrive()
 
 bool Car::TryAvoidObstacle()
 {
-    // TODO: 센서 기반 장애물 회피 로직을 여기에 연결. 지금은 항상 false를 반환해 VehicleController로 넘긴다.
+    // Tier 1: 매 프레임 저비용 감시. grid 없이, 앞으로 갈 코리도어(스플라인 lookahead를 따라
+    // 일정 간격으로 샘플링한 차량 pose들)를 RoadDataManager가 들고 있는 장애물 목록과 겹치는지만
+    // 검사한다. 막힌 걸 확인하면 우선 멈추고, 완전히 멈추면 Tier 2(Hybrid A* 우회, Avoid 모드)를 켠다.
+    if (m_avoidReplanCooldown > 0.0f)
+        m_avoidReplanCooldown = std::max(0.0f, m_avoidReplanCooldown - m_deltaTime);
+
+    if (m_RoadDataManager == nullptr || m_currentLane == nullptr)
+        return false;
+
+    const std::vector<HybridAStar::Obstacle> &obstacles = m_RoadDataManager->GetObstacles();
+    if (obstacles.empty())
+        return false;
+
+    const std::vector<Vec3> &splinePoints = m_currentSpline.GetSplinePoints();
+    if (splinePoints.size() < 2)
+        return false;
+
+    HybridAStar::VehicleShape shape = BuildVehicleShape();
+
+    constexpr float LOOKAHEAD_DISTANCE = 15.0f; // 코리도어 길이(m)
+    constexpr float SAMPLE_SPACING = 1.0f;      // 샘플 간격(m)
+
+    Vec3 position = m_rigidbody.GetPosition();
+
+    // 현재 위치에서 가장 가까운 스플라인 점부터 훑기 시작한다.
+    size_t startIndex = 0;
+    float closestDistance = std::numeric_limits<float>::max();
+    for (size_t i = 0; i < splinePoints.size(); ++i)
+    {
+        float distance = (splinePoints[i] - position).Length();
+        if (distance < closestDistance)
+        {
+            closestDistance = distance;
+            startIndex = i;
+        }
+    }
+
+    Vec3 prevPoint = position;
+    float traveled = 0.0f;
+    float sinceLastSample = 0.0f;
+    for (size_t i = startIndex; i < splinePoints.size() && traveled < LOOKAHEAD_DISTANCE; ++i)
+    {
+        const Vec3 &point = splinePoints[i];
+        float segmentLength = (point - prevPoint).Length();
+        traveled += segmentLength;
+        sinceLastSample += segmentLength;
+        if (sinceLastSample < SAMPLE_SPACING)
+        {
+            prevPoint = point;
+            continue;
+        }
+        sinceLastSample = 0.0f;
+
+        float headingDeg = DirectionToAngleDeg(point - prevPoint);
+        if (HybridAStar::IsColliding(point, headingDeg, obstacles, shape))
+        {
+            constexpr float AVOID_REPLAN_COOLDOWN = 1.5f; // Hybrid A* 실패 시 매 프레임 재시도하지 않도록.
+            if (m_speed > 0.0f)
+            {
+                EmergBrake();
+            }
+            else if (m_avoidReplanCooldown <= 0.0f)
+            {
+                m_avoidPending = true;
+                m_avoidReplanCooldown = AVOID_REPLAN_COOLDOWN;
+            }
+            return true;
+        }
+        prevPoint = point;
+    }
     return false;
 }
 

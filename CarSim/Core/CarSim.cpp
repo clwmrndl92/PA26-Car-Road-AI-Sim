@@ -5,6 +5,7 @@
 #include <Entities/Car.h>
 #include "DebugConsole.h"
 #include "Nav/Spline.h"
+#include <cmath>
 
 using namespace DirectX;
 
@@ -208,6 +209,8 @@ void CarSim::DrawScene()
         m_GridYZ.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     for (auto &edgeRender : m_RoadEdgeRenders)
         edgeRender.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
+    for (auto &obstacleRender : m_ObstacleRenders)
+        obstacleRender.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     m_BasicEffect.SetRenderDefault();
 
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
@@ -251,12 +254,15 @@ bool CarSim::InitResource()
     }
 
     // // Car 2
-    // {
-    //     auto car = std::make_shared<Car>();
-    //     car->Init(GetCarSpec(CarType::Car1), &m_RoadDataManager, JPH::Vec3(-2.0f, 0.1f, 0.0f));
-    //     car->SetDrawCollider(true);
-    //     m_GameObjects.push_back(car);
-    // }
+    {
+        auto car = std::make_shared<Car>();
+        car->Init(GetCarSpec(CarType::Car1), &m_RoadDataManager, JPH::Vec3(40.0f, 0.1f, 5.0f));
+        car->SetDrawCollider(true);
+        car->SetDestination(m_RoadDataManager.GetNode(1));
+
+        m_GameObjects.push_back(car);
+        m_CarObjects.push_back(car);
+    }
 
     return true;
 }
@@ -319,6 +325,33 @@ void CarSim::InitRoadRenderer()
             RenderObject &edgeRender = m_RoadEdgeRenders.emplace_back();
             edgeRender.SetModel(pLine);
         }
+    }
+
+    // 장애물(data.json의 obstacles)을 위치/크기/회전각 그대로 파란 사각형 외곽선으로 시각화.
+    m_ObstacleRenders.clear();
+    int obstacleIndex = 0;
+    for (const HybridAStar::Obstacle &obstacle : m_RoadDataManager.GetObstacles())
+    {
+        float headingRad = ToRadians(obstacle.headingDeg);
+        Vec3 forward(cosf(headingRad), 0.0f, sinf(headingRad));
+        Vec3 right(-forward.GetZ(), 0.0f, forward.GetX());
+
+        std::vector<XMFLOAT3> corners = {
+            ToXMFLOAT3(obstacle.center + forward * obstacle.halfLength + right * obstacle.halfWidth),
+            ToXMFLOAT3(obstacle.center + forward * obstacle.halfLength - right * obstacle.halfWidth),
+            ToXMFLOAT3(obstacle.center - forward * obstacle.halfLength - right * obstacle.halfWidth),
+            ToXMFLOAT3(obstacle.center - forward * obstacle.halfLength + right * obstacle.halfWidth),
+        };
+        corners.push_back(corners.front()); // 닫힌 루프
+        for (XMFLOAT3 &corner : corners)
+            corner.y += EDGE_LINE_HEIGHT;
+
+        Model *pObstacle = m_ModelManager.CreateFromGeometry("obstacle_marker" + std::to_string(obstacleIndex++), Geometry::CreatePolyline(corners));
+        pObstacle->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.0f, 0.4f, 1.0f, 1.0f));
+        pObstacle->materials[0].Set<float>("$Opacity", 1.0f);
+
+        RenderObject &obstacleRender = m_ObstacleRenders.emplace_back();
+        obstacleRender.SetModel(pObstacle);
     }
 }
 

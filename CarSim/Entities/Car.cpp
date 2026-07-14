@@ -24,6 +24,7 @@ void Car::Init(const CarSpec &spec, RoadDataManager *roadDataManager, JPH::Vec3 
     m_render.SetModel(ModelManager::Get().CreateFromFile(spec.modelPath));
     SetRenderOffset(ToXMFLOAT3(spec.renderOffset));
     m_wheelbase = spec.wheelbase;
+    m_halfExtents = spec.halfExtents;
 
     DirectX::XMFLOAT3 fwd = m_transform.GetForwardAxis();
     m_transform.SetPosition(position.GetX() - fwd.x * m_wheelbase,
@@ -102,6 +103,9 @@ void Car::Update(float dt)
         break;
     case DriveMode::Drive:
         UpdateDrive();
+        break;
+    case DriveMode::Avoid:
+        UpdateAvoid();
         break;
     }
     UpdateCar();

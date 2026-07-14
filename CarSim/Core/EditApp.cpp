@@ -125,6 +125,11 @@ void EditApp::UpdateDrag()
         radius = CP_RADIUS;
         snap = MARKING_GRID_SNAP; // marking lines need finer placement (line width is 0.15)
     }
+    else if (m_Selection == Selection::Obstacle && m_SelectedObstacle >= 0 && m_SelectedObstacle < (int)m_Obstacles.size())
+    {
+        pts.push_back(&m_Obstacles[m_SelectedObstacle].position);
+        radius = OBSTACLE_MARKER_RADIUS;
+    }
     else
     {
         m_DraggingPoint = -1;
@@ -185,6 +190,7 @@ void EditApp::RebuildRenderObjects()
     m_PointRenders.clear();
     m_SplineRenders.clear();
     m_MarkingRenders.clear();
+    m_ObstacleRenders.clear();
 
     // Every lane's spline (red) is always shown, even while editing something else.
     for (const auto &lane : m_Lanes)
@@ -292,6 +298,53 @@ void EditApp::RebuildRenderObjects()
         RenderObject &ro = m_PointRenders.emplace_back();
         ro.SetModel(selected ? pNodeSel : pNode);
         ro.GetTransform().SetPosition(m_Nodes[i].position);
+    }
+
+    // Obstacle center spheres (draggable, always visible for context): blue, selected one yellow.
+    Model *pObstacleMarker = m_ModelManager.CreateFromGeometry("edit_obstacle_marker", Geometry::CreateSphere(OBSTACLE_MARKER_RADIUS));
+    pObstacleMarker->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.0f, 0.4f, 1.0f, 1.0f));
+    pObstacleMarker->materials[0].Set<float>("$Opacity", 1.0f);
+
+    Model *pObstacleMarkerSel = m_ModelManager.CreateFromGeometry("edit_obstacle_marker_sel", Geometry::CreateSphere(OBSTACLE_MARKER_RADIUS));
+    pObstacleMarkerSel->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f));
+    pObstacleMarkerSel->materials[0].Set<float>("$Opacity", 1.0f);
+
+    for (int i = 0; i < (int)m_Obstacles.size(); ++i)
+    {
+        bool selected = (m_Selection == Selection::Obstacle && i == m_SelectedObstacle);
+        RenderObject &ro = m_PointRenders.emplace_back();
+        ro.SetModel(selected ? pObstacleMarkerSel : pObstacleMarker);
+        ro.GetTransform().SetPosition(m_Obstacles[i].position);
+    }
+
+    // Obstacle footprint outlines (blue), position/size/rotation exactly as authored.
+    for (int i = 0; i < (int)m_Obstacles.size(); ++i)
+    {
+        const EditObstacle &obstacle = m_Obstacles[i];
+        float headingRad = ToRadians(obstacle.rotation);
+        XMFLOAT3 forward(cosf(headingRad), 0.0f, sinf(headingRad));
+        XMFLOAT3 right(-forward.z, 0.0f, forward.x);
+        float halfLength = obstacle.length * 0.5f;
+        float halfWidth = obstacle.width * 0.5f;
+
+        auto corner = [&](float alongSign, float acrossSign)
+        {
+            XMFLOAT3 p(obstacle.position.x + forward.x * halfLength * alongSign + right.x * halfWidth * acrossSign,
+                       obstacle.position.y + 0.1f,
+                       obstacle.position.z + forward.z * halfLength * alongSign + right.z * halfWidth * acrossSign);
+            return p;
+        };
+
+        std::vector<XMFLOAT3> outline = {
+            corner(1.0f, 1.0f), corner(1.0f, -1.0f), corner(-1.0f, -1.0f), corner(-1.0f, 1.0f), corner(1.0f, 1.0f)};
+
+        Model *pOutline = m_ModelManager.CreateFromGeometry("edit_obstacle_outline_" + std::to_string(obstacle.id),
+                                                             Geometry::CreatePolyline(outline));
+        pOutline->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.0f, 0.4f, 1.0f, 1.0f));
+        pOutline->materials[0].Set<float>("$Opacity", 1.0f);
+
+        RenderObject &ro = m_ObstacleRenders.emplace_back();
+        ro.SetModel(pOutline);
     }
 
     // Selected lane or marking: control-point spheres (orange), on top of its always-shown
@@ -403,6 +456,16 @@ void EditApp::SaveToJson()
         root["nodes"].push_back(jn);
     }
 
+    root["obstacles"] = json::array();
+    for (const auto &o : m_Obstacles)
+    {
+        json jo;
+        jo["position"] = {o.position.x, o.position.y, o.position.z};
+        jo["size"] = {o.length, o.width};
+        jo["rotation"] = o.rotation;
+        root["obstacles"].push_back(jo);
+    }
+
     std::time_t t = std::time(nullptr);
     std::tm tm{};
     localtime_s(&tm, &t);
@@ -441,6 +504,7 @@ void EditApp::LoadFromJson(const std::filesystem::path &path)
     m_Roads.clear();
     m_Lanes.clear();
     m_Nodes.clear();
+    m_Obstacles.clear();
 
     auto copyStr = [](char *dst, size_t n, const std::string &s)
     {
@@ -487,6 +551,24 @@ void EditApp::LoadFromJson(const std::filesystem::path &path)
         m_Nodes.push_back(n);
     }
 
+    int obstacleId = 1;
+    for (const auto &jo : root.value("obstacles", nlohmann::json::array()))
+    {
+        EditObstacle o;
+        o.id = obstacleId++; // data.json엔 obstacle id가 없어서 로드 순서로 부여
+        const auto &pos = jo.value("position", nlohmann::json::array());
+        if (pos.is_array() && pos.size() >= 3)
+            o.position = XMFLOAT3(pos[0].get<float>(), pos[1].get<float>(), pos[2].get<float>());
+        const auto &size = jo.value("size", nlohmann::json::array());
+        if (size.is_array() && size.size() >= 2)
+        {
+            o.length = size[0].get<float>();
+            o.width = size[1].get<float>();
+        }
+        o.rotation = jo.value("rotation", 0.0f);
+        m_Obstacles.push_back(o);
+    }
+
     // Reset id counters so newly-added items don't collide with loaded ones.
     m_NextLaneId = 1;
     for (const auto &l : m_Lanes)
@@ -497,10 +579,14 @@ void EditApp::LoadFromJson(const std::filesystem::path &path)
     m_NextNodeId = 1;
     for (const auto &n : m_Nodes)
         m_NextNodeId = std::max(m_NextNodeId, n.id + 1);
+    m_NextObstacleId = 1;
+    for (const auto &o : m_Obstacles)
+        m_NextObstacleId = std::max(m_NextObstacleId, o.id + 1);
 
     m_Selection = Selection::None;
     m_SelectedLane = -1;
     m_SelectedNode = -1;
+    m_SelectedObstacle = -1;
     m_DraggingPoint = -1;
 
     m_LastSavePath = "Loaded: " + path.filename().string();
@@ -624,6 +710,7 @@ void EditApp::UpdateUI(float dt)
     DrawRoadListWindow();
     DrawNodeListWindow();
     DrawMarkingListWindow();
+    DrawObstacleListWindow();
 
     if (m_Selection == Selection::Lane)
         DrawLaneEditWindow();
@@ -631,6 +718,8 @@ void EditApp::UpdateUI(float dt)
         DrawNodeEditWindow();
     else if (m_Selection == Selection::Marking)
         DrawMarkingEditWindow();
+    else if (m_Selection == Selection::Obstacle)
+        DrawObstacleEditWindow();
 }
 
 void EditApp::DrawToolbarWindow()
@@ -1132,6 +1221,89 @@ void EditApp::DrawMarkingEditWindow()
         m_Selection = Selection::None;
 }
 
+void EditApp::DrawObstacleListWindow()
+{
+    if (ImGui::Begin("Obstacles"))
+    {
+        if (ImGui::Button("Add Obstacle"))
+        {
+            EditObstacle obstacle;
+            obstacle.id = m_NextObstacleId++;
+            m_Obstacles.push_back(obstacle);
+            m_Selection = Selection::Obstacle;
+            m_SelectedObstacle = (int)m_Obstacles.size() - 1;
+        }
+
+        ImGui::Separator();
+
+        for (int i = 0; i < (int)m_Obstacles.size(); ++i)
+        {
+            char label[64];
+            snprintf(label, sizeof(label), "Obstacle %d", m_Obstacles[i].id);
+            bool selected = (m_Selection == Selection::Obstacle && i == m_SelectedObstacle);
+
+            ImGui::PushID(i);
+            float avail = ImGui::GetContentRegionAvail().x;
+            if (ImGui::Selectable(label, selected, 0, ImVec2(avail - 28.0f, 0.0f)))
+            {
+                m_Selection = Selection::Obstacle;
+                m_SelectedObstacle = i;
+            }
+            ImGui::SameLine();
+            bool erased = ImGui::SmallButton("X");
+            ImGui::PopID();
+
+            if (erased)
+            {
+                m_Obstacles.erase(m_Obstacles.begin() + i);
+                if (m_Selection == Selection::Obstacle)
+                {
+                    if (m_SelectedObstacle == i)
+                    {
+                        m_Selection = Selection::None;
+                        m_SelectedObstacle = -1;
+                    }
+                    else if (m_SelectedObstacle > i)
+                    {
+                        --m_SelectedObstacle;
+                    }
+                }
+                break;
+            }
+        }
+    }
+    ImGui::End();
+}
+
+void EditApp::DrawObstacleEditWindow()
+{
+    if (m_SelectedObstacle < 0 || m_SelectedObstacle >= (int)m_Obstacles.size())
+    {
+        m_Selection = Selection::None;
+        return;
+    }
+
+    EditObstacle &obstacle = m_Obstacles[m_SelectedObstacle];
+    bool open = true;
+    if (ImGui::Begin("Obstacle Edit", &open))
+    {
+        ImGui::Text("Obstacle ID: %d", obstacle.id);
+        float pos[3] = {obstacle.position.x, obstacle.position.y, obstacle.position.z};
+        if (ImGui::InputFloat3("Position", pos))
+            obstacle.position = XMFLOAT3(pos[0], pos[1], pos[2]);
+        ImGui::TextDisabled("(or drag the blue sphere)");
+
+        ImGui::DragFloat("Length (heading dir)", &obstacle.length, 0.1f, 0.1f, 100.0f, "%.2f");
+        ImGui::DragFloat("Width", &obstacle.width, 0.1f, 0.1f, 100.0f, "%.2f");
+        ImGui::DragFloat("Rotation (deg)", &obstacle.rotation, 1.0f, -180.0f, 180.0f, "%.1f");
+        ImGui::TextDisabled("(0deg = +X, same atan2(z,x) convention as ReedsShepp)");
+    }
+    ImGui::End();
+
+    if (!open)
+        m_Selection = Selection::None;
+}
+
 void EditApp::DrawScene()
 {
     // Create render target view for the back buffer (mirrors GameApp::DrawScene).
@@ -1168,6 +1340,8 @@ void EditApp::DrawScene()
         m_GridYZ.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     for (auto &spline : m_SplineRenders)
         spline.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
+    for (auto &obstacle : m_ObstacleRenders)
+        obstacle.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     m_BasicEffect.SetRenderDefault();
 
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
