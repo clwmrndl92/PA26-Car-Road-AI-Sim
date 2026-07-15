@@ -164,10 +164,17 @@ void Car::EmergBrake()
 void Car::Accelerate(float desiredVelocity)
 {
     // 저크 완화를 위해 가속도를 시간에 따라 선형이 아닌 S자(smoothstep)로 보간한다.
-    AccelMode targetMode = AccelMode::None;
-    if (desiredVelocity > m_speed)
+    // desiredVelocity는 매 프레임 DriveControl이 조향각 기반 순간 속도상한(maxSteerSpeed)까지
+    // 반영해서 넘기므로 아주 미세하게 흔들릴 수 있다 — 데드밴드 없이 m_speed와 바로 비교하면 그
+    // 흔들림만으로 모드가 매번 뒤집혀 아래 램프가 계속 리셋되고, 실제 제동력이 거의 못 올라간 채로
+    // (SmoothStep(0)≈0) 코너를 절반 넘게 지나서야 목표 속도에 닿는 문제가 있었다.
+    constexpr float ACCEL_MODE_DEADBAND = 0.3f / 3.6f; // 0.3km/h 이내 차이로는 모드(=램프)를 유지
+
+    float diff = desiredVelocity - m_speed;
+    AccelMode targetMode = m_accelMode;
+    if (diff > ACCEL_MODE_DEADBAND)
         targetMode = AccelMode::Accelerating;
-    else if (desiredVelocity < m_speed)
+    else if (diff < -ACCEL_MODE_DEADBAND)
         targetMode = AccelMode::Braking;
 
     if (m_accelMode != targetMode)
@@ -239,7 +246,7 @@ void Car::MergeOntoLane(const shared_ptr<Lane> &lane, const Vec3 &position)
     float minRadius = powf(m_speed / CURVE_SPEED_COEFF, 2);
     float width = m_RoadDataManager->ROAD_WIDTH;
     float insideRoot = (4 * minRadius * width) - (width * width);
-    float L = insideRoot > 0 ? sqrt(insideRoot) : 5.0f;
+    float L = insideRoot > 0 ? sqrt(insideRoot) : 10.0f;
 
     // L이 현재 레인 안에서 안 나오면(레인이 짧으면) 경로상 다음 레인까지 봐서 병합 목표 지점/방향을 잡는다.
     const Spline *spline = &m_currentSpline;
@@ -316,7 +323,7 @@ void Car::BakePathSpeedProfile()
         float curveSpeed = m_maxSpeed;
         float minPosT = 0.0f;
         float radius = spline.GetMinRadiusAhead(0.0f, 1.0f, &minPosT);
-        minPosT = std::min(minPosT, 0.4f);
+        minPosT = std::max(minPosT, 0.4f);
         if (radius < std::numeric_limits<float>::max())
             curveSpeed = RoadDataManager::CURVE_SPEED_COEFF * std::sqrt(radius);
         DebugConsole::Log("Bake ID " + ToString(step.lane->GetId()) + " / curve R " + ToString(radius) + " / max Speed " + ToString(curveSpeed * 3.6f));

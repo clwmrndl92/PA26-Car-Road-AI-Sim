@@ -297,7 +297,7 @@ const shared_ptr<RoadNode> RoadDataManager::GetNode(int nodeId) const
     return nullptr;
 }
 
-shared_ptr<RoadNode> RoadDataManager::TryReserveParkSpot(int parkNodeId)
+shared_ptr<RoadNode> RoadDataManager::TryReserveParkSpot(int parkNodeId, const unordered_set<int> &excludeIds)
 {
     shared_ptr<RoadNode> parkNode = GetNode(parkNodeId);
     if (!parkNode)
@@ -308,7 +308,7 @@ shared_ptr<RoadNode> RoadDataManager::TryReserveParkSpot(int parkNodeId)
         shared_ptr<RoadNode> spot = weakChild.lock();
         if (!spot || spot->nodeType != RoadNodeType::ParkSpot)
             continue;
-        if (m_reservedParkSpotIds.count(spot->id))
+        if (m_reservedParkSpotIds.count(spot->id) || excludeIds.count(spot->id))
             continue;
 
         m_reservedParkSpotIds.insert(spot->id);

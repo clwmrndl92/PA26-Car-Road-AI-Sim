@@ -33,14 +33,14 @@ namespace HybridAStar
 
     struct Params
     {
-        float stepSize = 1.0f;           // 한 스텝(전진/후진 1회)의 이동 거리
+        float stepSize = 0.5f;           // 한 스텝(전진/후진 1회)의 이동 거리
         float gridResolution = 0.5f;     // closed-set을 나누는 x/z 격자 한 칸 크기
         float headingResolution = 10.0f; // closed-set을 나누는 heading 격자 한 칸 크기(도)
-        float reverseCostMul = 1.5f;     // 후진 스텝 비용 배율
-        float gearChangeCost = 3.0f;     // 이전 스텝과 기어(전/후진)가 바뀔 때 추가 비용
+        float reverseCostMul = 1.2f;     // 후진 스텝 비용 배율
+        float gearChangeCost = 2.0f;     // 이전 스텝과 기어(전/후진)가 바뀔 때 추가 비용
         float steerChangeCost = 0.5f;    // 이전 스텝과 조향이 바뀔 때 추가 비용
-        int maxExpansions = 50000;       // 격자가 촘촘해진 만큼 예산도 늘림 — 이 횟수만큼 노드를
-                                          // 확장해도 못 찾으면 실패 처리
+        int maxExpansions = 5000;        // 격자가 촘촘해진 만큼 예산도 늘림 — 이 횟수만큼 노드를
+                                         // 확장해도 못 찾으면 실패 처리
     };
 
     // start/goal은 XZ 평면 위 pivot 위치 + heading(도, atan2(z, x) 규약, ReedsShepp와 동일).

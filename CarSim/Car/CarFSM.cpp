@@ -153,9 +153,12 @@ void Car::OnModeExit(DriveMode mode)
 void Car::BeginParkPlan()
 {
     // 아직 예약 전이고(입차 대기 중) 목표 Park 노드가 있으면, 도착한 지금 실제로 예약을 시도한다.
+    // parkNodeId는 입차 경로탐색이 실패했을 때 같은 Park 노드의 다른 빈 자리를 다시 예약하는 데도 쓰이므로,
+    // m_pendingParkNode를 비운 뒤에도 계속 참조할 수 있게 별도로 들고 있는다.
+    int parkNodeId = -1;
     if (m_parkSpot == nullptr && m_pendingParkNode != nullptr)
     {
-        int parkNodeId = m_pendingParkNode->id;
+        parkNodeId = m_pendingParkNode->id;
         m_parkSpot = m_RoadDataManager->TryReserveParkSpot(parkNodeId);
         m_pendingParkNode = nullptr;
         if (m_parkSpot == nullptr)
@@ -180,8 +183,8 @@ void Car::BeginParkPlan()
     float turningRadius = m_wheelbase / tanf(m_maxSteerAngle);
     Vec3 startPos = m_rigidbody.GetPosition();
     float startAngleDeg = DirectionToAngleDeg(GetForwardAxis());
-    Vec3 targetPos;
-    float targetAngleDeg;
+    HybridAStar::VehicleShape shape = BuildVehicleShape();
+    const std::vector<HybridAStar::Obstacle> &obstacles = m_RoadDataManager->GetObstacles();
 
     if (m_isExitingPark)
     {
@@ -192,6 +195,15 @@ void Car::BeginParkPlan()
         Vec3 closestDir = closestLane->GetSpline().GetDirectionAt(splinePos);
         m_currentLane = closestLane;
 
+        // 이미 레인 진행 방향과 90도 이내로 정렬돼 있으면 RS 출차 매뉴버 없이 바로 주행으로 넘어간다.
+        constexpr float EXIT_HEADING_ALIGN_ANGLE = ToRadians(90.0f);
+        float headingDot = std::clamp(GetForwardAxis().Dot(closestDir), -1.0f, 1.0f);
+        if (std::acos(headingDot) <= EXIT_HEADING_ALIGN_ANGLE)
+        {
+            m_vehicleController.BeginPlan({});
+            return;
+        }
+
         // 출차: 레인 접선에 수직(90도)으로 진입점을 바라보는 위치를 target으로 잡는다.
         // startPos가 있는 쪽의 법선 방향으로, startPos만큼 떨어져 있되 최소 6만큼은 떨어뜨린다.
         constexpr float MIN_EXIT_NORMAL_DISTANCE = 6.0f;
@@ -201,44 +213,53 @@ void Car::BeginParkPlan()
             normalDir = normalDir * -1.0f;
         float distance = std::max(std::fabs(lateralOffset), MIN_EXIT_NORMAL_DISTANCE);
 
-        targetPos = closestPos + normalDir * distance;
-        targetAngleDeg = DirectionToAngleDeg(closestPos - targetPos);
-    }
-    else
-    {
-        // 입차: 현재 레인에서 예약해둔 주차칸으로 들어간다.
-        targetAngleDeg = DirectionToAngleDeg(m_parkSpot->direction);
-        targetPos = m_parkSpot->position - m_parkSpot->direction.Normalized() * m_wheelbase;
-    }
+        Vec3 targetPos = closestPos + normalDir * distance;
+        float targetAngleDeg = DirectionToAngleDeg(closestPos - targetPos);
 
-    HybridAStar::VehicleShape shape = BuildVehicleShape();
-    const std::vector<HybridAStar::Obstacle> &obstacles = m_RoadDataManager->GetObstacles();
-    bool foundPath = false;
-    ReedsShepp::Path path = HybridAStar::FindPath(startPos, startAngleDeg, targetPos, targetAngleDeg, obstacles, shape, foundPath);
-    if (!foundPath)
-    {
-        // 탐색 실패를 "빈 경로=이미 목표"로 오인하면 안 된다 — 그대로 두면 차가 실제로는 주차칸에
-        // 들어가지도 않았는데 UpdatePark이 입차 완료로 오판해 예약만 영구히 붙들고 있게 된다.
-        // 입차 실패면 예약을 풀어 자리를 되돌려주고 목적지를 포기한다(출차 실패는 이미 차가 그
-        // 자리를 점유 중이므로 예약을 풀지 않는다).
-        DebugConsole::Log("BeginParkPlan: HybridA* failed to find a path, abandoning this park attempt");
-        if (!m_isExitingPark && m_parkSpot != nullptr)
+        bool foundPath = false;
+        ReedsShepp::Path path = HybridAStar::FindPath(startPos, startAngleDeg, targetPos, targetAngleDeg, obstacles, shape, foundPath);
+        if (!foundPath)
         {
-            m_RoadDataManager->ReleaseParkSpot(m_parkSpot->id);
-            m_parkSpot = nullptr;
+            // 출차 실패는 이미 차가 그 자리를 점유 중이므로 예약을 풀지 않는다.
+            DebugConsole::Log("BeginParkPlan: HybridA* failed to find an exit path, abandoning this park attempt");
+            m_destLane = nullptr;
+            return;
         }
-        m_destLane = nullptr;
+        m_vehicleController.BeginPlan(BuildParkSegments(path, m_maxSteerAngle));
+        RebuildParkDebugRender(path, startPos, startAngleDeg, turningRadius, targetPos, targetAngleDeg);
         return;
     }
-    m_vehicleController.BeginPlan(BuildParkSegments(path, m_maxSteerAngle));
-    RebuildParkDebugRender(path, startPos, startAngleDeg, turningRadius, targetPos, targetAngleDeg);
 
-    for (const ReedsShepp::PathElement &element : path)
+    // 입차: 현재 레인에서 예약해둔 주차칸으로 들어간다. 경로탐색이 막히면 그 자리를 포기하고
+    // 예약을 풀어준 뒤, 같은 Park 노드의 다른 빈 자리를 하나씩 다시 예약해 시도한다.
+    // 모든 자리가 막혀 있으면 그제서야 목적지를 포기한다.
+    unordered_set<int> triedSpotIds;
+    while (true)
     {
-        const char *steerName = element.steering == ReedsShepp::Steering::Left    ? "Left"
-                                : element.steering == ReedsShepp::Steering::Right ? "Right"
-                                                                                  : "Straight";
-        const char *gearName = element.gear == ReedsShepp::Gear::Forward ? "Forward" : "Backward";
+        Vec3 targetPos = m_parkSpot->position - m_parkSpot->direction.Normalized() * m_wheelbase;
+        float targetAngleDeg = DirectionToAngleDeg(m_parkSpot->direction);
+
+        bool foundPath = false;
+        ReedsShepp::Path path = HybridAStar::FindPath(startPos, startAngleDeg, targetPos, targetAngleDeg, obstacles, shape, foundPath);
+        if (foundPath)
+        {
+            m_vehicleController.BeginPlan(BuildParkSegments(path, m_maxSteerAngle));
+            RebuildParkDebugRender(path, startPos, startAngleDeg, turningRadius, targetPos, targetAngleDeg);
+            return;
+        }
+
+        DebugConsole::Log("BeginParkPlan: HybridA* failed to reach ParkSpot " + std::to_string(m_parkSpot->id) +
+                          ", trying next available spot");
+        triedSpotIds.insert(m_parkSpot->id);
+        m_RoadDataManager->ReleaseParkSpot(m_parkSpot->id);
+        m_parkSpot = m_RoadDataManager->TryReserveParkSpot(parkNodeId, triedSpotIds);
+        if (m_parkSpot == nullptr)
+        {
+            DebugConsole::Log("BeginParkPlan: no reachable ParkSpot left for node " + std::to_string(parkNodeId) +
+                              ", abandoning destination");
+            m_destLane = nullptr;
+            return;
+        }
     }
 }
 
@@ -265,7 +286,7 @@ void Car::BeginAvoidPlan()
     // 레인을 벗어나지 않고 그 위의 한 점으로 잡아두면, 우회가 끝난 뒤 별도 처리 없이 그냥 Drive로
     // 돌아가 기존 m_currentLane/m_path를 그대로 이어서 쓸 수 있다. 현재 레인 안에서 거리가 안
     // 나오면 경로상 다음 레인까지만 이어서 재보고, 그래도 모자라면 다음 레인 끝점을 목표로 삼는다.
-    constexpr float AVOID_GOAL_DISTANCE = 25.0f;
+    constexpr float AVOID_GOAL_DISTANCE = 30.0f;
     const std::vector<Vec3> &splinePoints = m_currentSpline.GetSplinePoints();
 
     Vec3 targetPos = startPos;
@@ -485,7 +506,7 @@ bool Car::TryAvoidObstacle()
 
     HybridAStar::VehicleShape shape = BuildVehicleShape();
 
-    constexpr float LOOKAHEAD_DISTANCE = 15.0f; // 코리도어 길이(m)
+    constexpr float LOOKAHEAD_DISTANCE = 10.0f; // 코리도어 길이(m)
     constexpr float SAMPLE_SPACING = 1.0f;      // 샘플 간격(m)
 
     Vec3 position = m_rigidbody.GetPosition();

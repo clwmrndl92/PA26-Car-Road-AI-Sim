@@ -42,8 +42,8 @@ public:
 
     // parkNodeId(Park 타입 노드)의 children 중 아직 예약되지 않은 ParkSpot을 하나 찾아 예약하고
     // 반환한다. 빈 자리가 없으면 nullptr. 예약 상태는 정적 도로 데이터(RoadNode)와 분리해서
-    // 여기서만 관리한다.
-    shared_ptr<RoadNode> TryReserveParkSpot(int parkNodeId);
+    // 여기서만 관리한다. excludeIds에 담긴 스팟은 건너뛴다 (경로탐색 실패로 이미 시도해본 자리 재시도 방지용).
+    shared_ptr<RoadNode> TryReserveParkSpot(int parkNodeId, const unordered_set<int> &excludeIds = {});
     // spotNodeId의 예약을 해제한다 (출차 완료 시 호출).
     void ReleaseParkSpot(int spotNodeId);
 

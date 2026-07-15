@@ -58,7 +58,7 @@ bool CarSim::InitResource()
     // Car 1
     {
         auto car = std::make_shared<Car>();
-        car->Init(GetCarSpec(CarType::Car0), &m_RoadDataManager, JPH::Vec3(-10.0f, 0.1f, -15.0f));
+        car->Init(GetCarSpec(CarType::Car0), &m_RoadDataManager, JPH::Vec3(-12.0f, 0.1f, -15.0f));
         car->SetDrawCollider(true);
         car->SetDestination(m_RoadDataManager.GetNode(1));
 
@@ -66,16 +66,16 @@ bool CarSim::InitResource()
         m_CarObjects.push_back(car);
     }
 
-    // // Car 2
-    // {
-    //     auto car = std::make_shared<Car>();
-    //     car->Init(GetCarSpec(CarType::Car1), &m_RoadDataManager, JPH::Vec3(40.0f, 0.1f, 10.0f));
-    //     car->SetDrawCollider(true);
-    //     car->SetDestination(m_RoadDataManager.GetNode(1));
+    // Car 2
+    {
+        auto car = std::make_shared<Car>();
+        car->Init(GetCarSpec(CarType::Car1), &m_RoadDataManager, JPH::Vec3(60.0f, 0.1f, 12.0f));
+        car->SetDrawCollider(true);
+        car->SetDestination(m_RoadDataManager.GetNode(1));
 
-    //     m_GameObjects.push_back(car);
-    //     m_CarObjects.push_back(car);
-    // }
+        m_GameObjects.push_back(car);
+        m_CarObjects.push_back(car);
+    }
 
     return true;
 }

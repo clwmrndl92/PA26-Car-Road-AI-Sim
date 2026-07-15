@@ -33,7 +33,7 @@ public:
     std::optional<float> GetRequiredSteerAngle() const override;
 
 private:
-    static constexpr float MANEUVER_SPEED = 1.5f; // 저속 주차 기동 속도 (m/s)
+    static constexpr float MANEUVER_SPEED = 3.0f; // 저속 주차 기동 속도 (m/s)
     // 남은 거리 기준 감속 프로파일에 쓰는 가정 감속도 (m/s^2).
     static constexpr float DECEL_ESTIMATE = 0.4f;
 
