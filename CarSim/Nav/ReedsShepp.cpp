@@ -2,6 +2,7 @@
 #include <cmath>
 #include <algorithm>
 #include <limits>
+#include <utility>
 
 // 참고 구현(reeds-shepp-curves-master, Python)을 그대로 포팅함.
 // 논문: Reeds, J.A.; Shepp, L.A. "Optimal paths for a car that goes both forwards
@@ -380,58 +381,71 @@ namespace ReedsShepp
             Path1, Path2, Path3, Path4, Path5, Path6,
             Path7, Path8, Path9, Path10, Path11, Path12};
 
-        // 논문 말미에 설명된 timeflip 변환: 모든 세그먼트의 기어를 반전.
-        Path Timeflip(const Path &path)
+        // 논문 말미에 설명된 timeflip 변환: 모든 세그먼트의 기어를 반전. path를 값으로 받아
+        // 제자리에서 수정하므로 임시 경로(prvalue)를 넘기면 추가 복사가 생기지 않는다.
+        Path Timeflip(Path path)
         {
-            Path result = path;
-            for (auto &e : result)
+            for (auto &e : path)
                 e.gear = (e.gear == Gear::Forward) ? Gear::Backward : Gear::Forward;
-            return result;
+            return path;
         }
 
         // 논문 말미에 설명된 reflect 변환: 모든 세그먼트의 조향을 반전.
-        Path Reflect(const Path &path)
+        Path Reflect(Path path)
         {
-            Path result = path;
-            for (auto &e : result)
+            for (auto &e : path)
             {
                 if (e.steering == Steering::Left)
                     e.steering = Steering::Right;
                 else if (e.steering == Steering::Right)
                     e.steering = Steering::Left;
             }
-            return result;
+            return path;
         }
 
-        // 12개 공식 각각에 대해 4가지 변형(원본/timeflip/reflect/둘 다)을 적용해
-        // 최대 48개의 경로 후보를 생성한다 (반경 1 기준 정규화 좌표 x, y, phi(deg)).
-        std::vector<Path> GetAllPaths(double x, double y, double phiDeg)
+        // param==0 세그먼트 제거. 길이에는 영향이 없지만(0을 더할 뿐) 반환 경로의 표현을
+        // 원본과 동일하게 맞추기 위해 유지한다.
+        void StripZeroParams(Path &path)
         {
-            std::vector<Path> paths;
-            paths.reserve(48);
+            path.erase(std::remove_if(path.begin(), path.end(),
+                                      [](const PathElement &e)
+                                      { return e.param == 0.0f; }),
+                       path.end());
+        }
+
+        // 12개 공식 각각에 4가지 변형(원본/timeflip/reflect/둘 다)을 적용한 최대 48개 후보 중
+        // 최단 경로 하나만 생성/보관해서 돌려준다 (반경 1 기준 정규화 좌표 x, y, phi(deg)).
+        // 후보 벡터를 물리적으로 만들지 않으므로 매 호출의 힙 할당이 48개 → 최대 2개로 줄어든다.
+        // 유효 경로가 없으면 빈 경로를 반환한다.
+        Path GetBestPath(double x, double y, double phiDeg)
+        {
+            Path best;
+            float bestLength = std::numeric_limits<float>::max();
+
+            // 생성 순서(공식별 원본→timeflip→reflect→둘 다)와 strict-less 비교를 그대로 유지해
+            // 기존 GetAllPaths+최소선택과 동일한 경로(동점 시 먼저 나온 것)를 고른다.
+            auto consider = [&](Path candidate)
+            {
+                StripZeroParams(candidate);
+                if (candidate.empty())
+                    return;
+                float length = GetPathLength(candidate);
+                if (length < bestLength)
+                {
+                    bestLength = length;
+                    best = std::move(candidate);
+                }
+            };
 
             for (PathFn fn : kPathFns)
             {
-                paths.push_back(fn(x, y, phiDeg));
-                paths.push_back(Timeflip(fn(-x, y, -phiDeg)));
-                paths.push_back(Reflect(fn(x, -y, -phiDeg)));
-                paths.push_back(Reflect(Timeflip(fn(-x, -y, phiDeg))));
+                consider(fn(x, y, phiDeg));
+                consider(Timeflip(fn(-x, y, -phiDeg)));
+                consider(Reflect(fn(x, -y, -phiDeg)));
+                consider(Reflect(Timeflip(fn(-x, -y, phiDeg))));
             }
 
-            for (auto &path : paths)
-            {
-                path.erase(std::remove_if(path.begin(), path.end(),
-                                          [](const PathElement &e)
-                                          { return e.param == 0.0f; }),
-                           path.end());
-            }
-
-            paths.erase(std::remove_if(paths.begin(), paths.end(),
-                                       [](const Path &p)
-                                       { return p.empty(); }),
-                        paths.end());
-
-            return paths;
+            return best;
         }
     }
 
@@ -456,26 +470,13 @@ namespace ReedsShepp
         localX /= turningRadius;
         localY /= turningRadius;
 
-        std::vector<Path> candidates = GetAllPaths(localX, localY, localThetaDeg);
-        if (candidates.empty())
+        Path best = GetBestPath(localX, localY, localThetaDeg);
+        if (best.empty())
             return {};
 
-        const Path *best = &candidates.front();
-        float bestLength = GetPathLength(*best);
-        for (const auto &candidate : candidates)
-        {
-            float length = GetPathLength(candidate);
-            if (length < bestLength)
-            {
-                bestLength = length;
-                best = &candidate;
-            }
-        }
-
-        Path result = *best;
-        for (auto &e : result)
+        for (auto &e : best)
             e.param *= turningRadius;
-        return result;
+        return best;
     }
 
     std::vector<Vec3> SamplePath(const Path &path, const Vec3 &start, float startAngleDeg,

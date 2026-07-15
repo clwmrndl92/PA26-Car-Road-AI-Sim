@@ -5,9 +5,11 @@
 #include <cmath>
 #include <deque>
 #include <functional>
+#include <limits>
 #include <queue>
 #include <string>
 #include <unordered_set>
+#include <vector>
 
 namespace HybridAStar
 {
@@ -99,17 +101,48 @@ namespace HybridAStar
             return result;
         }
 
-        // 2D SAT: 두 회전된 사각형(중심+heading+반길이/반폭)이 겹치는지.
-        bool ObbOverlap(const Vec3 &centerA, float halfLengthA, float halfWidthA, float headingDegA,
-                        const Vec3 &centerB, float halfLengthB, float halfWidthB, float headingDegB)
+        Vec3 HeadingForward(float headingDeg)
         {
-            float radA = ToRadians(headingDegA);
-            float radB = ToRadians(headingDegB);
-            Vec3 fwdA(std::cos(radA), 0.0f, std::sin(radA));
-            Vec3 rightA(-fwdA.GetZ(), 0.0f, fwdA.GetX());
-            Vec3 fwdB(std::cos(radB), 0.0f, std::sin(radB));
-            Vec3 rightB(-fwdB.GetZ(), 0.0f, fwdB.GetX());
+            float rad = ToRadians(headingDeg);
+            return Vec3(std::cos(rad), 0.0f, std::sin(rad));
+        }
 
+        // OBB 중심에서 모서리까지의 거리 = bounding circle 반경.
+        float BoundingRadius(float halfLength, float halfWidth)
+        {
+            return std::sqrt(halfLength * halfLength + halfWidth * halfWidth);
+        }
+
+        // heading OBB의 축(fwd/right)과 bounding 반경을 미리 계산해 둔 장애물. 장애물은 FindPath 한 번
+        // 도는 동안 안 움직이므로, 매 충돌검사마다 삼각함수를 다시 돌리지 않도록 진입 시 한 번만 만든다.
+        struct PreparedObstacle
+        {
+            Vec3 center;
+            float halfLength;
+            float halfWidth;
+            Vec3 fwd;
+            Vec3 right;
+            float boundingRadius;
+        };
+
+        std::vector<PreparedObstacle> PrepareObstacles(const std::vector<Obstacle> &obstacles)
+        {
+            std::vector<PreparedObstacle> prepared;
+            prepared.reserve(obstacles.size());
+            for (const Obstacle &o : obstacles)
+            {
+                Vec3 fwd = HeadingForward(o.headingDeg);
+                Vec3 right(-fwd.GetZ(), 0.0f, fwd.GetX());
+                prepared.push_back(PreparedObstacle{o.center, o.halfLength, o.halfWidth, fwd, right,
+                                                    BoundingRadius(o.halfLength, o.halfWidth)});
+            }
+            return prepared;
+        }
+
+        // 2D SAT: 두 OBB의 축(fwd/right)이 모두 주어진 상태 — 삼각함수 없이 분리축만 검사한다.
+        bool ObbOverlapAxes(const Vec3 &centerA, float halfLengthA, float halfWidthA, const Vec3 &fwdA, const Vec3 &rightA,
+                            const Vec3 &centerB, float halfLengthB, float halfWidthB, const Vec3 &fwdB, const Vec3 &rightB)
+        {
             Vec3 d = centerB - centerA;
             const Vec3 axes[4] = {fwdA, rightA, fwdB, rightB};
             for (const Vec3 &axis : axes)
@@ -123,25 +156,43 @@ namespace HybridAStar
             return true;
         }
 
-        bool IsPoseCollision(const Pose &pose, const std::vector<Obstacle> &obstacles, const VehicleShape &shape)
+        // 미리 준비된 장애물에 대한 pose 충돌검사. 차량 축은 pose당 한 번만 계산하고, 각 장애물마다
+        // bounding circle로 조기 기각한 뒤에만 SAT를 돌린다.
+        bool IsPoseCollisionPrepared(const Pose &pose, const std::vector<PreparedObstacle> &obstacles,
+                                     const VehicleShape &shape, float vehicleBoundingRadius)
         {
-            float rad = ToRadians(pose.headingDeg);
-            Vec3 forward(std::cos(rad), 0.0f, std::sin(rad));
-            Vec3 bodyCenter = pose.position + forward * shape.pivotToCenter;
+            Vec3 fwd = HeadingForward(pose.headingDeg);
+            Vec3 right(-fwd.GetZ(), 0.0f, fwd.GetX());
+            Vec3 bodyCenter = pose.position + fwd * shape.pivotToCenter;
 
-            for (const Obstacle &obstacle : obstacles)
+            for (const PreparedObstacle &o : obstacles)
             {
-                if (ObbOverlap(bodyCenter, shape.halfLength, shape.halfWidth, pose.headingDeg,
-                               obstacle.center, obstacle.halfLength, obstacle.halfWidth, obstacle.headingDeg))
+                // 브로드페이즈: 두 bounding circle가 안 닿으면 SAT 생략(제곱거리 비교라 sqrt 불필요).
+                float dx = o.center.GetX() - bodyCenter.GetX();
+                float dz = o.center.GetZ() - bodyCenter.GetZ();
+                float sumR = vehicleBoundingRadius + o.boundingRadius;
+                if (dx * dx + dz * dz > sumR * sumR)
+                    continue;
+
+                if (ObbOverlapAxes(bodyCenter, shape.halfLength, shape.halfWidth, fwd, right,
+                                   o.center, o.halfLength, o.halfWidth, o.fwd, o.right))
                     return true;
             }
             return false;
         }
 
+        // 단발/사전준비 없는 호출용 래퍼 — 장애물을 즉석에서 준비해 위 함수로 넘긴다.
+        bool IsPoseCollision(const Pose &pose, const std::vector<Obstacle> &obstacles, const VehicleShape &shape)
+        {
+            std::vector<PreparedObstacle> prepared = PrepareObstacles(obstacles);
+            return IsPoseCollisionPrepared(pose, prepared, shape, BoundingRadius(shape.halfLength, shape.halfWidth));
+        }
+
         // rsPath를 startPose에서부터 촘촘히 샘플링하며 매 지점 충돌을 검사. 빈 경로는 항상 충돌 없음(=현재
         // pose가 이미 목표라는 뜻).
         bool IsPathCollisionFree(const ReedsShepp::Path &rsPath, const Pose &startPose, float turningRadius,
-                                 const std::vector<Obstacle> &obstacles, const VehicleShape &shape)
+                                 const std::vector<PreparedObstacle> &obstacles, const VehicleShape &shape,
+                                 float vehicleBoundingRadius)
         {
             constexpr float SAMPLE_SPACING = 0.5f;
             Pose pose = startPose;
@@ -152,20 +203,177 @@ namespace HybridAStar
                 for (int i = 0; i < sampleCount; ++i)
                 {
                     pose = StepPose(pose, element.steering, element.gear, ds, turningRadius);
-                    if (IsPoseCollision(pose, obstacles, shape))
+                    if (IsPoseCollisionPrepared(pose, obstacles, shape, vehicleBoundingRadius))
                         return false;
                 }
             }
             return true;
         }
 
-        // 장애물을 무시한 Reeds-Shepp 최단거리 휴리스틱 (non-holonomic-without-obstacles).
-        float Heuristic(const Pose &pose, const Vec3 &goal, float goalHeadingDeg, float turningRadius)
+        // 점 p에서 OBB(o) 표면까지의 최단 거리(XZ, 내부면 0). 2D 격자 셀의 장애물 팽창 판정에 쓴다.
+        float PointObbDistance(const Vec3 &p, const PreparedObstacle &o)
+        {
+            Vec3 d = p - o.center;
+            float along = std::fabs(d.Dot(o.fwd)) - o.halfLength;   // heading축 초과분
+            float across = std::fabs(d.Dot(o.right)) - o.halfWidth; // 수직축 초과분
+            float ox = std::max(along, 0.0f);
+            float oz = std::max(across, 0.0f);
+            return std::sqrt(ox * ox + oz * oz);
+        }
+
+        // holonomic-with-obstacles 휴리스틱: 회전은 무시하되 벽은 우회하는 2D 격자 거리 테이블.
+        // goal에서 8-연결 Dijkstra를 한 번 돌려 각 셀의 goal까지 거리를 미리 굽는다. 벽에 막혀 도달
+        // 불가한 셀은 INF(=그 방향 노드 가지치기). 차량은 반경 halfWidth 원으로 근사해 장애물을 팽창.
+        struct Grid2DHeuristic
+        {
+            static constexpr float INF = std::numeric_limits<float>::infinity();
+            float originX = 0.0f;
+            float originZ = 0.0f;
+            float resolution = 0.5f;
+            int width = 0;
+            int height = 0;
+            bool usable = false;
+            std::vector<float> dist; // width*height, INF = 차단/미도달
+
+            int Index(int cx, int cz) const { return cz * width + cx; }
+
+            // pos가 속한 셀의 goal까지 거리. 비활성/범위 밖이면 0(정보 없음 → RS로 폴백), 차단/미도달이면 INF.
+            float Lookup(const Vec3 &pos) const
+            {
+                if (!usable)
+                    return 0.0f;
+                int cx = static_cast<int>(std::floor((pos.GetX() - originX) / resolution));
+                int cz = static_cast<int>(std::floor((pos.GetZ() - originZ) / resolution));
+                if (cx < 0 || cx >= width || cz < 0 || cz >= height)
+                    return 0.0f;
+                return dist[Index(cx, cz)];
+            }
+        };
+
+        Grid2DHeuristic Build2DHeuristic(const Vec3 &start, const Vec3 &goal,
+                                         const std::vector<PreparedObstacle> &obstacles,
+                                         const VehicleShape &shape, const Params &params)
+        {
+            Grid2DHeuristic g;
+            g.resolution = params.gridResolution;
+
+            // AABB: start/goal/장애물(반경 포함)을 감싸고 여유 마진.
+            float minX = std::min(start.GetX(), goal.GetX());
+            float maxX = std::max(start.GetX(), goal.GetX());
+            float minZ = std::min(start.GetZ(), goal.GetZ());
+            float maxZ = std::max(start.GetZ(), goal.GetZ());
+            for (const PreparedObstacle &o : obstacles)
+            {
+                minX = std::min(minX, o.center.GetX() - o.boundingRadius);
+                maxX = std::max(maxX, o.center.GetX() + o.boundingRadius);
+                minZ = std::min(minZ, o.center.GetZ() - o.boundingRadius);
+                maxZ = std::max(maxZ, o.center.GetZ() + o.boundingRadius);
+            }
+            float margin = std::max(5.0f * g.resolution, shape.halfLength + shape.halfWidth);
+            minX -= margin;
+            maxX += margin;
+            minZ -= margin;
+            maxZ += margin;
+
+            g.originX = minX;
+            g.originZ = minZ;
+            g.width = std::max(1, static_cast<int>(std::ceil((maxX - minX) / g.resolution)));
+            g.height = std::max(1, static_cast<int>(std::ceil((maxZ - minZ) / g.resolution)));
+
+            // 셀 수 과다 방지 — 지나치게 크면 2D 휴리스틱 비활성(순수 RS로).
+            constexpr long MAX_CELLS = 1000000;
+            if (static_cast<long>(g.width) * g.height > MAX_CELLS)
+                return g; // usable=false
+
+            const size_t cellCount = static_cast<size_t>(g.width) * g.height;
+            g.dist.assign(cellCount, Grid2DHeuristic::INF);
+
+            // 차단 마스크: 셀 중심이 (장애물 표면까지 거리 <= halfWidth)이면 차단.
+            const float inflate = shape.halfWidth;
+            std::vector<char> blocked(cellCount, 0);
+            for (int cz = 0; cz < g.height; ++cz)
+                for (int cx = 0; cx < g.width; ++cx)
+                {
+                    Vec3 c(g.originX + (cx + 0.5f) * g.resolution, 0.0f, g.originZ + (cz + 0.5f) * g.resolution);
+                    for (const PreparedObstacle &o : obstacles)
+                    {
+                        float ddx = c.GetX() - o.center.GetX();
+                        float ddz = c.GetZ() - o.center.GetZ();
+                        float rr = o.boundingRadius + inflate;
+                        if (ddx * ddx + ddz * ddz > rr * rr)
+                            continue; // bounding circle 조기기각
+                        if (PointObbDistance(c, o) <= inflate)
+                        {
+                            blocked[g.Index(cx, cz)] = 1;
+                            break;
+                        }
+                    }
+                }
+
+            // goal 셀은 시작점 — 팽창으로 차단됐더라도 소스로 강제 사용.
+            int gx = std::min(std::max(static_cast<int>(std::floor((goal.GetX() - g.originX) / g.resolution)), 0), g.width - 1);
+            int gz = std::min(std::max(static_cast<int>(std::floor((goal.GetZ() - g.originZ) / g.resolution)), 0), g.height - 1);
+
+            using QI = std::pair<float, int>; // (dist, cellIndex)
+            std::priority_queue<QI, std::vector<QI>, std::greater<QI>> pq;
+            int goalIdx = g.Index(gx, gz);
+            g.dist[goalIdx] = 0.0f;
+            pq.push({0.0f, goalIdx});
+
+            const int dcx[8] = {1, -1, 0, 0, 1, 1, -1, -1};
+            const int dcz[8] = {0, 0, 1, -1, 1, -1, 1, -1};
+            const float card = g.resolution;
+            const float diag = std::sqrt(2.0f) * g.resolution;
+            const float stepCost[8] = {card, card, card, card, diag, diag, diag, diag};
+
+            while (!pq.empty())
+            {
+                QI top = pq.top();
+                pq.pop();
+                float d = top.first;
+                int idx = top.second;
+                if (d > g.dist[idx])
+                    continue;
+                int cx = idx % g.width;
+                int cz = idx / g.width;
+                for (int k = 0; k < 8; ++k)
+                {
+                    int nx = cx + dcx[k];
+                    int nz = cz + dcz[k];
+                    if (nx < 0 || nx >= g.width || nz < 0 || nz >= g.height)
+                        continue;
+                    int nidx = g.Index(nx, nz);
+                    if (blocked[nidx])
+                        continue;
+                    float nd = d + stepCost[k];
+                    if (nd < g.dist[nidx])
+                    {
+                        g.dist[nidx] = nd;
+                        pq.push({nd, nidx});
+                    }
+                }
+            }
+
+            // start 셀이 도달 불가면 2D 휴리스틱을 신뢰할 수 없음 → 비활성(순수 RS로 폴백).
+            int sx = static_cast<int>(std::floor((start.GetX() - g.originX) / g.resolution));
+            int sz = static_cast<int>(std::floor((start.GetZ() - g.originZ) / g.resolution));
+            if (sx < 0 || sx >= g.width || sz < 0 || sz >= g.height || std::isinf(g.dist[g.Index(sx, sz)]))
+                return g; // usable=false
+
+            g.usable = true;
+            return g;
+        }
+
+        // 두 하한을 합친 휴리스틱: 회전제약(Reeds-Shepp, 장애물 무시)과 벽 우회(2D 격자, 회전 무시)
+        // 중 더 강한 병목을 취한다(max). 둘 다 실제 잔여 비용의 하한이라 합쳐도 하한이 유지된다.
+        float Heuristic(const Pose &pose, const Vec3 &goal, float goalHeadingDeg, float turningRadius,
+                        const Grid2DHeuristic &grid2d)
         {
             ReedsShepp::Path path = ReedsShepp::GetOptimalPath(pose.position, pose.headingDeg, goal, goalHeadingDeg, turningRadius);
-            if (path.empty())
-                return (goal - pose.position).Length();
-            return ReedsShepp::GetPathLength(path);
+            float rsDist = path.empty() ? (goal - pose.position).Length() : ReedsShepp::GetPathLength(path);
+
+            float obstacleDist = grid2d.Lookup(pose.position);
+            return std::max(rsDist, obstacleDist);
         }
 
         // path 끝에 (steering, gear, param) 스텝 하나를 이어붙인다. 직전 세그먼트와 steering/gear가
@@ -208,12 +416,23 @@ namespace HybridAStar
             DebugConsole::Log("HybridAStar::FindPath failed: invalid turning radius (check maxSteerAngleDeg)");
             return {};
         }
+        
+        // 장애물 축/bounding 반경은 탐색 내내 안 변하므로 한 번만 준비해 재사용한다.
+        std::vector<PreparedObstacle> preparedObstacles = PrepareObstacles(obstacles);
+        float vehicleBoundingRadius = BoundingRadius(shape.halfLength, shape.halfWidth);
 
         // 시작/목표 pose 자체가 이미 장애물과 겹치면 탐색해봐야 못 찾는다 — 원인 파악용으로 미리 찍어둔다.
-        if (IsPoseCollision(Pose{start, startHeadingDeg}, obstacles, shape))
+        if (IsPoseCollisionPrepared(Pose{start, startHeadingDeg}, preparedObstacles, shape, vehicleBoundingRadius)){
             DebugConsole::Log("HybridAStar::FindPath: start pose overlaps an obstacle");
-        if (IsPoseCollision(Pose{goal, goalHeadingDeg}, obstacles, shape))
+            return {};
+        }
+        if (IsPoseCollisionPrepared(Pose{goal, goalHeadingDeg}, preparedObstacles, shape, vehicleBoundingRadius)) {
             DebugConsole::Log("HybridAStar::FindPath: goal pose overlaps an obstacle - path can never succeed");
+            return {};
+        }
+
+        // holonomic-with-obstacles 휴리스틱 테이블을 goal 기준으로 한 번 구워둔다(2D라 매우 저렴).
+        Grid2DHeuristic grid2d = Build2DHeuristic(start, goal, preparedObstacles, shape, params);
 
         // 1. Open Set(우선순위 큐)에 시작 노드 삽입
         std::deque<PlanNode> nodes;
@@ -221,7 +440,7 @@ namespace HybridAStar
 
         using QueueItem = std::pair<float, int>; // (f_cost, node index)
         std::priority_queue<QueueItem, std::vector<QueueItem>, std::greater<QueueItem>> openSet;
-        openSet.push({Heuristic(nodes[0].pose, goal, goalHeadingDeg, turningRadius), 0});
+        openSet.push({Heuristic(nodes[0].pose, goal, goalHeadingDeg, turningRadius, grid2d), 0});
 
         // 3D 방문 여부를 체크할 테이블
         std::unordered_set<StateKey, StateKeyHash> closedSet;
@@ -246,7 +465,7 @@ namespace HybridAStar
 
             // 3. [치트키] 리드-쉽 숏컷 시도 (Shot-to-Goal)
             ReedsShepp::Path rsPath = ReedsShepp::GetOptimalPath(current.pose.position, current.pose.headingDeg, goal, goalHeadingDeg, turningRadius);
-            if (IsPathCollisionFree(rsPath, current.pose, turningRadius, obstacles, shape))
+            if (IsPathCollisionFree(rsPath, current.pose, turningRadius, preparedObstacles, shape, vehicleBoundingRadius))
             {
                 ReedsShepp::Path result = ReconstructPath(nodes, currentIdx, params.stepSize);
                 for (const ReedsShepp::PathElement &element : rsPath)
@@ -268,7 +487,7 @@ namespace HybridAStar
                 {
                     Pose nextPose = StepPose(current.pose, steering, gear, params.stepSize, turningRadius);
 
-                    if (IsPoseCollision(nextPose, obstacles, shape))
+                    if (IsPoseCollisionPrepared(nextPose, preparedObstacles, shape, vehicleBoundingRadius))
                         continue;
 
                     float moveCost = params.stepSize * (gear == ReedsShepp::Gear::Backward ? params.reverseCostMul : 1.0f);
@@ -287,7 +506,7 @@ namespace HybridAStar
                     nodes.push_back(PlanNode{nextPose, gCost, currentIdx, steering, gear});
                     int nextIdx = static_cast<int>(nodes.size()) - 1;
 
-                    float fCost = gCost + Heuristic(nextPose, goal, goalHeadingDeg, turningRadius);
+                    float fCost = gCost + Heuristic(nextPose, goal, goalHeadingDeg, turningRadius, grid2d);
                     openSet.push({fCost, nextIdx});
                 }
             }
