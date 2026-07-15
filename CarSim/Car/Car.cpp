@@ -295,8 +295,6 @@ void Car::BakePathSpeedProfile()
     if (m_path.empty())
         return;
 
-    constexpr float CURVE_SPEED_COEFF = 1.22f; // 최대 코너링 속도 = CURVE_SPEED_COEFF * sqrt(R)
-
     struct RawPoint
     {
         float distance;
@@ -315,23 +313,27 @@ void Car::BakePathSpeedProfile()
         if (points.size() < 2 || splineLength <= 0.0f)
             continue;
 
+        float curveSpeed = m_maxSpeed;
+        float minPosT = 0.0f;
+        float radius = spline.GetMinRadiusAhead(0.0f, 1.0f, &minPosT);
+        minPosT = std::min(minPosT, 0.4f);
+        if (radius < std::numeric_limits<float>::max())
+            curveSpeed = RoadDataManager::CURVE_SPEED_COEFF * std::sqrt(radius);
+        DebugConsole::Log("Bake ID " + ToString(step.lane->GetId()) + " / curve R " + ToString(radius) + " / max Speed " + ToString(curveSpeed * 3.6f));
+        DebugConsole::Log("Bake minPos " + ToString(minPosT));
         float laneSpeedLimit = std::min(step.lane->GetLimitSpeed(), m_maxSpeed);
         size_t lastIndex = points.size() - 1;
-
         for (size_t i = 0; i < points.size(); ++i)
         {
             float pointDistance = cumulative + (static_cast<float>(i) / lastIndex) * splineLength;
-
-            float curveSpeed = m_maxSpeed;
-            if (i > 0)
+            if (static_cast<float>(i) / lastIndex <= minPosT)
             {
-                float t0 = static_cast<float>(i - 1) / lastIndex;
-                float t1 = static_cast<float>(i) / lastIndex;
-                float radius = spline.GetMinRadiusAhead(t0, t1);
-                if (radius < std::numeric_limits<float>::max())
-                    curveSpeed = CURVE_SPEED_COEFF * std::sqrt(radius);
+                raw.push_back({pointDistance, std::min({curveSpeed, laneSpeedLimit})});
             }
-            raw.push_back({pointDistance, std::min({curveSpeed, laneSpeedLimit, m_maxSpeed})});
+            else
+            {
+                raw.push_back({pointDistance, laneSpeedLimit});
+            }
         }
 
         cumulative += splineLength;

@@ -317,7 +317,7 @@ void EditApp::RebuildRenderObjects()
         ro.GetTransform().SetPosition(m_Obstacles[i].position);
     }
 
-    // Obstacle footprint outlines (blue), position/size/rotation exactly as authored.
+    // Obstacle footprints (filled blue planes), position/size/rotation exactly as authored.
     for (int i = 0; i < (int)m_Obstacles.size(); ++i)
     {
         const EditObstacle &obstacle = m_Obstacles[i];
@@ -335,16 +335,14 @@ void EditApp::RebuildRenderObjects()
             return p;
         };
 
-        std::vector<XMFLOAT3> outline = {
-            corner(1.0f, 1.0f), corner(1.0f, -1.0f), corner(-1.0f, -1.0f), corner(-1.0f, 1.0f), corner(1.0f, 1.0f)};
-
-        Model *pOutline = m_ModelManager.CreateFromGeometry("edit_obstacle_outline_" + std::to_string(obstacle.id),
-                                                             Geometry::CreatePolyline(outline));
-        pOutline->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.0f, 0.4f, 1.0f, 1.0f));
-        pOutline->materials[0].Set<float>("$Opacity", 1.0f);
+        Model *pPlane = m_ModelManager.CreateFromGeometry(
+            "edit_obstacle_plane_" + std::to_string(obstacle.id),
+            Geometry::CreateQuad(corner(1.0f, 1.0f), corner(1.0f, -1.0f), corner(-1.0f, -1.0f), corner(-1.0f, 1.0f)));
+        pPlane->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.0f, 0.4f, 1.0f, 1.0f));
+        pPlane->materials[0].Set<float>("$Opacity", 1.0f);
 
         RenderObject &ro = m_ObstacleRenders.emplace_back();
-        ro.SetModel(pOutline);
+        ro.SetModel(pPlane);
     }
 
     // Selected lane or marking: control-point spheres (orange), on top of its always-shown
@@ -1330,6 +1328,8 @@ void EditApp::DrawScene()
         ro.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     for (auto &ro : m_MarkingRenders)
         ro.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
+    for (auto &obstacle : m_ObstacleRenders)
+        obstacle.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
 
     m_BasicEffect.SetRenderLines();
     if (m_ShowGridXZ)
@@ -1340,8 +1340,6 @@ void EditApp::DrawScene()
         m_GridYZ.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     for (auto &spline : m_SplineRenders)
         spline.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
-    for (auto &obstacle : m_ObstacleRenders)
-        obstacle.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     m_BasicEffect.SetRenderDefault();
 
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());

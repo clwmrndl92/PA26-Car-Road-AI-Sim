@@ -1,10 +1,12 @@
 #include "HybridAStar.h"
+#include "Utill/DebugConsole.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <deque>
 #include <functional>
 #include <queue>
+#include <string>
 #include <unordered_set>
 
 namespace HybridAStar
@@ -195,11 +197,23 @@ namespace HybridAStar
                               const Vec3 &goal, float goalHeadingDeg,
                               const std::vector<Obstacle> &obstacles,
                               const VehicleShape &shape,
+                              bool &foundPath,
                               const Params &params)
     {
+        foundPath = false;
+
         float turningRadius = shape.wheelbase / std::tan(ToRadians(shape.maxSteerAngleDeg));
         if (turningRadius <= 0.0f)
+        {
+            DebugConsole::Log("HybridAStar::FindPath failed: invalid turning radius (check maxSteerAngleDeg)");
             return {};
+        }
+
+        // 시작/목표 pose 자체가 이미 장애물과 겹치면 탐색해봐야 못 찾는다 — 원인 파악용으로 미리 찍어둔다.
+        if (IsPoseCollision(Pose{start, startHeadingDeg}, obstacles, shape))
+            DebugConsole::Log("HybridAStar::FindPath: start pose overlaps an obstacle");
+        if (IsPoseCollision(Pose{goal, goalHeadingDeg}, obstacles, shape))
+            DebugConsole::Log("HybridAStar::FindPath: goal pose overlaps an obstacle - path can never succeed");
 
         // 1. Open Set(우선순위 큐)에 시작 노드 삽입
         std::deque<PlanNode> nodes;
@@ -219,7 +233,11 @@ namespace HybridAStar
         while (!openSet.empty())
         {
             if (++expansions > params.maxExpansions)
+            {
+                DebugConsole::Log("HybridAStar::FindPath failed: exceeded maxExpansions (" +
+                                   std::to_string(params.maxExpansions) + ")");
                 return {}; // Failure: 탐색 한도 초과
+            }
 
             // 2. f_cost가 가장 낮은 노드를 꺼냄
             int currentIdx = openSet.top().second;
@@ -233,6 +251,7 @@ namespace HybridAStar
                 ReedsShepp::Path result = ReconstructPath(nodes, currentIdx, params.stepSize);
                 for (const ReedsShepp::PathElement &element : rsPath)
                     AppendStep(result, element.steering, element.gear, element.param);
+                foundPath = true;
                 return result;
             }
 
@@ -274,6 +293,8 @@ namespace HybridAStar
             }
         }
 
+        DebugConsole::Log("HybridAStar::FindPath failed: open set exhausted after " +
+                          std::to_string(expansions) + " expansions");
         return {}; // Failure: 경로 없음
     }
 

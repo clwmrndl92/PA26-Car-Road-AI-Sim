@@ -33,22 +33,25 @@ namespace HybridAStar
 
     struct Params
     {
-        float stepSize = 2.0f;           // 한 스텝(전진/후진 1회)의 이동 거리
-        float gridResolution = 1.0f;     // closed-set을 나누는 x/z 격자 한 칸 크기
-        float headingResolution = 15.0f; // closed-set을 나누는 heading 격자 한 칸 크기(도)
+        float stepSize = 1.0f;           // 한 스텝(전진/후진 1회)의 이동 거리
+        float gridResolution = 0.5f;     // closed-set을 나누는 x/z 격자 한 칸 크기
+        float headingResolution = 10.0f; // closed-set을 나누는 heading 격자 한 칸 크기(도)
         float reverseCostMul = 1.5f;     // 후진 스텝 비용 배율
         float gearChangeCost = 3.0f;     // 이전 스텝과 기어(전/후진)가 바뀔 때 추가 비용
         float steerChangeCost = 0.5f;    // 이전 스텝과 조향이 바뀔 때 추가 비용
-        int maxExpansions = 20000;       // 이 횟수만큼 노드를 확장해도 못 찾으면 실패 처리
+        int maxExpansions = 50000;       // 격자가 촘촘해진 만큼 예산도 늘림 — 이 횟수만큼 노드를
+                                          // 확장해도 못 찾으면 실패 처리
     };
 
     // start/goal은 XZ 평면 위 pivot 위치 + heading(도, atan2(z, x) 규약, ReedsShepp와 동일).
     // obstacles는 이미 만들어진 장애물 사각형 목록(예: 반경 R 안의 다른 차량들을 사각형으로 치환한 것).
-    // 경로를 못 찾으면 빈 벡터를 반환한다.
+    // foundPath에 실제 탐색 성공 여부를 채운다 — 반환된 빈 벡터만으로는 "이미 목표에 있음"과
+    // "탐색 실패"를 구분할 수 없어서 호출자가 반드시 이 값을 확인해야 한다.
     ReedsShepp::Path FindPath(const Vec3 &start, float startHeadingDeg,
                               const Vec3 &goal, float goalHeadingDeg,
                               const std::vector<Obstacle> &obstacles,
                               const VehicleShape &shape,
+                              bool &foundPath,
                               const Params &params = {});
 
     // position/headingDeg에 있는 차량(shape)이 obstacles 중 하나와 겹치면 true. 검색 트리 확장 없이

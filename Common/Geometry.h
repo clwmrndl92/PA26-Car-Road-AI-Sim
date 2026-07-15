@@ -53,6 +53,12 @@ namespace Geometry
     // Draw with a line-list topology (see BasicEffect::SetRenderLines).
     GeometryData CreatePolyline(const std::vector<DirectX::XMFLOAT3>& points);
 
+    // Create a filled quad from 4 corner points, given in winding order as seen from the
+    // face's front (the normal is derived from (p1-p0) x (p2-p0)). Draw with the default
+    // (triangle-list) topology.
+    GeometryData CreateQuad(const DirectX::XMFLOAT3& p0, const DirectX::XMFLOAT3& p1,
+                            const DirectX::XMFLOAT3& p2, const DirectX::XMFLOAT3& p3);
+
     // Create a flat quad-strip ribbon of constant width following a centerline path in the XZ plane
     // (y taken from each point). Useful for roads/lanes built from spline sample points.
     GeometryData CreateRibbon(const std::vector<DirectX::XMFLOAT3>& centerPoints, float width);

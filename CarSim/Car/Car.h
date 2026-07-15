@@ -96,7 +96,8 @@ private:
         return "?";
     }
     void UpdateMode();
-    DriveMode DecideNextMode() const;
+    // reason에 모드 선택 이유를 채워서 돌려준다 — UpdateMode가 실제 전환 시에만 로그로 찍는다.
+    DriveMode DecideNextMode(const char **reason) const;
     void OnModeEnter(DriveMode mode, DriveMode previous);
     void OnModeExit(DriveMode mode);
     // Park 모드의 RS 입/출차 경로를 계획하고 VehicleController에 실행시킨다. 차가 완전히 멈춘

@@ -702,6 +702,28 @@ namespace Geometry
         return geoData;
     }
 
+    GeometryData CreateQuad(const DirectX::XMFLOAT3 &p0, const DirectX::XMFLOAT3 &p1,
+                            const DirectX::XMFLOAT3 &p2, const DirectX::XMFLOAT3 &p3)
+    {
+        using namespace DirectX;
+
+        GeometryData geoData;
+        geoData.vertices = {p0, p1, p2, p3};
+
+        XMVECTOR normalVec = XMVector3Normalize(XMVector3Cross(
+            XMVectorSubtract(XMLoadFloat3(&p1), XMLoadFloat3(&p0)),
+            XMVectorSubtract(XMLoadFloat3(&p2), XMLoadFloat3(&p0))));
+        XMFLOAT3 normal;
+        XMStoreFloat3(&normal, normalVec);
+
+        geoData.normals.assign(4, normal);
+        geoData.tangents.assign(4, XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f));
+        geoData.texcoords = {XMFLOAT2(0.0f, 1.0f), XMFLOAT2(0.0f, 0.0f), XMFLOAT2(1.0f, 0.0f), XMFLOAT2(1.0f, 1.0f)};
+        geoData.indices16 = {0, 1, 2, 2, 3, 0};
+
+        return geoData;
+    }
+
     GeometryData CreateRibbon(const std::vector<DirectX::XMFLOAT3> &centerPoints, float width)
     {
         using namespace DirectX;
