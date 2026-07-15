@@ -83,8 +83,8 @@
     {"control_points":[[-51.5,0.0,11.5],[-51.5,0.0,12.5],[-49.5,0.0,16.5],[-45.0,0.0,17.5],[-42.0,0.0,17.5]],"id":1000,"road":1}
   ],
   "nodes": [
-    {"child":[2,3,4,5,6],"direction":[1.0,0.0,0.0],"id":1,"position":[-47.0,0.0,18.0],"type":"park"},
-    {"direction":[-1.0,0.0,0.0],"id":2,"position":[-23.5,0.0,16.75],"type":"park_spot"},
+    {"child":[2,3,4,5,6],"direction":[1.0,0.0,0.0],"id":1,"position":[-40.0,0.0,20.0],"type":"park"},
+    {"direction":[-1.0,0.0,0.0],"id":2,"position":[-23.7,0.0,16.75],"type":"park_spot"},
     {"direction":[0.0,0.0,-1.0],"id":3,"position":[-46.25,0.0,26.0],"type":"park_spot"},
     {"direction":[0.0,0.0,-1.0],"id":4,"position":[-33.75,0.0,26.0],"type":"park_spot"},
     {"direction":[0.0,0.0,-1.0],"id":5,"position":[-23.75,0.0,26.0],"type":"park_spot"},
