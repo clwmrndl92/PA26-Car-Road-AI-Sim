@@ -219,7 +219,10 @@ void EditApp::RebuildRenderObjects()
 
         Model *pLine = m_ModelManager.CreateFromGeometry("edit_spline_" + std::to_string(lane.id),
                                                          Geometry::CreatePolyline(line));
-        pLine->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f));
+        // 주행 레인 = 빨강, 주차레인 = 시안 (한눈에 구분).
+        XMFLOAT4 splineColor = lane.isParking ? XMFLOAT4(0.0f, 0.85f, 1.0f, 1.0f)
+                                              : XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f);
+        pLine->materials[0].Set<XMFLOAT4>("$DiffuseColor", splineColor);
         pLine->materials[0].Set<float>("$Opacity", 1.0f);
 
         RenderObject &ro = m_SplineRenders.emplace_back();
@@ -423,22 +426,32 @@ void EditApp::SaveToJson()
     }
 
     root["lanes"] = json::array();
+    root["parking_lanes"] = json::array();
     for (const auto &l : m_Lanes)
     {
-        json jl;
-        jl["id"] = l.id;
-        jl["road"] = l.road;
-        if (l.left >= 0)
-            jl["left"] = l.left;
-        if (l.right >= 0)
-            jl["right"] = l.right;
-
         json cps = json::array();
         for (const auto &p : l.points)
             cps.push_back({p.x, p.y, p.z});
-        jl["control_points"] = cps;
 
-        root["lanes"].push_back(jl);
+        json jl;
+        jl["id"] = l.id;
+        if (l.isParking)
+        {
+            // 주차레인: park(소속 Park 노드) + control_points만. 메인 "lanes"와 분리.
+            jl["park"] = l.park;
+            jl["control_points"] = cps;
+            root["parking_lanes"].push_back(jl);
+        }
+        else
+        {
+            jl["road"] = l.road;
+            if (l.left >= 0)
+                jl["left"] = l.left;
+            if (l.right >= 0)
+                jl["right"] = l.right;
+            jl["control_points"] = cps;
+            root["lanes"].push_back(jl);
+        }
     }
 
     root["nodes"] = json::array();
@@ -525,6 +538,21 @@ void EditApp::LoadFromJson(const std::filesystem::path &path)
         l.road = jl.value("road", -1);
         l.left = jl.value("left", -1);
         l.right = jl.value("right", -1);
+        for (const auto &pt : jl.value("control_points", nlohmann::json::array()))
+        {
+            if (pt.is_array() && pt.size() >= 3)
+                l.points.push_back(XMFLOAT3(pt[0].get<float>(), pt[1].get<float>(), pt[2].get<float>()));
+        }
+        m_Lanes.push_back(std::move(l));
+    }
+
+    // 주차레인도 같은 m_Lanes에 담되 isParking=true로 구분(저장 시 다시 parking_lanes로 나간다).
+    for (const auto &jl : root.value("parking_lanes", nlohmann::json::array()))
+    {
+        EditLane l;
+        l.isParking = true;
+        l.id = jl.value("id", -1);
+        l.park = jl.value("park", -1);
         for (const auto &pt : jl.value("control_points", nlohmann::json::array()))
         {
             if (pt.is_array() && pt.size() >= 3)
@@ -837,13 +865,26 @@ void EditApp::DrawLaneListWindow()
             m_Selection = Selection::Lane;
             m_SelectedLane = (int)m_Lanes.size() - 1;
         }
+        ImGui::SameLine();
+        if (ImGui::Button("Add Parking Lane"))
+        {
+            EditLane lane;
+            lane.id = m_NextLaneId++;
+            lane.isParking = true;
+            m_Lanes.push_back(lane);
+            m_Selection = Selection::Lane;
+            m_SelectedLane = (int)m_Lanes.size() - 1;
+        }
 
         ImGui::Separator();
 
         for (int i = 0; i < (int)m_Lanes.size(); ++i)
         {
             char label[64];
-            snprintf(label, sizeof(label), "Lane %d (road %d)", m_Lanes[i].id, m_Lanes[i].road);
+            if (m_Lanes[i].isParking)
+                snprintf(label, sizeof(label), "ParkLane %d (park %d)", m_Lanes[i].id, m_Lanes[i].park);
+            else
+                snprintf(label, sizeof(label), "Lane %d (road %d)", m_Lanes[i].id, m_Lanes[i].road);
             bool selected = (m_Selection == Selection::Lane && i == m_SelectedLane);
 
             ImGui::PushID(i);
@@ -892,9 +933,17 @@ void EditApp::DrawLaneEditWindow()
     if (ImGui::Begin("Lane Edit", &open))
     {
         ImGui::Text("Lane ID: %d", lane.id);
-        ImGui::InputInt("Road ID", &lane.road);
-        ImGui::InputInt("Left", &lane.left);
-        ImGui::InputInt("Right", &lane.right);
+        if (lane.isParking)
+        {
+            ImGui::TextDisabled("(parking lane)");
+            ImGui::InputInt("Park Node ID", &lane.park);
+        }
+        else
+        {
+            ImGui::InputInt("Road ID", &lane.road);
+            ImGui::InputInt("Left", &lane.left);
+            ImGui::InputInt("Right", &lane.right);
+        }
 
         ImGui::Separator();
 

@@ -106,6 +106,18 @@ private:
     // Park 모드의 RS 입/출차 경로를 계획하고 VehicleController에 실행시킨다. 차가 완전히 멈춘
     // 뒤(m_parkPlanPending 해소 시점)의 위치/방향을 시작점으로 써야 하므로 UpdatePark에서만 호출된다.
     void BeginParkPlan();
+    // 입차 leg 2: 현재 pose에서 예약된 스팟까지 Hybrid A*로 계획(장애물 회피). leg 1(-> 스플라인점 P)이
+    // 끝난 뒤 UpdatePark에서 호출한다. 못 들어가면 다음 빈 자리로 넘어가 leg 1부터 다시 시도한다.
+    void BeginParkSpotLeg();
+    // 현재 pose -> target까지 Hybrid A*(장애물 회피)로 계획해 실행시킨다. 경로를 못 찾으면 false.
+    // 입차의 두 leg(-> P, -> 스팟)가 공통으로 쓴다.
+    bool PlanParkLegTo(const Vec3 &targetPos, float targetAngleDeg);
+    // m_parkSpot로의 입차 시작 계획(주차레인 있으면 leg 1 -> P, 없으면 -> 스팟). 시작했으면 true.
+    bool PlanEnterForCurrentSpot();
+    // 현재 m_parkSpot을 tried에 넣고 예약 해제한 뒤, 같은 Park의 다음 빈 자리를 예약한다. 남으면 true.
+    bool ReserveNextParkSpot();
+    // 현재 스팟부터 입차를 시도하고, 실패하면 다음 빈 자리로 넘어가며 다 시도한다. 계획 시작하면 true.
+    bool BeginParkEnterOrRetry();
     // Avoid 모드의 Hybrid A* 우회 경로를 계획하고 VehicleController에 실행시킨다. 차가 완전히
     // 멈춘 뒤(m_avoidPending 해소 시점)의 위치/방향을 시작점으로 쓴다. OnModeEnter(Avoid)에서만 호출.
     void BeginAvoidPlan();
@@ -168,6 +180,14 @@ private:
     shared_ptr<RoadNode> m_parkSpot;        // 예약된 목표 주차칸(있는 동안은 "이 자리에 주차 중/주차 예정")
     shared_ptr<RoadNode> m_pendingParkNode; // 예약 전, 도착하면 그때 주차칸을 예약할 목표 Park 노드
     bool m_isExitingPark = false;           // 이번 Park 계획이 출차(주차칸->레인)인지, 입차(레인->주차칸)인지
+    // 입차 2단계 상태: false면 leg 1(-> 스플라인점 P) 실행 중, P 도착 후 true로 바꾸고 leg 2(-> 스팟)를
+    // 잇는다. 주차레인이 없어 바로 스팟으로 가는 경우엔 처음부터 true.
+    bool m_parkGoingToSpot = false;
+    // Park 시퀀스(입차 leg1/대기/leg2, 출차)가 진행 중인 동안 true. 다단계 주차에서 leg 사이에 컨트롤러가
+    // 잠깐 finished가 돼도 DecideNextMode가 Park를 계속 유지하게 해, Drive/Stop으로 새는 걸 막는다.
+    bool m_parkSequenceActive = false;
+    int m_parkNodeId = -1;                  // 이번 입차의 대상 Park 노드 id (다른 빈 자리 재예약에 씀)
+    unordered_set<int> m_triedParkSpotIds;  // 이번 입차에서 경로탐색이 실패해 이미 시도해본 ParkSpot id들
     // Park 모드에 막 진입해서 정지 대기 중인지. true인 동안은 RS 계획을 세우지 않고 감속만 하다가,
     // 완전히 멈추면(m_speed==0) 그 위치/방향을 시작점으로 BeginParkPlan을 호출한다.
     bool m_parkPlanPending = false;
