@@ -35,7 +35,7 @@ void Car::UpdateMode()
     if (next != m_mode)
     {
         OnModeExit(m_mode);
-        OnModeEnter(next);
+        OnModeEnter(next, m_mode);
         m_mode = next;
     }
 }
@@ -79,11 +79,15 @@ Car::DriveMode Car::DecideNextMode() const
     return DriveMode::Drive;
 }
 
-void Car::OnModeEnter(DriveMode mode)
+void Car::OnModeEnter(DriveMode mode, DriveMode previous)
 {
     if (mode == DriveMode::Drive)
     {
         std::vector<std::unique_ptr<VehicleSegment>> segments;
+        // Park에서 넘어왔다는 건 출차가 막 끝났다는 뜻(입차 완료는 Stop으로 감) — RS 매뉴버로
+        // 꺾여있던 조향을 중앙으로 되돌린 뒤 정속주행을 시작한다.
+        if (previous == DriveMode::Park)
+            segments.push_back(std::make_unique<CenterSteerSegment>());
         segments.push_back(std::make_unique<SplineFollowSegment>());
         m_vehicleController.BeginPlan(std::move(segments));
     }
@@ -98,6 +102,22 @@ void Car::OnModeEnter(DriveMode mode)
         // 달리 정지 대기 없이 바로 계획을 세운다.
         BeginAvoidPlan();
     }
+    else if (mode == DriveMode::Stop)
+    {
+        // 입차 완료 후 Stop으로 오는 경우도 RS 매뉴버로 꺾여있던 조향을 중앙으로 되돌린다.
+        if (previous == DriveMode::Park)
+        {
+            std::vector<std::unique_ptr<VehicleSegment>> segments;
+            segments.push_back(std::make_unique<CenterSteerSegment>());
+            m_vehicleController.BeginPlan(std::move(segments));
+        }
+    }
+}
+
+void Car::OnModeExit(DriveMode mode)
+{
+    if (!m_vehicleController.IsFinished())
+        m_vehicleController.Abort();
 }
 
 void Car::BeginParkPlan()
@@ -132,42 +152,24 @@ void Car::BeginParkPlan()
 
     if (m_isExitingPark)
     {
-        // 출차: 주차칸(현재 위치)에서 가장 가까운 레인으로 나간다.
-        // GetClosestLane이 고른 레인의 "가장 가까운 지점"이 레인 경계 근처라 차 뒤쪽에 나오면,
-        // 그 레인에 그대로 고정해서 후진부터 시키지 말고 후속(successor) 레인으로 넘어가면서
-        // m_currentLane도 그 레인으로 같이 갱신한다.
-        shared_ptr<Lane> candidateLane = m_RoadDataManager->GetClosestLane(startPos);
-        float splinePos = candidateLane->GetSpline().GetSplinePosition(startPos);
-        Vec3 candidatePos = candidateLane->GetSpline().GetPositionAt(splinePos);
-        Vec3 candidateDir = candidateLane->GetSpline().GetDirectionAt(splinePos);
+        shared_ptr<Lane> closestLane = m_RoadDataManager->GetClosestLane(startPos);
 
-        constexpr int MAX_LANE_HOPS = 4;
-        for (int hop = 0; hop < MAX_LANE_HOPS; ++hop)
-        {
-            bool isBehind = (candidatePos - startPos).Dot(GetForwardAxis()) < 0.0f;
-            if (!isBehind)
-                break;
+        float splinePos = closestLane->GetSpline().GetSplinePosition(startPos);
+        Vec3 closestPos = closestLane->GetSpline().GetPositionAt(splinePos);
+        Vec3 closestDir = closestLane->GetSpline().GetDirectionAt(splinePos);
+        m_currentLane = closestLane;
 
-            shared_ptr<Lane> nextLane;
-            for (const weak_ptr<Lane> &weak : candidateLane->GetSuccessors())
-            {
-                if (shared_ptr<Lane> lane = weak.lock())
-                {
-                    nextLane = lane;
-                    break;
-                }
-            }
-            if (!nextLane)
-                break;
+        // 출차: 레인 접선에 수직(90도)으로 진입점을 바라보는 위치를 target으로 잡는다.
+        // startPos가 있는 쪽의 법선 방향으로, startPos만큼 떨어져 있되 최소 6만큼은 떨어뜨린다.
+        constexpr float MIN_EXIT_NORMAL_DISTANCE = 6.0f;
+        Vec3 normalDir = Vec3(-closestDir.GetZ(), 0.0f, closestDir.GetX()).Normalized();
+        float lateralOffset = (startPos - closestPos).Dot(normalDir);
+        if (lateralOffset < 0.0f)
+            normalDir = normalDir * -1.0f;
+        float distance = std::max(std::fabs(lateralOffset), MIN_EXIT_NORMAL_DISTANCE);
 
-            candidateLane = nextLane;
-            candidatePos = candidateLane->GetSpline().GetPositionAt(0.0f);
-            candidateDir = candidateLane->GetSpline().GetDirectionAt(0.0f);
-        }
-
-        m_currentLane = candidateLane;
-        targetPos = candidatePos;
-        targetAngleDeg = DirectionToAngleDeg(candidateDir);
+        targetPos = closestPos + normalDir * distance;
+        targetAngleDeg = DirectionToAngleDeg(closestPos - targetPos);
     }
     else
     {
@@ -182,14 +184,12 @@ void Car::BeginParkPlan()
     m_vehicleController.BeginPlan(BuildParkSegments(path, m_maxSteerAngle));
     RebuildParkDebugRender(path, startPos, startAngleDeg, turningRadius, targetPos, targetAngleDeg);
 
-    DebugConsole::Get().Log("Park path segments: " + to_string(path.size()));
     for (const ReedsShepp::PathElement &element : path)
     {
         const char *steerName = element.steering == ReedsShepp::Steering::Left    ? "Left"
                                 : element.steering == ReedsShepp::Steering::Right ? "Right"
                                                                                   : "Straight";
         const char *gearName = element.gear == ReedsShepp::Gear::Forward ? "Forward" : "Backward";
-        DebugConsole::Get().Log(std::string("  ") + steerName + " " + gearName + " param=" + to_string(element.param));
     }
 }
 
@@ -261,18 +261,12 @@ void Car::BeginAvoidPlan()
     ReedsShepp::Path path = HybridAStar::FindPath(startPos, startAngleDeg, targetPos, targetAngleDeg, obstacles, shape);
     m_vehicleController.BeginPlan(BuildParkSegments(path, m_maxSteerAngle));
 
-    DebugConsole::Get().Log("Avoid path segments: " + to_string(path.size()));
+    DebugConsole::Log("Avoid path segments: " + to_string(path.size()));
 }
 
 void Car::UpdateAvoid()
 {
     m_vehicleController.Tick(*this);
-}
-
-void Car::OnModeExit(DriveMode mode)
-{
-    if (!m_vehicleController.IsFinished())
-        m_vehicleController.Abort();
 }
 
 void Car::UpdateFindPath()
@@ -315,6 +309,14 @@ void Car::UpdateStop()
     // 정지 조건(목적지 없음/도착)은 DecideNextMode가 이미 판단했으므로 여기선 감속/정지 동작만 한다.
     m_destLane = nullptr;
     m_currentLane = nullptr;
+
+    // Park에서 넘어온 직후면 조향 원복 세그먼트가 아직 안 끝났을 수 있다.
+    if (!m_vehicleController.IsFinished())
+    {
+        m_vehicleController.Tick(*this);
+        return;
+    }
+
     if (m_speed > 0.0f)
     {
         Accelerate(0.0f);
@@ -496,10 +498,9 @@ void Car::DriveControl()
     Vec3 position = m_rigidbody.GetPosition();
     // steering
     constexpr float MIN_LOOKAHEAD_DISTANCE = 5.0f; // 저속/정지 시 최소 lookahead (m)
-    constexpr float LOOKAHEAD_TIME = 0.5f;         // 몇 초 앞을 볼지
+    constexpr float LOOKAHEAD_TIME = 1.0f;         // 몇 초 앞을 볼지
     float lookaheadDistance = std::max(MIN_LOOKAHEAD_DISTANCE, m_speed * LOOKAHEAD_TIME);
     auto targetPosition = m_currentSpline.GetLookaheadPoint(position, lookaheadDistance);
-    m_targetMarker.GetTransform().SetPosition(ToXMFLOAT3(targetPosition));
     float targetSteer = PurePursuit(targetPosition);
     Steer(targetSteer);
 
@@ -523,4 +524,9 @@ void Car::DriveControl()
     float targetSpeed = min(m_speedProfile[m_profileIndex].second, maxSpeed);
 
     Accelerate(targetSpeed);
+
+    // Debug
+    DirectX::XMFLOAT3 targetMarkerPos = ToXMFLOAT3(targetPosition);
+    targetMarkerPos.y = 0.2f;
+    m_targetMarker.GetTransform().SetPosition(targetMarkerPos);
 }

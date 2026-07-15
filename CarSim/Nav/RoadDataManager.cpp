@@ -243,7 +243,7 @@ vector<LaneStep> RoadDataManager::FindPath(const shared_ptr<Lane> &startLane, co
     {
         shared_ptr<Lane> current = openList.top().second;
         openList.pop();
-        DebugConsole::Get().Log("Find path " + ToString(current->GetId()));
+        DebugConsole::Log("Find path " + ToString(current->GetId()));
 
         if (visited.count(current->GetId()))
             continue;

@@ -7,7 +7,7 @@ DebugConsole &DebugConsole::Get()
     return instance;
 }
 
-void DebugConsole::Log(const std::string &line)
+void DebugConsole::LogImpl(const std::string &line)
 {
     m_lines.push_back(line);
     if (m_lines.size() > MAX_LINES)

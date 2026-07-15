@@ -136,11 +136,6 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
         m_targetMarker.Draw(context, effect);
     if (m_parkTargetMarker.GetModel())
         m_parkTargetMarker.Draw(context, effect);
-    for (RenderObject &marker : m_speedProfileMarkers)
-    {
-        if (marker.GetModel())
-            marker.Draw(context, effect);
-    }
 }
 
 Vec3 Car::GetPosition() const
@@ -312,7 +307,6 @@ void Car::MoveSpeedProfile()
     // CalculateSpeedProfile 전체 재계산 대신 그 지점 하나만 도로를 훑어서 새로 채우고,
     // 그 결과를 더 가까운 기존 슬롯들에도 역전파해서 필요하면 미리 감속하게 한다.
     constexpr float CURVE_SPEED_COEFF = 1.22f; // 최대 코너링 속도 = CURVE_SPEED_COEFF * sqrt(R)
-    constexpr float LOCAL_WINDOW = 0.01f;      // 로컬 곡률 추정용 t-window
 
     float deltaTime = LOOK_PROFILE_TIME / SPEED_PROFILE_COUNT;
     float targetDistance = (SPEED_PROFILE_COUNT - 1) * deltaTime * m_speed;
@@ -339,7 +333,9 @@ void Car::MoveSpeedProfile()
             const std::vector<Vec3> &points = spline->GetSplinePoints();
             size_t index = static_cast<size_t>(t * (points.size() - 1));
 
-            float radius = spline->GetMinRadiusAhead(std::max(0.0f, t - LOCAL_WINDOW), std::min(1.0f, t + LOCAL_WINDOW));
+            // tail 지점 근처만 보면 이전 tail ~ 이번 tail 사이의 코너를 건너뛸 수 있으므로,
+            // 실제로 이동한 구간(startT~t) 전체에서 최소 반경을 구한다.
+            float radius = spline->GetMinRadiusAhead(startT, t);
             float curveSpeed = radius < std::numeric_limits<float>::max() ? CURVE_SPEED_COEFF * std::sqrt(radius) : m_maxSpeed;
 
             tailPosition = points[index];
@@ -746,10 +742,6 @@ void Car::UpdateSpeedProfileWindow()
             const auto &[position, speed] = m_speedProfile[index];
 
             ImGui::Text("%d초 뒤: %.1f km/h", sec, speed * 3.6f);
-
-            DirectX::XMFLOAT3 markerPos = ToXMFLOAT3(position);
-            markerPos.y += MARKER_HEIGHT;
-            m_speedProfileMarkers[sec - 1].GetTransform().SetPosition(markerPos);
         }
     }
     ImGui::End();
@@ -907,13 +899,4 @@ void Car::DebugInit()
     pParkTargetMarker->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f));
     pParkTargetMarker->materials[0].Set<float>("$Opacity", 1.0f);
     m_parkTargetMarker.SetModel(pParkTargetMarker);
-
-    // 속도 프로파일 1~4초 뒤 목표 위치 마커 (노란 구, 모델 하나를 4개 RenderObject가 공유)
-    constexpr float SPEED_PROFILE_MARKER_RADIUS = 0.3f;
-    Model *pSpeedProfileMarker = ModelManager::Get().CreateFromGeometry("__speed_profile_marker__:" + GetName(),
-                                                                        Geometry::CreateSphere(SPEED_PROFILE_MARKER_RADIUS, 8, 8));
-    pSpeedProfileMarker->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f));
-    pSpeedProfileMarker->materials[0].Set<float>("$Opacity", 1.0f);
-    for (RenderObject &marker : m_speedProfileMarkers)
-        marker.SetModel(pSpeedProfileMarker);
 }

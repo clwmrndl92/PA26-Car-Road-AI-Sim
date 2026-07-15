@@ -100,7 +100,7 @@ private:
     }
     void UpdateMode();
     DriveMode DecideNextMode() const;
-    void OnModeEnter(DriveMode mode);
+    void OnModeEnter(DriveMode mode, DriveMode previous);
     void OnModeExit(DriveMode mode);
     // Park 모드의 RS 입/출차 경로를 계획하고 VehicleController에 실행시킨다. 차가 완전히 멈춘
     // 뒤(m_parkPlanPending 해소 시점)의 위치/방향을 시작점으로 써야 하므로 UpdatePark에서만 호출된다.
@@ -214,10 +214,9 @@ private:
     RenderObject m_steerLine;
     RenderObject m_targetMarker;
     RenderObject m_splineRender;
-    RenderObject m_parkPathRender;                     // Park 계획(RS 경로) 폴리라인
-    RenderObject m_parkTargetMarker;                   // Park 목표 위치
-    RenderObject m_parkTargetLine;                     // Park 목표 방향
-    std::array<RenderObject, 4> m_speedProfileMarkers; // 1~4초 뒤 속도 프로파일 목표 위치 (노란 구)
+    RenderObject m_parkPathRender;   // Park 계획(RS 경로) 폴리라인
+    RenderObject m_parkTargetMarker; // Park 목표 위치
+    RenderObject m_parkTargetLine;   // Park 목표 방향
 };
 
 static float CalcMaxSteerAngle(float speed)

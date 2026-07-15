@@ -7,7 +7,7 @@ namespace AssertDetail
 {
     inline void ReportFailure(const char *expr, const char *file, int line)
     {
-        DebugConsole::Get().Log(std::string("[Assert 실패] ") + expr + " (" + file + ":" + std::to_string(line) + ")");
+        DebugConsole::Log(std::string("[Assert 실패] ") + expr + " (" + file + ":" + std::to_string(line) + ")");
     }
 } // namespace AssertDetail
 

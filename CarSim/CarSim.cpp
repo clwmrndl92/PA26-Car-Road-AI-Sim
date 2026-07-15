@@ -32,6 +32,54 @@ bool CarSim::Init()
     return true;
 }
 
+bool CarSim::InitResource()
+{
+    // ******************
+    // Initialize game objects
+    //
+    // Road
+    {
+        constexpr float ROAD_SIZE = 2000.0f;
+
+        auto road = std::make_shared<GameObject>();
+        road->SetName("Ground");
+        Model *pGround = m_ModelManager.CreateFromGeometry("ground", Geometry::CreatePlane(ROAD_SIZE, ROAD_SIZE));
+        pGround->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.7f, 0.8f, 0.6f, 1.0f));
+        pGround->materials[0].Set<float>("$Opacity", 1.0f);
+        road->SetModel(pGround);
+        road->SetPosition(Vec3(0.0f, -0.01f, 0.0f));
+        road->Init(JPH::Vec3(ROAD_SIZE * 0.5f, 0.05f, ROAD_SIZE * 0.5f), Rigidbody::Type::Static);
+        m_GameObjects.push_back(road);
+
+        InitRoadRenderer();
+        InitMarkingRenderer();
+    }
+
+    // Car 1
+    {
+        auto car = std::make_shared<Car>();
+        car->Init(GetCarSpec(CarType::Car0), &m_RoadDataManager, JPH::Vec3(-10.0f, 0.1f, -10.0f));
+        car->SetDrawCollider(true);
+        car->SetDestination(m_RoadDataManager.GetNode(1));
+
+        m_GameObjects.push_back(car);
+        m_CarObjects.push_back(car);
+    }
+
+    // // // Car 2
+    // {
+    //     auto car = std::make_shared<Car>();
+    //     car->Init(GetCarSpec(CarType::Car1), &m_RoadDataManager, JPH::Vec3(40.0f, 0.1f, 10.0f));
+    //     car->SetDrawCollider(true);
+    //     car->SetDestination(m_RoadDataManager.GetNode(1));
+
+    //     m_GameObjects.push_back(car);
+    //     m_CarObjects.push_back(car);
+    // }
+
+    return true;
+}
+
 void CarSim::FocusOnObject(const std::shared_ptr<Car> &obj)
 {
     m_PickedObjectName = obj->GetName();
@@ -216,55 +264,6 @@ void CarSim::DrawScene()
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
     HR(m_pSwapChain->Present(0, m_IsDxgiFlipModel ? DXGI_PRESENT_ALLOW_TEARING : 0));
-}
-
-bool CarSim::InitResource()
-{
-    // ******************
-    // Initialize game objects
-    //
-    // Road
-    {
-        constexpr float ROAD_SIZE = 2000.0f;
-
-        auto road = std::make_shared<GameObject>();
-        road->SetName("Ground");
-        Model *pGround = m_ModelManager.CreateFromGeometry("ground", Geometry::CreatePlane(ROAD_SIZE, ROAD_SIZE));
-        // Model* pGround = m_ModelManager.CreateFromGeometry("road_ground", Geometry::CreatePlane(10.0f, ROAD_SIZE));
-        pGround->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.7f, 0.8f, 0.6f, 1.0f));
-        pGround->materials[0].Set<float>("$Opacity", 1.0f);
-        road->SetModel(pGround);
-        road->SetPosition(Vec3(0.0f, -0.01f, 0.0f));
-        road->Init(JPH::Vec3(ROAD_SIZE * 0.5f, 0.05f, ROAD_SIZE * 0.5f), Rigidbody::Type::Static);
-        m_GameObjects.push_back(road);
-
-        InitRoadRenderer();
-        InitMarkingRenderer();
-    }
-
-    // Car 1
-    {
-        auto car = std::make_shared<Car>();
-        car->Init(GetCarSpec(CarType::Car0), &m_RoadDataManager, JPH::Vec3(-10.0f, 0.1f, -10.0f));
-        car->SetDrawCollider(true);
-        car->SetDestination(m_RoadDataManager.GetNode(1));
-
-        m_GameObjects.push_back(car);
-        m_CarObjects.push_back(car);
-    }
-
-    // // Car 2
-    {
-        auto car = std::make_shared<Car>();
-        car->Init(GetCarSpec(CarType::Car1), &m_RoadDataManager, JPH::Vec3(40.0f, 0.1f, 5.0f));
-        car->SetDrawCollider(true);
-        car->SetDestination(m_RoadDataManager.GetNode(1));
-
-        m_GameObjects.push_back(car);
-        m_CarObjects.push_back(car);
-    }
-
-    return true;
 }
 
 void CarSim::InitCamera()

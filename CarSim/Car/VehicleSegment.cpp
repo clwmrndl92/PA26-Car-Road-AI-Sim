@@ -40,3 +40,11 @@ void SplineFollowSegment::Tick(Car &car)
 {
     car.DriveControl();
 }
+
+void CenterSteerSegment::Tick(Car &car)
+{
+    car.Accelerate(0.0f);
+    car.Steer(0.0f, CENTER_STEER_RAMP_RATE);
+    if (std::fabs(car.GetSteerAngle()) <= STEER_ALIGN_TOLERANCE)
+        m_aligned = true;
+}

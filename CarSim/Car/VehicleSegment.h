@@ -51,3 +51,16 @@ public:
     void Tick(Car &car) override;
     bool IsDone() const override { return false; }
 };
+
+// 출차(Park) 매뉴버가 꺾어놓은 조향각을 중앙(0)으로 되돌린다. ArcMoveSegment와 같은 방식으로
+// 정렬될 때까지는 제자리에서 대기하고(가속 0), 정렬되면 끝난다.
+class CenterSteerSegment : public VehicleSegment
+{
+public:
+    void Tick(Car &car) override;
+    bool IsDone() const override { return m_aligned; }
+
+private:
+    static constexpr float CENTER_STEER_RAMP_RATE = 1.0f;
+    bool m_aligned = false;
+};
