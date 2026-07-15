@@ -5,7 +5,6 @@
 #include <cmath>
 #include <deque>
 #include <string>
-#include <array>
 #include <Nav/RoadDataManager.h>
 #include "Nav/ReedsShepp.h"
 #include "Nav/HybridAStar.h"
@@ -58,8 +57,6 @@ private:
 
     // 디버그 및 트레일(자국) 렌더링 (Debug & Rendering Helpers)
     void UpdateDebugWindow();
-    // 1~4초 뒤 목표 속도/위치를 보여주는 ImGui 창. 목표 위치는 노란 구 마커로도 표시한다.
-    void UpdateSpeedProfileWindow();
     void UpdateTrail();
     void RebuildTrailRender(RenderObject &render, const std::deque<DirectX::XMFLOAT3> &trail,
                             const std::string &name, const DirectX::XMFLOAT4 &color);
@@ -118,14 +115,23 @@ private:
     // (UpdatePark) 양쪽에서 공유.
     void EnterCurrentLane();
 
+    // m_path가 새로 정해질 때 한 번, 경로 전체(모든 레인)를 훑어서 지점별 "곡률+제동램프를
+    // 고려한 최대속도" 테이블(m_pathSpeedProfile)을 굽는다. DriveControl은 매 틱 이 테이블을
+    // 조회만 하고 직접 도로를 스캔하지 않는다.
+    void BakePathSpeedProfile();
+    // pathIndex번째 레인의 원본 스플라인에 position을 투영해 경로 시작 기준 누적거리로 변환.
+    float GetPathDistance(size_t pathIndex, const Vec3 &position) const;
+    // 경로 누적거리에 해당하는 실제 위치 (레인 경계 넘어가며 보간).
+    Vec3 GetPathPosition(float pathDistance) const;
+    // m_pathSpeedProfile에서 해당 누적거리의 최대속도를 보간 조회.
+    float GetPathMaxSpeed(float pathDistance) const;
+
     // 현재 위치에서 주어진 레인 위로 합류하는 연결 스플라인을 만들어 m_currentSpline에 세팅한다.
     void MergeOntoLane(const shared_ptr<Lane> &lane, const Vec3 &position);
 
     void UpdateStop();
     void UpdatePark();
     void UpdateAvoid();
-    void MoveSpeedProfile();
-    void CalculateSpeedProfile();
     void UpdateDrive();
     // 경로상 다음 레인으로 넘어갈지 판단/처리. false면 경로가 끝난 것이므로 이번 프레임은 조향/가속 제어를 건너뛴다.
     bool CheckPath();
@@ -177,13 +183,16 @@ private:
     float m_avoidReplanCooldown = 0.0f;
     vector<LaneStep> m_path;
     size_t m_pathIndex = 0;
-    static constexpr float LOOK_PROFILE_TIME = 5.0f;
-    static constexpr size_t SPEED_PROFILE_COUNT = 25;
-    std::array<std::pair<Vec3, float>, SPEED_PROFILE_COUNT> m_speedProfile; // 0.2초단위로 5초까지
-    size_t m_profileIndex = 0;
+
+    // BakePathSpeedProfile이 m_path 확정 시 한 번 굽는, 경로 전체의 지점별 최대속도 테이블.
+    struct PathSpeedSample
+    {
+        float distance; // 경로(첫 레인 시작점) 기준 누적거리
+        float maxSpeed;
+    };
+    std::vector<PathSpeedSample> m_pathSpeedProfile;
+    std::vector<float> m_pathLaneStartDistance; // m_path와 parallel: 각 레인 시작점의 누적거리
     Spline m_currentSpline;
-    float m_currentTime = 0.0f;
-    float m_lastProfileTime = 0.0f;
 
     // 차량 주행 상태 변수 (Vehicle States)
     float m_speed = 0.0f;
