@@ -1,8 +1,8 @@
 #ifndef CARSIM_H
 #define CARSIM_H
 
-#include "GameApp.h"
-#include "Entities/Car.h"
+#include "Core/GameApp.h"
+#include "Car/Car.h"
 #include "Nav/MarkingDataManager.h"
 
 class CarSim : public GameApp

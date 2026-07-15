@@ -2,8 +2,8 @@
 #include <XUtil.h>
 #include <DXTrace.h>
 #include <Geometry.h>
-#include <Entities/Car.h>
-#include "DebugConsole.h"
+#include "Car/Car.h"
+#include "Utill/DebugConsole.h"
 #include "Nav/Spline.h"
 #include <cmath>
 

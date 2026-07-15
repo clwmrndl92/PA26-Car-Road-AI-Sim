@@ -10,7 +10,7 @@
 #include <Texture2D.h>
 #include <Buffer.h>
 #include <string>
-#include "PhysicsSystem.h"
+#include "Core/Physics/PhysicsSystem.h"
 #include "GameObject.h"
 #include <TextureManager.h>
 

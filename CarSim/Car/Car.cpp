@@ -1,12 +1,12 @@
 #include "Car.h"
-#include "Core/PhysicsSystem.h"
+#include "Core/Physics/PhysicsSystem.h"
 #include "Rendering/Effects.h"
 #include <ModelManager.h>
 #include <algorithm>
 #include <cmath>
 #include <imgui.h>
-#include <Core/DebugConsole.h>
-#include <Core/Assert.h>
+#include "Utill/DebugConsole.h"
+#include "Utill/Assert.h"
 
 namespace
 {
@@ -39,13 +39,9 @@ void Car::Init(const CarSpec &spec, RoadDataManager *roadDataManager, JPH::Vec3 
 
     m_RoadDataManager = roadDataManager;
 
-    // 실제 RoadDataManager에 등록된(예약 관리되는) 자리는 아니지만, "지금 여기서부터 출발했다"는
-    // 자세를 들고 있어야 최초 출발도 RS 출차 매커니즘을 그대로 탈 수 있다. id는 예약 시스템이
-    // 신경쓰지 않는 값(-1)으로 둔다.
+    // todo : 출차시 예약자리 release
     m_parkSpot = make_shared<RoadNode>();
     m_parkSpot->id = -1;
-    // 노드 위치는 다른 RoadNode와 마찬가지로 앞바퀴축(GetPosition()) 기준. 뒷바퀴축은 회전(RS
-    // 등 kinematic) 계산에서만 쓰고, 여기선 변환하지 않는다 (OnModeEnter(Park)에서 필요시 변환).
     m_parkSpot->position = GetPosition();
     m_parkSpot->direction = GetForwardAxis();
     m_parkSpot->nodeType = RoadNodeType::ParkSpot;
@@ -57,34 +53,7 @@ void Car::Init(const CarSpec &spec, RoadDataManager *roadDataManager, JPH::Vec3 
     }
 
     // DEBUG
-    Model *pLine = ModelManager::Get().CreateFromGeometry("__steer_line__:" + GetName(),
-                                                          Geometry::CreateLine(DirectX::XMFLOAT3(0.0f, 0.15f, 0.0f), DirectX::XMFLOAT3(0.0f, 0.15f, 6.0f)));
-    pLine->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f));
-    pLine->materials[0].Set<float>("$Opacity", 1.0f);
-    m_steerLine.SetModel(pLine);
-
-    constexpr float TARGET_MARKER_SIZE = 0.5f;
-    Model *pTargetMarker = ModelManager::Get().CreateFromGeometry("__target_marker__:" + GetName(),
-                                                                  Geometry::CreatePlane(TARGET_MARKER_SIZE, TARGET_MARKER_SIZE));
-    pTargetMarker->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f));
-    pTargetMarker->materials[0].Set<float>("$Opacity", 1.0f);
-    m_targetMarker.SetModel(pTargetMarker);
-
-    // Park(RS) 목표 위치 마커 — 위치만 바뀌므로 모델은 한 번만 만들어두고 재사용한다.
-    Model *pParkTargetMarker = ModelManager::Get().CreateFromGeometry("__park_target_marker__:" + GetName(),
-                                                                      Geometry::CreatePlane(TARGET_MARKER_SIZE, TARGET_MARKER_SIZE));
-    pParkTargetMarker->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f));
-    pParkTargetMarker->materials[0].Set<float>("$Opacity", 1.0f);
-    m_parkTargetMarker.SetModel(pParkTargetMarker);
-
-    // 속도 프로파일 1~4초 뒤 목표 위치 마커 (노란 구, 모델 하나를 4개 RenderObject가 공유)
-    constexpr float SPEED_PROFILE_MARKER_RADIUS = 0.3f;
-    Model *pSpeedProfileMarker = ModelManager::Get().CreateFromGeometry("__speed_profile_marker__:" + GetName(),
-                                                                        Geometry::CreateSphere(SPEED_PROFILE_MARKER_RADIUS, 8, 8));
-    pSpeedProfileMarker->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f));
-    pSpeedProfileMarker->materials[0].Set<float>("$Opacity", 1.0f);
-    for (RenderObject &marker : m_speedProfileMarkers)
-        marker.SetModel(pSpeedProfileMarker);
+    DebugInit();
 }
 
 void Car::Update(float dt)
@@ -915,4 +884,36 @@ void Car::SetDestination(const shared_ptr<RoadNode> &destNode)
     {
         m_pendingParkNode = destNode;
     }
+}
+
+void Car::DebugInit()
+{
+    Model *pLine = ModelManager::Get().CreateFromGeometry("__steer_line__:" + GetName(),
+                                                          Geometry::CreateLine(DirectX::XMFLOAT3(0.0f, 0.15f, 0.0f), DirectX::XMFLOAT3(0.0f, 0.15f, 6.0f)));
+    pLine->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f));
+    pLine->materials[0].Set<float>("$Opacity", 1.0f);
+    m_steerLine.SetModel(pLine);
+
+    constexpr float TARGET_MARKER_SIZE = 0.5f;
+    Model *pTargetMarker = ModelManager::Get().CreateFromGeometry("__target_marker__:" + GetName(),
+                                                                  Geometry::CreatePlane(TARGET_MARKER_SIZE, TARGET_MARKER_SIZE));
+    pTargetMarker->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f));
+    pTargetMarker->materials[0].Set<float>("$Opacity", 1.0f);
+    m_targetMarker.SetModel(pTargetMarker);
+
+    // Park(RS) 목표 위치 마커 — 위치만 바뀌므로 모델은 한 번만 만들어두고 재사용한다.
+    Model *pParkTargetMarker = ModelManager::Get().CreateFromGeometry("__park_target_marker__:" + GetName(),
+                                                                      Geometry::CreatePlane(TARGET_MARKER_SIZE, TARGET_MARKER_SIZE));
+    pParkTargetMarker->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f));
+    pParkTargetMarker->materials[0].Set<float>("$Opacity", 1.0f);
+    m_parkTargetMarker.SetModel(pParkTargetMarker);
+
+    // 속도 프로파일 1~4초 뒤 목표 위치 마커 (노란 구, 모델 하나를 4개 RenderObject가 공유)
+    constexpr float SPEED_PROFILE_MARKER_RADIUS = 0.3f;
+    Model *pSpeedProfileMarker = ModelManager::Get().CreateFromGeometry("__speed_profile_marker__:" + GetName(),
+                                                                        Geometry::CreateSphere(SPEED_PROFILE_MARKER_RADIUS, 8, 8));
+    pSpeedProfileMarker->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f));
+    pSpeedProfileMarker->materials[0].Set<float>("$Opacity", 1.0f);
+    for (RenderObject &marker : m_speedProfileMarkers)
+        marker.SetModel(pSpeedProfileMarker);
 }

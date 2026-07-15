@@ -1,8 +1,8 @@
 #include "GameApp.h"
 #include <XUtil.h>
 #include <DXTrace.h>
-#include <Entities/Car.h>
-#include "DebugConsole.h"
+#include "Car/Car.h"
+#include "Utill/DebugConsole.h"
 
 using namespace DirectX;
 

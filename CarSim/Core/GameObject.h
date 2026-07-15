@@ -6,7 +6,7 @@
 #include <d3d11.h>
 #include <string>
 #include <vector>
-#include "Rigidbody.h"
+#include "Core/Physics/Rigidbody.h"
 #include "Utill/MathUtil.h"
 
 class GameObject

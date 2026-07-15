@@ -1,4 +1,4 @@
-#include "Rigidbody.h"
+#include "Core/Physics/Rigidbody.h"
 #include "PhysicsLayers.h"
 
 JPH_SUPPRESS_WARNINGS
@@ -23,7 +23,7 @@ void Rigidbody::Init(JPH::BodyInterface &bodyInterface, JPH::Vec3 halfExtents, J
     // lands back on `position`, while the collider itself stays visually offset.
     JPH::BodyCreationSettings settings(
         new JPH::OffsetCenterOfMassShapeSettings(-colliderOffset,
-            new JPH::RotatedTranslatedShapeSettings(colliderOffset, JPH::Quat::sIdentity(), new JPH::BoxShape(halfExtents))),
+                                                 new JPH::RotatedTranslatedShapeSettings(colliderOffset, JPH::Quat::sIdentity(), new JPH::BoxShape(halfExtents))),
         JPH::RVec3(position),
         JPH::Quat::sIdentity(),
         motionType,

@@ -82,7 +82,7 @@ endif()
 
 # Nav data: reference straight from the source tree (not the build output) so edits to
 # data.json take effect on rebuild without needing to reconfigure CMake.
-target_compile_definitions(CarSim PRIVATE NAV_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Nav")
+target_compile_definitions(CarSim PRIVATE NAV_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Nav/Data")
 
 source_group("Shaders" FILES ${HLSL_FILES})
 set_target_properties(CarSim PROPERTIES OUTPUT_NAME "CarSim")

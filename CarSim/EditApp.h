@@ -1,19 +1,11 @@
 #ifndef EDITAPP_H
 #define EDITAPP_H
 
-#include "GameApp.h"
+#include "Core/GameApp.h"
 #include <vector>
 #include <string>
 #include <filesystem>
 
-// Road data editor.
-// Reuses GameApp's window / free camera and adds:
-//  - lane / road / node list windows (Add -> auto id)
-//  - a per-lane edit window (road / left / right ids + control points)
-//  - a per-node edit window (type / direction / children + draggable position)
-//  - control points & node positions rendered as spheres, drag-and-drop on the
-//    grid (1-unit snap); a red Catmull-Rom spline once a lane has >= 4 points
-//  - a fixed top-right toolbar with a Save button (-> CarSim/Nav/<timestamp>.json)
 class EditApp : public GameApp
 {
 public:

@@ -1,5 +1,5 @@
 #include "GameObject.h"
-#include "PhysicsSystem.h"
+#include "Core/Physics/PhysicsSystem.h"
 #include "Rendering/Effects.h"
 #include <ModelManager.h>
 #include <DirectXMath.h>
@@ -42,21 +42,21 @@ void GameObject::Init(JPH::Vec3 halfExtents, Rigidbody::Type type, JPH::Vec3 col
     float w = halfExtents.GetX() * 2.0f;
     float h = halfExtents.GetY() * 2.0f;
     float d = halfExtents.GetZ() * 2.0f;
-    Model* pBox = ModelManager::Get().CreateFromGeometry("__collider__:" + m_name, Geometry::CreateBox(w, h, d));
+    Model *pBox = ModelManager::Get().CreateFromGeometry("__collider__:" + m_name, Geometry::CreateBox(w, h, d));
     pBox->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f));
     pBox->materials[0].Set<float>("$Opacity", 1.0f);
     m_debugBox.SetModel(pBox);
 
-    Model* pMarker = ModelManager::Get().CreateFromGeometry("__origin__:" + m_name, Geometry::CreateSphere(0.1f, 8, 8));
+    Model *pMarker = ModelManager::Get().CreateFromGeometry("__origin__:" + m_name, Geometry::CreateSphere(0.1f, 8, 8));
     pMarker->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f));
     pMarker->materials[0].Set<float>("$Opacity", 1.0f);
     m_originMarker.SetModel(pMarker);
 }
 
-void GameObject::Draw(ID3D11DeviceContext* context, IEffect& effect)
+void GameObject::Draw(ID3D11DeviceContext *context, IEffect &effect)
 {
     m_render.Draw(context, effect);
-    for (auto& sub : m_subRenders)
+    for (auto &sub : m_subRenders)
         sub.Draw(context, effect);
 
     if (m_drawCollider && m_debugBox.GetModel())
@@ -70,7 +70,7 @@ void GameObject::Draw(ID3D11DeviceContext* context, IEffect& effect)
         m_debugBox.GetTransform().SetRotation(m_transform.GetRotationQuat());
 
         // Switch pass RS to wireframe so EffectPass::Apply() sets it correctly
-        if (auto* pBasic = dynamic_cast<BasicEffect*>(&effect))
+        if (auto *pBasic = dynamic_cast<BasicEffect *>(&effect))
         {
             pBasic->SetRenderWireframe();
             m_debugBox.Draw(context, effect);
@@ -84,7 +84,7 @@ void GameObject::Draw(ID3D11DeviceContext* context, IEffect& effect)
     {
         m_originMarker.GetTransform().SetPosition(m_transform.GetPosition());
 
-        if (auto* pBasic = dynamic_cast<BasicEffect*>(&effect))
+        if (auto *pBasic = dynamic_cast<BasicEffect *>(&effect))
         {
             pBasic->SetRenderNoDepthTest();
             m_originMarker.Draw(context, effect);

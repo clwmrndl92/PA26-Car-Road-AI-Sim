@@ -29,6 +29,8 @@ public:
     void SetFocused(bool focused) { m_isFocused = focused; }
     void SetDestination(const shared_ptr<RoadNode> &parkNode);
 
+    void DebugInit();
+
     // 조작 및 제어 인터페이스 (Control Interface)
     void Accelerate(float desiredVelocity);
     void EmergBrake();
@@ -76,7 +78,7 @@ private:
     enum class DriveMode
     {
         Stop,
-        Park,  // Reeds-Shepp 기반 입차/출차. m_parkSpot이 있을 때만 DecideNextMode가 진입시킴.
+        Park, // Reeds-Shepp 기반 입차/출차. m_parkSpot이 있을 때만 DecideNextMode가 진입시킴.
         Drive,
         Avoid // Hybrid A* 기반 장애물 회피 우회. TryAvoidObstacle이 막혔다고 판단하고 차가 완전히
               // 멈추면(m_avoidPending) DecideNextMode가 진입시킴.
@@ -150,7 +152,7 @@ private:
 
     float m_wheelbase = 0.0f;
     float m_mass = 1.0f;
-    Vec3 m_halfExtents = Vec3::sZero(); // 충돌판정용 차체 반크기(x=반폭, z=반길이). CarSpec::halfExtents.
+    Vec3 m_halfExtents = Vec3::sZero();              // 충돌판정용 차체 반크기(x=반폭, z=반길이). CarSpec::halfExtents.
     float m_maxSteerAngle = ToRadians(45.0f);        // 최대 조향각 (45도)
     static constexpr float CURVE_SPEED_COEFF = 0.8f; // 최대 코너링 속도 = CURVE_SPEED_COEFF * sqrt(R)
     static constexpr float STEER_RAMP_RATE = 0.4f;
