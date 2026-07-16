@@ -27,7 +27,7 @@ if(NOT SET_UP_CONFIGURATIONS_DONE)
     set(CMAKE_EXE_LINKER_FLAGS_PROFILE "...")
 endif()
 
-project("DirectX11 With Windows SDK")
+project("PA26 Car Road AI Sim")
 
 option(WIN7_SYSTEM_SUPPORT "Windows7 users need to select this option!" OFF)
 
@@ -116,6 +116,7 @@ endif()
 
 add_subdirectory("Common")
 add_subdirectory("CarSim")
+add_subdirectory("Tests")
 
 
 
