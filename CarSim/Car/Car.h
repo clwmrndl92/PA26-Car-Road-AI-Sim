@@ -139,6 +139,10 @@ private:
     void UpdateAvoid();
     void MoveSpeedProfile();
     void CalculateSpeedProfile();
+    // 브레이킹 램프(SmoothStep(τ/BRAKE_RAMP_DURATION))를 0~0.3=0.3배, 0.3~0.8=0.5배, 0.8~1.0(이후)=1.0배의
+    // 3단계 계단 함수로 근사해, 도달속도(exitSpeed)에서 목표 거리(distance)만큼 거꾸로 감속했을 때의
+    // 진입속도를 구한다. CalculateSpeedProfile/MoveSpeedProfile 양쪽의 감속 역전파에서 공유.
+    float SolveBrakeEntrySpeed(float exitSpeed, float distance) const;
     void UpdateDrive();
     // 경로상 다음 레인으로 넘어갈지 판단/처리. false면 경로가 끝난 것이므로 이번 프레임은 조향/가속 제어를 건너뛴다.
     bool CheckPath();

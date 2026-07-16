@@ -172,8 +172,8 @@ void Car::EmergBrake()
 }
 void Car::Accelerate(float desiredVelocity)
 {
-    float DECEL_MODE_DEADBAND = (m_speed * 0.1f); // 감속(브레이킹) 중 언더슛을 코스팅으로 봐줄 허용치
-    float ACCEL_MODE_DEADBAND = (m_speed * 0.2f); // 이 이상 부족해야 Accelerating으로 전환
+    float DECEL_MODE_DEADBAND = (m_speed * 0.05f); // 감속(브레이킹) 중 언더슛을 코스팅으로 봐줄 허용치
+    float ACCEL_MODE_DEADBAND = (m_speed * 0.15f); // 이 이상 부족해야 Accelerating으로 전환
 
     float diff = desiredVelocity - m_speed;
     AccelMode targetMode = m_accelMode;
@@ -198,6 +198,13 @@ void Car::Accelerate(float desiredVelocity)
     {
         m_accelMode = targetMode;
         m_accelRampTime = 0.0f;
+    }
+
+    // 코스팅 중에는 m_accelRampTime을 증가시키지 않아, 다시 벗어나면 멈췄던 지점부터 램프가 이어진다.
+    if (m_accelMode == AccelMode::None || (coast && m_accelMode == AccelMode::Accelerating))
+    {
+        m_acceleration = 0.0f;
+        return;
     }
 
     float duration = (m_accelMode == AccelMode::Accelerating) ? ACCEL_RAMP_DURATION : BRAKE_RAMP_DURATION;
@@ -377,7 +384,7 @@ void Car::MoveSpeedProfile()
     {
         size_t index = (m_profileIndex + offset) % SPEED_PROFILE_COUNT;
         float distance = (nextPosition - m_speedProfile[index].first).Length();
-        float entrySpeed = std::sqrt(nextSpeed * nextSpeed + 2.0f * m_maxBrake * distance);
+        float entrySpeed = SolveBrakeEntrySpeed(nextSpeed, distance);
         m_speedProfile[index].second = std::min(m_speedProfile[index].second, entrySpeed);
 
         nextPosition = m_speedProfile[index].first;
@@ -396,6 +403,57 @@ void Car::MoveSpeedProfile()
         prevSpeed = speed;
     }
 }
+
+float Car::SolveBrakeEntrySpeed(float exitSpeed, float distance) const
+{
+    // 브레이킹 램프(SmoothStep(τ/BRAKE_RAMP_DURATION))를 3단계 계단 함수로 근사:
+    // t(램프 진행률) 0~0.3=0.3, 0.3~0.8=0.5, 0.8~1.0(이후 계속)=1.0 배의 m_maxBrake.
+    // 각 단계는 반드시 순서대로(그리고 앞 단계는 끝까지 다 채운 뒤에만 다음 단계로) 진행되므로,
+    // 도달점(exitSpeed)에서 거꾸로 목표 거리(distance)를 단계별로 소모해가며 진입속도를 구한다.
+    constexpr float BRAKE_PHASE1_FACTOR = 0.3f;
+    constexpr float BRAKE_PHASE2_FACTOR = 0.5f;
+    constexpr float BRAKE_PHASE3_FACTOR = 0.9f;
+    const float brakePhase1Time = 0.3f * BRAKE_RAMP_DURATION;
+    const float brakePhase2Time = 0.5f * BRAKE_RAMP_DURATION; // t: 0.3~0.8
+    const float a1 = BRAKE_PHASE1_FACTOR * m_maxBrake;
+    const float a2 = BRAKE_PHASE2_FACTOR * m_maxBrake;
+    const float a3 = BRAKE_PHASE3_FACTOR * m_maxBrake;
+
+    // Case A: 감속이 Phase1(0~0.3) 안에서 끝남
+    float entryA = std::sqrt(exitSpeed * exitSpeed + 2.0f * a1 * distance);
+    if (entryA - exitSpeed <= a1 * brakePhase1Time)
+        return entryA;
+
+    // Case B: Phase1을 끝까지 다 쓰고 Phase2(0.3~0.8) 안에서 끝남.
+    // v1 = entry - a1*T1, D = T1*entry - 0.5*a1*T1^2 + (v1^2 - exit^2)/(2*a2) 를 entry에 대해 정리.
+    {
+        float T1 = brakePhase1Time;
+        float B = 2.0f * T1 * (a2 - a1);
+        float C = T1 * T1 * a1 * (a1 - a2) - exitSpeed * exitSpeed - 2.0f * a2 * distance;
+        float disc = B * B - 4.0f * C;
+        if (disc >= 0.0f)
+        {
+            float entryB = (-B + std::sqrt(disc)) * 0.5f;
+            float v1 = entryB - T1 * a1;
+            if (v1 >= exitSpeed && (v1 - exitSpeed) <= a2 * brakePhase2Time)
+                return entryB;
+        }
+    }
+
+    // Case C: Phase1, Phase2을 끝까지 다 쓰고 Phase3(0.8~, 무제한)에서 끝남.
+    {
+        float T1 = brakePhase1Time;
+        float T2 = brakePhase2Time;
+        float K = a1 * T1 + a2 * T2;
+        float Q = 0.5f * a1 * T1 * T1 + a1 * T1 * T2 + 0.5f * a2 * T2 * T2;
+        float B = 2.0f * a3 * (T1 + T2) - 2.0f * K;
+        float C = K * K - exitSpeed * exitSpeed - 2.0f * a3 * Q - 2.0f * a3 * distance;
+        float disc = B * B - 4.0f * C;
+        disc = std::max(disc, 0.0f); // 이론상 여기까지 오면 항상 유효한 해가 존재
+        return (-B + std::sqrt(disc)) * 0.5f;
+    }
+}
+
 void Car::CalculateSpeedProfile()
 {
     m_profileIndex = 0;
@@ -487,14 +545,31 @@ void Car::CalculateSpeedProfile()
             if (!points.empty() && splineLength > 0.0f)
             {
                 size_t lastIndex = points.size() - 1;
+
+                // 이 스플라인 전체에서 가장 급한 커브(최소 반경) 지점을 한 번만 찾는다.
+                // apexT 이전 구간(0~apexT)은 그 커브의 제한속도를 미리 균일하게 적용해 진입 전에
+                // 이미 감속이 끝나있게 하고, apexT 이후(apexT~1)는 로컬 곡률 그대로 사용한다.
+                float apexT = 0.0f;
+                float minRadius = spline->GetMinRadiusAhead(0.0f, 1.0f, &apexT);
+                float apexSpeed = minRadius < std::numeric_limits<float>::max() ? CURVE_SPEED_COEFF * std::sqrt(minRadius) : m_maxSpeed;
+
                 size_t sampleCount = static_cast<size_t>(walkDistance / ROAD_SAMPLE_SPACING) + 1;
                 for (size_t s = 1; s <= sampleCount; ++s)
                 {
                     float localDistance = std::min(walkDistance, s * ROAD_SAMPLE_SPACING);
                     float t = startT + localDistance / splineLength;
                     size_t index = static_cast<size_t>(std::clamp(t, 0.0f, 1.0f) * lastIndex);
-                    float radius = spline->GetMinRadiusAhead(std::max(0.0f, t - LOCAL_WINDOW), std::min(1.0f, t + LOCAL_WINDOW));
-                    float maxSpeed = radius < std::numeric_limits<float>::max() ? CURVE_SPEED_COEFF * std::sqrt(radius) : m_maxSpeed;
+
+                    float maxSpeed;
+                    if (t <= apexT)
+                    {
+                        maxSpeed = apexSpeed;
+                    }
+                    else
+                    {
+                        float radius = spline->GetMinRadiusAhead(std::max(0.0f, t - LOCAL_WINDOW), std::min(1.0f, t + LOCAL_WINDOW));
+                        maxSpeed = radius < std::numeric_limits<float>::max() ? CURVE_SPEED_COEFF * std::sqrt(radius) : m_maxSpeed;
+                    }
                     samples.push_back({traveledDistance + localDistance, maxSpeed, points[index]});
                 }
             }
@@ -525,8 +600,6 @@ void Car::CalculateSpeedProfile()
     std::sort(samples.begin(), samples.end(), [](const RoadSample &a, const RoadSample &b)
               { return a.distance < b.distance; });
 
-    constexpr float BRAKE_RAMP_AVG_FACTOR = 0.5f;
-
     // 뒤에서부터 감속 계획 전파
     std::vector<float> speedCap(samples.size());
     if (!samples.empty())
@@ -535,7 +608,7 @@ void Car::CalculateSpeedProfile()
         for (size_t i = samples.size() - 1; i-- > 0;)
         {
             float distance = samples[i + 1].distance - samples[i].distance;
-            float entrySpeed = std::sqrt(speedCap[i + 1] * speedCap[i + 1] + 2.0f * m_maxBrake * BRAKE_RAMP_AVG_FACTOR * distance);
+            float entrySpeed = SolveBrakeEntrySpeed(speedCap[i + 1], distance);
             speedCap[i] = std::min(samples[i].maxSpeed, entrySpeed);
         }
     }
