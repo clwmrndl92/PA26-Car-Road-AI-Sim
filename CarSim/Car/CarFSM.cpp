@@ -46,9 +46,9 @@ Car::DriveMode Car::DecideNextMode(const char **reason) const
 {
     if (m_mode == DriveMode::Park)
     {
-        // 주차 시퀀스가 진행 중이면(정지 대기 m_parkPlanPending, 다단계 사이 idle 포함) Park를 유지한다.
-        // m_parkSequenceActive가 없으면 leg1↔leg2 사이의 잠깐 finished 프레임에 Drive로 새어나간다.
-        if (m_parkPlanPending || m_parkSequenceActive || !m_vehicleController.IsFinished())
+        // 정지 대기(m_parkPlanPending) 구간에서는 vehicleController가 아직 finished 상태라
+        // 아래 avoidPending 체크로 새는 걸 막는다 — 주차 중엔 Avoid로 전환되지 않아야 한다.
+        if (m_parkPlanPending || !m_vehicleController.IsFinished())
         {
             *reason = "parking in progress";
             return DriveMode::Park;
@@ -124,7 +124,6 @@ void Car::OnModeEnter(DriveMode mode, DriveMode previous)
     {
         // 도착 즉시 RS를 계산하지 않고, 완전히 멈출 때까지 기다린다 (UpdatePark에서 처리).
         m_parkPlanPending = true;
-        m_parkSequenceActive = true; // 주차 시퀀스 시작 — 완료(UpdatePark)까지 Park 유지.
         DebugConsole::Log("Park plan pending: waiting for full stop before planning");
     }
     else if (mode == DriveMode::Avoid)
@@ -169,12 +168,9 @@ void Car::BeginParkPlan()
             // 안 보게 돼 있어서, destLane==nullptr만으로 다음 프레임에 Stop에 안착한다.
             DebugConsole::Log("Park spot reservation failed for node " + std::to_string(parkNodeId) +
                               ": no available ParkSpot child, abandoning destination");
-            m_parkSequenceActive = false; // 시퀀스 취소 — Park에 갇히지 않도록.
             m_destLane = nullptr;
             return;
         }
-        m_parkNodeId = parkNodeId;   // 재시도(다른 빈 자리)용으로 Park 노드 id 보관
-        m_triedParkSpotIds.clear();  // 새 입차 시퀀스 — 시도 목록 초기화
     }
 
     if (m_parkSpot == nullptr)
@@ -234,130 +230,37 @@ void Car::BeginParkPlan()
         return;
     }
 
-    // 입차 (장애물 회피, Hybrid A* 2단계): 예약한 스팟으로 진입을 시도하고, 못 하면 같은 Park의 다른 빈
-    // 자리로 넘어가며 모두 시도한다. 각 자리는 leg 1(-> 스팟 앞 P) → leg 2(P -> 스팟)로 나눠 탐색한다
-    // (먼 거리 한 방보다 짧게 나뉨). 주차레인은 같은 Park 안에서만 잇는 별도 망.
-    if (!BeginParkEnterOrRetry())
+    // 입차: 현재 레인에서 예약해둔 주차칸으로 들어간다. 경로탐색이 막히면 그 자리를 포기하고
+    // 예약을 풀어준 뒤, 같은 Park 노드의 다른 빈 자리를 하나씩 다시 예약해 시도한다.
+    // 모든 자리가 막혀 있으면 그제서야 목적지를 포기한다.
+    unordered_set<int> triedSpotIds;
+    while (true)
     {
-        DebugConsole::Log("BeginParkPlan: no reachable ParkSpot for node " + std::to_string(parkNodeId) +
-                          ", abandoning destination");
-        m_destLane = nullptr;
-        m_parkSequenceActive = false;
-    }
-}
+        Vec3 targetPos = m_parkSpot->position - m_parkSpot->direction.Normalized() * m_wheelbase;
+        float targetAngleDeg = DirectionToAngleDeg(m_parkSpot->direction);
 
-// m_parkSpot로의 입차 시작 계획: 주차레인이 있으면 leg 1(-> 스팟 앞 P), 없으면 스팟으로 직접(leg 2 없음).
-// 계획을 시작했으면 true(+ m_parkGoingToSpot 설정), 이 자리로는 경로를 못 찾으면 false.
-bool Car::PlanEnterForCurrentSpot()
-{
-    const std::vector<shared_ptr<Lane>> *parkingLanes =
-        (m_parkNodeId >= 0) ? m_RoadDataManager->GetParkingLanes(m_parkNodeId) : nullptr;
-
-    if (parkingLanes != nullptr && !parkingLanes->empty())
-    {
-        // P: 이 Park의 주차레인들 중 스팟에 가장 가까운 스플라인 점 = 스팟 앞.
-        const Spline *bestSpline = nullptr;
-        float bestParam = 0.0f;
-        float bestDist = std::numeric_limits<float>::max();
-        for (const shared_ptr<Lane> &lane : *parkingLanes)
+        bool foundPath = false;
+        ReedsShepp::Path path = HybridAStar::FindPath(startPos, startAngleDeg, targetPos, targetAngleDeg, obstacles, shape, foundPath);
+        if (foundPath)
         {
-            const Spline &spline = lane->GetSpline();
-            float param = spline.GetSplinePosition(m_parkSpot->position);
-            float dist = (spline.GetPositionAt(param) - m_parkSpot->position).Length();
-            if (dist < bestDist)
-            {
-                bestDist = dist;
-                bestParam = param;
-                bestSpline = &spline;
-            }
+            m_vehicleController.BeginPlan(BuildParkSegments(path, m_maxSteerAngle));
+            RebuildParkDebugRender(path, startPos, startAngleDeg, turningRadius, targetPos, targetAngleDeg);
+            return;
         }
 
-        Vec3 pPos = bestSpline->GetPositionAt(bestParam);
-        float pAngleDeg = DirectionToAngleDeg(bestSpline->GetDirectionAt(bestParam));
-
-        if (PlanParkLegTo(pPos, pAngleDeg))
-        {
-            m_parkGoingToSpot = false; // leg 1 진행 중 — P 도착 후 UpdatePark가 leg 2를 잇는다.
-            return true;
-        }
-        return false; // 이 스팟의 P까지 못 감 -> 다음 스팟
-    }
-
-    // 주차레인 없음 -> 스팟으로 직접 (leg 2 단계 없이 한 번에).
-    Vec3 spotTarget = m_parkSpot->position - m_parkSpot->direction.Normalized() * m_wheelbase;
-    float spotAngleDeg = DirectionToAngleDeg(m_parkSpot->direction);
-    if (PlanParkLegTo(spotTarget, spotAngleDeg))
-    {
-        m_parkGoingToSpot = true;
-        return true;
-    }
-    return false;
-}
-
-// 현재 m_parkSpot을 tried에 넣고 예약을 푼 뒤, 같은 Park의 다음 빈 자리를 예약한다. 남으면 true.
-bool Car::ReserveNextParkSpot()
-{
-    if (m_parkSpot != nullptr)
-    {
-        m_triedParkSpotIds.insert(m_parkSpot->id);
+        DebugConsole::Log("BeginParkPlan: HybridA* failed to reach ParkSpot " + std::to_string(m_parkSpot->id) +
+                          ", trying next available spot");
+        triedSpotIds.insert(m_parkSpot->id);
         m_RoadDataManager->ReleaseParkSpot(m_parkSpot->id);
+        m_parkSpot = m_RoadDataManager->TryReserveParkSpot(parkNodeId, triedSpotIds);
+        if (m_parkSpot == nullptr)
+        {
+            DebugConsole::Log("BeginParkPlan: no reachable ParkSpot left for node " + std::to_string(parkNodeId) +
+                              ", abandoning destination");
+            m_destLane = nullptr;
+            return;
+        }
     }
-    m_parkSpot = m_RoadDataManager->TryReserveParkSpot(m_parkNodeId, m_triedParkSpotIds);
-    return m_parkSpot != nullptr;
-}
-
-// 현재 스팟부터 입차를 시도하고, 실패하면 다음 빈 자리로 넘어가며 다 시도한다. 계획을 시작하면 true,
-// 모든 자리가 안 되면 false.
-bool Car::BeginParkEnterOrRetry()
-{
-    while (m_parkSpot != nullptr)
-    {
-        if (PlanEnterForCurrentSpot())
-            return true;
-        if (!ReserveNextParkSpot())
-            return false;
-    }
-    return false;
-}
-
-// 현재 pose -> target 까지 Hybrid A*(장애물 회피)로 계획해 실행시킨다. 못 찾으면 false.
-bool Car::PlanParkLegTo(const Vec3 &targetPos, float targetAngleDeg)
-{
-    Vec3 startPos = m_rigidbody.GetPosition();
-    float startAngleDeg = DirectionToAngleDeg(GetForwardAxis());
-    float turningRadius = m_wheelbase / tanf(m_maxSteerAngle);
-    HybridAStar::VehicleShape shape = BuildVehicleShape();
-    const std::vector<HybridAStar::Obstacle> &obstacles = m_RoadDataManager->GetObstacles();
-
-    bool foundPath = false;
-    ReedsShepp::Path path = HybridAStar::FindPath(startPos, startAngleDeg, targetPos, targetAngleDeg, obstacles, shape, foundPath);
-    if (!foundPath)
-        return false;
-
-    m_vehicleController.BeginPlan(BuildParkSegments(path, m_maxSteerAngle));
-    RebuildParkDebugRender(path, startPos, startAngleDeg, turningRadius, targetPos, targetAngleDeg);
-    return true;
-}
-
-// 입차 leg 2: 현재 pose(=P)에서 예약된 스팟까지 Hybrid A*. UpdatePark가 leg 1 완료 시 호출한다.
-// 못 들어가면 다음 빈 자리로 넘어가 leg 1부터 다시 시도하고, 모든 자리가 안 되면 멈춘다.
-void Car::BeginParkSpotLeg()
-{
-    Vec3 spotTarget = m_parkSpot->position - m_parkSpot->direction.Normalized() * m_wheelbase;
-    float spotAngleDeg = DirectionToAngleDeg(m_parkSpot->direction);
-    if (PlanParkLegTo(spotTarget, spotAngleDeg))
-        return; // leg 2 성공
-
-    DebugConsole::Log("BeginParkSpotLeg: can't tuck into ParkSpot " + std::to_string(m_parkSpot->id) +
-                      " from P, trying next spot");
-    // 이 자리 실패 -> 다음 빈 자리부터 leg 1부터 다시. 성공하면 m_parkGoingToSpot=false로 시퀀스 이어짐.
-    if (ReserveNextParkSpot() && BeginParkEnterOrRetry())
-        return;
-
-    // 남은 자리 없음 -> 입차 종료(빈 플랜 -> 다음 프레임 UpdatePark 완료 처리, 현재 자리에 멈춤).
-    DebugConsole::Log("BeginParkSpotLeg: no reachable ParkSpot left, stopping");
-    m_destLane = nullptr;
-    m_vehicleController.BeginPlan({});
 }
 
 HybridAStar::VehicleShape Car::BuildVehicleShape() const
@@ -554,27 +457,10 @@ void Car::UpdatePark()
     if (m_isExitingPark && m_parkSpot != nullptr)
     {
         // 출차 완료: 이제 레인 위. 더 이상 이 주차칸에 있는 게 아니므로 예약을 풀고 비운다.
-        m_parkSequenceActive = false; // 시퀀스 종료 — 다음 프레임 Drive로 전환 허용.
         m_RoadDataManager->ReleaseParkSpot(m_parkSpot->id);
         m_parkSpot = nullptr;
         // m_currentLane은 BeginParkPlan에서 이미 정해둔 상태 — 거기서부터 경로/스플라인을 채운다.
         EnterCurrentLane();
-        return;
-    }
-
-    // 입차 leg 1(-> 스플라인점 P)이 끝났으면, 이제 P에서 스팟까지 leg 2를 이어 계획한다. (주차레인 없이
-    // 바로 스팟으로 간 경우엔 BeginParkPlan에서 m_parkGoingToSpot=true라 이 블록을 건너뛰고 완료로 간다.)
-    if (!m_isExitingPark && m_parkSpot != nullptr && !m_parkGoingToSpot)
-    {
-        // leg 1처럼 완전히 멈춘 뒤 그 pose에서 leg 2를 계획한다(open-loop RS는 시작 pose 기준). 대기 중
-        // 컨트롤러가 finished여도 m_parkSequenceActive가 Park를 유지하므로 Drive로 새지 않는다.
-        if (m_speed > 0.0f)
-        {
-            Accelerate(0.0f);
-            return;
-        }
-        m_parkGoingToSpot = true;
-        BeginParkSpotLeg();
         return;
     }
 
@@ -584,7 +470,6 @@ void Car::UpdatePark()
     // 다시 Park로 복귀시키며 OnModeEnter가 BeginParkPlan을 호출한다.
     if (m_currentLane != nullptr)
     {
-        m_parkSequenceActive = false; // 입차 시퀀스 종료 — 다음 프레임 Stop으로 전환 허용.
         m_destLane = nullptr;
         m_currentLane = nullptr;
         return;

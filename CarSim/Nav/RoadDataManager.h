@@ -40,9 +40,6 @@ public:
     // 사각형 목록)를 그대로 반환한다. 실시간 회피의 코리도어 검사 등에서 쓴다.
     const vector<HybridAStar::Obstacle> &GetObstacles() const { return m_obstacles; }
 
-    // parkNodeId 소속 주차 스플라인 레인들(메인 라우팅 그래프 m_lanes와 분리). 해당 park가 없으면 nullptr.
-    const vector<shared_ptr<Lane>> *GetParkingLanes(int parkNodeId) const;
-
     // parkNodeId(Park 타입 노드)의 children 중 아직 예약되지 않은 ParkSpot을 하나 찾아 예약하고
     // 반환한다. 빈 자리가 없으면 nullptr. 예약 상태는 정적 도로 데이터(RoadNode)와 분리해서
     // 여기서만 관리한다. excludeIds에 담긴 스팟은 건너뛴다 (경로탐색 실패로 이미 시도해본 자리 재시도 방지용).
@@ -57,9 +54,8 @@ public:
     static constexpr float CURVE_SPEED_COEFF = 1.22f; // 최대 코너링 속도 = CURVE_SPEED_COEFF * sqrt(R)
 
 private:
-    // 주어진 레인 집합 안에서 끝점<->시작점을 공간 매칭해 successors를 구성한다. 메인 레인과 각
-    // Park의 주차레인 집합에 대해 따로 호출한다(집합 간에는 연결하지 않음 = Park 노드가 handoff 지점).
-    void BuildSuccessors(const vector<shared_ptr<Lane>> &lanes);
+    // 레인 끝점 <-> 다른 레인 시작점을 공간 매칭해 successors를 자동 구성한다.
+    void BuildLaneAdjacency();
 
 private:
     vector<shared_ptr<Lane>> m_lanes;
@@ -67,8 +63,6 @@ private:
     vector<shared_ptr<RoadNode>> m_nodes;
     vector<HybridAStar::Obstacle> m_obstacles;
     unordered_set<int> m_reservedParkSpotIds; // 예약된(다른 차가 목표로 잡은) ParkSpot 노드 id
-    // Park 노드 id -> 그 주차장의 스플라인 레인들. 메인 라우팅(m_lanes)과 분리 보관.
-    unordered_map<int, vector<shared_ptr<Lane>>> m_parkingLanes;
 };
 
 enum class RoadNodeType

@@ -47,10 +47,6 @@ private:
         int road = -1;
         int left = -1;
         int right = -1;
-        // 주차레인이면 true: road/left/right 대신 park(소속 Park 노드 id)를 쓰고, 저장 시 "lanes"가
-        // 아니라 "parking_lanes" 배열로 나간다 (런타임 RoadDataManager의 메인/주차 분리와 일치).
-        bool isParking = false;
-        int park = -1;
         std::vector<DirectX::XMFLOAT3> points;
     };
 

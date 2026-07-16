@@ -10,22 +10,6 @@
 #include "Utill/DebugConsole.h"
 #include "Utill/Assert.h"
 
-namespace
-{
-    // control_points 배열([[x,y,z], ...])을 Vec3 목록으로. 레인/주차레인 파싱 공용.
-    vector<Vec3> ParseControlPoints(const nlohmann::json &pointsJson)
-    {
-        vector<Vec3> controlPoints;
-        for (const nlohmann::json &point : pointsJson)
-        {
-            if (point.size() < 3)
-                continue;
-            controlPoints.push_back(Vec3(point[0].get<float>(), point[1].get<float>(), point[2].get<float>()));
-        }
-        return controlPoints;
-    }
-}
-
 void RoadDataManager::Init(const string &filePath)
 {
     BuildRoadData(filePath);
@@ -42,7 +26,6 @@ void RoadDataManager::BuildRoadData(const string &filePath)
     m_lanes.clear();
     m_nodes.clear();
     m_obstacles.clear();
-    m_parkingLanes.clear();
 
     map<int, shared_ptr<Road>> roadById;
     for (const nlohmann::json &roadJson : root.value("roads", nlohmann::json::array()))
@@ -66,7 +49,16 @@ void RoadDataManager::BuildRoadData(const string &filePath)
         if (roadIt != roadById.end())
             road = roadIt->second;
 
-        vector<Vec3> controlPoints = ParseControlPoints(laneJson.value("control_points", nlohmann::json::array()));
+        vector<Vec3> controlPoints;
+        for (const nlohmann::json &point : laneJson.value("control_points", nlohmann::json::array()))
+        {
+            if (point.size() < 3)
+                continue;
+            float x = point[0].get<float>();
+            float y = point[1].get<float>();
+            float z = point[2].get<float>();
+            controlPoints.push_back(Vec3(x, y, z));
+        }
 
         // Catmull-Rom 스플라인은 컨트롤 포인트가 4개 미만이면 빈 스플라인이 되어 이 레인이 통째로 무효화된다.
         Assert(controlPoints.size() >= 4);
@@ -143,22 +135,6 @@ void RoadDataManager::BuildRoadData(const string &filePath)
         }
     }
 
-    // parking_lanes(optional): Park 노드 밑의 주차 스플라인 망. 메인 레인과 분리 보관하며, 같은
-    // park 안에서만 끝점 연결(successors)을 구성한다(Park 노드가 메인망<->주차망 handoff 지점).
-    for (const nlohmann::json &parkingJson : root.value("parking_lanes", nlohmann::json::array()))
-    {
-        int id = parkingJson.value("id", 0);
-        int parkId = parkingJson.value("park", 0);
-
-        vector<Vec3> controlPoints = ParseControlPoints(parkingJson.value("control_points", nlohmann::json::array()));
-        // 레인과 동일하게 Catmull-Rom 4점 이상 필요.
-        Assert(controlPoints.size() >= 4);
-
-        // 주차레인은 소속 도로가 없다(Lane은 road==null이면 제한속도 기본값으로 처리).
-        auto lane = make_shared<Lane>(id, Spline(controlPoints), nullptr);
-        m_parkingLanes[parkId].push_back(lane);
-    }
-
     // obstacles(임시): 실제 인식 파이프라인이 들어오기 전까지, 손으로 채운 사각형 장애물 목록.
     // "position":[x,y,z], "size":[length,width](전체 길이/폭, heading 방향 기준), "rotation"(도, ReedsShepp와
     // 같은 atan2(z,x) 규약).
@@ -177,21 +153,18 @@ void RoadDataManager::BuildRoadData(const string &filePath)
         m_obstacles.push_back(obstacle);
     }
 
-    // 메인 레인망과 각 Park의 주차레인망을 각각 따로 연결(집합 간 연결 없음 = Park 노드 handoff).
-    BuildSuccessors(m_lanes);
-    for (auto &entry : m_parkingLanes)
-        BuildSuccessors(entry.second);
+    BuildLaneAdjacency();
 }
 
-void RoadDataManager::BuildSuccessors(const vector<shared_ptr<Lane>> &lanes)
+void RoadDataManager::BuildLaneAdjacency()
 {
-    // 매 빌드마다 레인은 새로 생성되므로 successors는 비어 있는 상태에서 시작한다.
-    for (const shared_ptr<Lane> &from : lanes)
+    // 매 빌드마다 m_lanes는 새로 생성되므로 successors는 비어 있는 상태에서 시작한다.
+    for (const shared_ptr<Lane> &from : m_lanes)
     {
         const Vec3 &fromEnd = from->GetEndPoint();
         Vec3 fromDir = from->GetSpline().GetDirectionAt(1.0f);
 
-        for (const shared_ptr<Lane> &to : lanes)
+        for (const shared_ptr<Lane> &to : m_lanes)
         {
             if (from == to)
                 continue;
@@ -243,12 +216,6 @@ shared_ptr<Lane> RoadDataManager::GetClosestLaneEnd(const Vec3 &position) const
         }
     }
     return closestLane;
-}
-
-const vector<shared_ptr<Lane>> *RoadDataManager::GetParkingLanes(int parkNodeId) const
-{
-    auto it = m_parkingLanes.find(parkNodeId);
-    return it != m_parkingLanes.end() ? &it->second : nullptr;
 }
 
 vector<LaneStep> RoadDataManager::FindPath(const shared_ptr<Lane> &startLane, const shared_ptr<Lane> &destLane) const

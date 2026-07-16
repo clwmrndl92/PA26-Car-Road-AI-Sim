@@ -423,11 +423,11 @@ namespace HybridAStar
 
         // 시작/목표 pose 자체가 이미 장애물과 겹치면 탐색해봐야 못 찾는다 — 원인 파악용으로 미리 찍어둔다.
         if (IsPoseCollisionPrepared(Pose{start, startHeadingDeg}, preparedObstacles, shape, vehicleBoundingRadius)){
-            DebugConsole::Log("HybridAStar::FindPath: start pose overlaps an obstacle " + ToString(start));
+            DebugConsole::Log("HybridAStar::FindPath: start pose overlaps an obstacle");
             return {};
         }
         if (IsPoseCollisionPrepared(Pose{goal, goalHeadingDeg}, preparedObstacles, shape, vehicleBoundingRadius)) {
-            DebugConsole::Log("HybridAStar::FindPath: goal pose overlaps an obstacle " + ToString(goal));
+            DebugConsole::Log("HybridAStar::FindPath: goal pose overlaps an obstacle - path can never succeed");
             return {};
         }
 
