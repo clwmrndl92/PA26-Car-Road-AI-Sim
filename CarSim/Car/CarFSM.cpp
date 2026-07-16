@@ -408,8 +408,8 @@ void Car::EnterCurrentLane()
         return;
     }
 
-    BakePathSpeedProfile();
     MergeOntoLane(m_currentLane, position);
+    CalculateSpeedProfile();
 }
 
 void Car::UpdateStop()
@@ -573,6 +573,7 @@ bool Car::CheckPath()
     {
         ++m_pathIndex;
         MergeOntoLane(m_path[m_pathIndex].lane, position);
+        CalculateSpeedProfile();
         return true;
     }
 
@@ -596,7 +597,10 @@ bool Car::CheckPath()
     }
     // 차선변경으로 진입한 레인이면, 현재 위치에서 그 레인 위로 합류하는 연결 스플라인을 만든다.
     if (enteredByLaneChange)
+    {
         MergeOntoLane(m_currentLane, position);
+        CalculateSpeedProfile();
+    }
     return true;
 }
 
@@ -611,11 +615,24 @@ void Car::DriveControl()
     float targetSteer = PurePursuit(targetPosition);
     Steer(targetSteer);
 
-    // speed control: 현재 위치의 baked 경로 최대속도(코너/제한속도/제동램프 전파가 이미 반영됨)를
-    // 그대로 목표 속도로 삼는다. 실제 가속/제동 램프(저크 완화)는 Accelerate() 안에서 처리된다.
-    float pathDistance = GetPathDistance(m_pathIndex, position);
-    float maxSteerSpeed = CalcMaxSpeed(targetSteer) * 0.8f;
-    float targetSpeed = std::min(GetPathMaxSpeed(pathDistance), maxSteerSpeed);
+    // speed control
+    float currentTime = m_currentTime;
+    if (currentTime - m_lastProfileTime >= LOOK_PROFILE_TIME / SPEED_PROFILE_COUNT)
+    {
+        float profileSpeed = m_speedProfile[m_profileIndex].second;
+        if (IsOffCourse() || abs(profileSpeed - m_speed) > (5.0f / 3.6f))
+        {
+            // Calculate/Move 둘 다 내부에서 m_profileIndex를 한 칸 전진시켜 두므로 호출부는 대칭이다.
+            CalculateSpeedProfile();
+        }
+        else
+        {
+            MoveSpeedProfile();
+        }
+        m_lastProfileTime = m_currentTime;
+    }
+    float maxSpeed = CalcMaxSpeed(targetSteer) * 0.8f;
+    float targetSpeed = min(m_speedProfile[m_profileIndex].second, maxSpeed);
 
     Accelerate(targetSpeed);
 
