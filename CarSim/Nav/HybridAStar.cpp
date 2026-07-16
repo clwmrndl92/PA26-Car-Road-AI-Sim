@@ -2,6 +2,7 @@
 #include "Utill/DebugConsole.h"
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <deque>
 #include <functional>
@@ -64,7 +65,7 @@ namespace HybridAStar
 
         // ReedsShepp::SamplePath와 같은 원호 전진 공식(부호 규약 동일)으로 pose를 한 스텝 이동.
         Pose StepPose(const Pose &pose, ReedsShepp::Steering steering, ReedsShepp::Gear gear,
-                     float distance, float turningRadius)
+                      float distance, float turningRadius)
         {
             double theta = static_cast<double>(pose.headingDeg) * PI / 180.0;
             double g = (gear == ReedsShepp::Gear::Backward) ? -1.0 : 1.0;
@@ -202,6 +203,13 @@ namespace HybridAStar
     {
         foundPath = false;
 
+        auto startTime = std::chrono::steady_clock::now();
+        auto LogElapsed = [startTime](const char *label)
+        {
+            double elapsedMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - startTime).count();
+            DebugConsole::Log("HybridAStar::FindPath " + std::string(label) + " in " + std::to_string(elapsedMs) + " ms");
+        };
+
         float turningRadius = shape.wheelbase / std::tan(ToRadians(shape.maxSteerAngleDeg));
         if (turningRadius <= 0.0f)
         {
@@ -235,7 +243,8 @@ namespace HybridAStar
             if (++expansions > params.maxExpansions)
             {
                 DebugConsole::Log("HybridAStar::FindPath failed: exceeded maxExpansions (" +
-                                   std::to_string(params.maxExpansions) + ")");
+                                  std::to_string(params.maxExpansions) + ")");
+                LogElapsed("failed (maxExpansions)");
                 return {}; // Failure: 탐색 한도 초과
             }
 
@@ -252,6 +261,7 @@ namespace HybridAStar
                 for (const ReedsShepp::PathElement &element : rsPath)
                     AppendStep(result, element.steering, element.gear, element.param);
                 foundPath = true;
+                LogElapsed("succeeded");
                 return result;
             }
 
@@ -295,6 +305,7 @@ namespace HybridAStar
 
         DebugConsole::Log("HybridAStar::FindPath failed: open set exhausted after " +
                           std::to_string(expansions) + " expansions");
+        LogElapsed("failed (open set exhausted)");
         return {}; // Failure: 경로 없음
     }
 

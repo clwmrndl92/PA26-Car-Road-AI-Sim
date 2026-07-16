@@ -64,6 +64,7 @@ bool CarSim::InitResource()
 
         m_GameObjects.push_back(car);
         m_CarObjects.push_back(car);
+        FocusOnObject(car);
     }
 
     // Car 2

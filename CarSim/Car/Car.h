@@ -5,6 +5,7 @@
 #include <cmath>
 #include <deque>
 #include <string>
+#include <array>
 #include <Nav/RoadDataManager.h>
 #include "Nav/ReedsShepp.h"
 #include "Nav/HybridAStar.h"
@@ -57,6 +58,8 @@ private:
 
     // 디버그 및 트레일(자국) 렌더링 (Debug & Rendering Helpers)
     void UpdateDebugWindow();
+    // 1~4초 뒤 목표 속도/위치를 보여주는 ImGui 창. 목표 위치는 노란 구 마커로도 표시한다.
+    void UpdateSpeedProfileWindow();
     void UpdateTrail();
     void RebuildTrailRender(RenderObject &render, const std::deque<DirectX::XMFLOAT3> &trail,
                             const std::string &name, const DirectX::XMFLOAT4 &color);
@@ -103,6 +106,18 @@ private:
     // Park 모드의 RS 입/출차 경로를 계획하고 VehicleController에 실행시킨다. 차가 완전히 멈춘
     // 뒤(m_parkPlanPending 해소 시점)의 위치/방향을 시작점으로 써야 하므로 UpdatePark에서만 호출된다.
     void BeginParkPlan();
+    // 입차 leg 2: 현재 pose에서 예약된 스팟까지 Hybrid A*로 계획(장애물 회피). leg 1(-> 스플라인점 P)이
+    // 끝난 뒤 UpdatePark에서 호출한다. 못 들어가면 다음 빈 자리로 넘어가 leg 1부터 다시 시도한다.
+    void BeginParkSpotLeg();
+    // 현재 pose -> target까지 Hybrid A*(장애물 회피)로 계획해 실행시킨다. 경로를 못 찾으면 false.
+    // 입차의 두 leg(-> P, -> 스팟)가 공통으로 쓴다.
+    bool PlanParkLegTo(const Vec3 &targetPos, float targetAngleDeg);
+    // m_parkSpot로의 입차 시작 계획(주차레인 있으면 leg 1 -> P, 없으면 -> 스팟). 시작했으면 true.
+    bool PlanEnterForCurrentSpot();
+    // 현재 m_parkSpot을 tried에 넣고 예약 해제한 뒤, 같은 Park의 다음 빈 자리를 예약한다. 남으면 true.
+    bool ReserveNextParkSpot();
+    // 현재 스팟부터 입차를 시도하고, 실패하면 다음 빈 자리로 넘어가며 다 시도한다. 계획 시작하면 true.
+    bool BeginParkEnterOrRetry();
     // Avoid 모드의 Hybrid A* 우회 경로를 계획하고 VehicleController에 실행시킨다. 차가 완전히
     // 멈춘 뒤(m_avoidPending 해소 시점)의 위치/방향을 시작점으로 쓴다. OnModeEnter(Avoid)에서만 호출.
     void BeginAvoidPlan();
@@ -116,23 +131,18 @@ private:
     // (UpdatePark) 양쪽에서 공유.
     void EnterCurrentLane();
 
-    // m_path가 새로 정해질 때 한 번, 경로 전체(모든 레인)를 훑어서 지점별 "곡률+제동램프를
-    // 고려한 최대속도" 테이블(m_pathSpeedProfile)을 굽는다. DriveControl은 매 틱 이 테이블을
-    // 조회만 하고 직접 도로를 스캔하지 않는다.
-    void BakePathSpeedProfile();
-    // pathIndex번째 레인의 원본 스플라인에 position을 투영해 경로 시작 기준 누적거리로 변환.
-    float GetPathDistance(size_t pathIndex, const Vec3 &position) const;
-    // 경로 누적거리에 해당하는 실제 위치 (레인 경계 넘어가며 보간).
-    Vec3 GetPathPosition(float pathDistance) const;
-    // m_pathSpeedProfile에서 해당 누적거리의 최대속도를 보간 조회.
-    float GetPathMaxSpeed(float pathDistance) const;
-
     // 현재 위치에서 주어진 레인 위로 합류하는 연결 스플라인을 만들어 m_currentSpline에 세팅한다.
     void MergeOntoLane(const shared_ptr<Lane> &lane, const Vec3 &position);
 
     void UpdateStop();
     void UpdatePark();
     void UpdateAvoid();
+    void MoveSpeedProfile();
+    void CalculateSpeedProfile();
+    // 브레이킹 램프(SmoothStep(τ/BRAKE_RAMP_DURATION))를 0~0.3=0.3배, 0.3~0.8=0.5배, 0.8~1.0(이후)=1.0배의
+    // 3단계 계단 함수로 근사해, 도달속도(exitSpeed)에서 목표 거리(distance)만큼 거꾸로 감속했을 때의
+    // 진입속도를 구한다. CalculateSpeedProfile/MoveSpeedProfile 양쪽의 감속 역전파에서 공유.
+    float SolveBrakeEntrySpeed(float exitSpeed, float distance) const;
     void UpdateDrive();
     // 경로상 다음 레인으로 넘어갈지 판단/처리. false면 경로가 끝난 것이므로 이번 프레임은 조향/가속 제어를 건너뛴다.
     bool CheckPath();
@@ -174,6 +184,14 @@ private:
     shared_ptr<RoadNode> m_parkSpot;        // 예약된 목표 주차칸(있는 동안은 "이 자리에 주차 중/주차 예정")
     shared_ptr<RoadNode> m_pendingParkNode; // 예약 전, 도착하면 그때 주차칸을 예약할 목표 Park 노드
     bool m_isExitingPark = false;           // 이번 Park 계획이 출차(주차칸->레인)인지, 입차(레인->주차칸)인지
+    // 입차 2단계 상태: false면 leg 1(-> 스플라인점 P) 실행 중, P 도착 후 true로 바꾸고 leg 2(-> 스팟)를
+    // 잇는다. 주차레인이 없어 바로 스팟으로 가는 경우엔 처음부터 true.
+    bool m_parkGoingToSpot = false;
+    // Park 시퀀스(입차 leg1/대기/leg2, 출차)가 진행 중인 동안 true. 다단계 주차에서 leg 사이에 컨트롤러가
+    // 잠깐 finished가 돼도 DecideNextMode가 Park를 계속 유지하게 해, Drive/Stop으로 새는 걸 막는다.
+    bool m_parkSequenceActive = false;
+    int m_parkNodeId = -1;                  // 이번 입차의 대상 Park 노드 id (다른 빈 자리 재예약에 씀)
+    unordered_set<int> m_triedParkSpotIds;  // 이번 입차에서 경로탐색이 실패해 이미 시도해본 ParkSpot id들
     // Park 모드에 막 진입해서 정지 대기 중인지. true인 동안은 RS 계획을 세우지 않고 감속만 하다가,
     // 완전히 멈추면(m_speed==0) 그 위치/방향을 시작점으로 BeginParkPlan을 호출한다.
     bool m_parkPlanPending = false;
@@ -184,16 +202,13 @@ private:
     float m_avoidReplanCooldown = 0.0f;
     vector<LaneStep> m_path;
     size_t m_pathIndex = 0;
-
-    // BakePathSpeedProfile이 m_path 확정 시 한 번 굽는, 경로 전체의 지점별 최대속도 테이블.
-    struct PathSpeedSample
-    {
-        float distance; // 경로(첫 레인 시작점) 기준 누적거리
-        float maxSpeed;
-    };
-    std::vector<PathSpeedSample> m_pathSpeedProfile;
-    std::vector<float> m_pathLaneStartDistance; // m_path와 parallel: 각 레인 시작점의 누적거리
+    static constexpr float LOOK_PROFILE_TIME = 5.0f;
+    static constexpr size_t SPEED_PROFILE_COUNT = 10;
+    std::array<std::pair<Vec3, float>, SPEED_PROFILE_COUNT> m_speedProfile; // 0.5초단위로 5초까지
+    size_t m_profileIndex = 0;
     Spline m_currentSpline;
+    float m_currentTime = 0.0f;
+    float m_lastProfileTime = 0.0f;
 
     // 차량 주행 상태 변수 (Vehicle States)
     float m_speed = 0.0f;
