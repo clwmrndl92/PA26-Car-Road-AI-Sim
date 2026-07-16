@@ -728,7 +728,7 @@ void Car::DriveControl()
 
     // speed control: 현재 위치의 baked 경로 최대속도(코너/제한속도/제동램프 전파가 이미 반영됨)를
     // 그대로 목표 속도로 삼는다. 실제 가속/제동 램프(저크 완화)는 Accelerate() 안에서 처리된다.
-    float pathDistance = GetPathDistance(m_pathIndex, position) + 0.5 * m_speed;
+    float pathDistance = GetPathDistance(m_pathIndex, position);
     float maxSteerSpeed = CalcMaxSpeed(targetSteer) * 0.8f;
     float targetSpeed = std::min(GetPathMaxSpeed(pathDistance), maxSteerSpeed);
 
