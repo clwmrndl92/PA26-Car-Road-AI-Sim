@@ -3,8 +3,7 @@
 
 Lane::Lane(int id, const Spline &spline, const shared_ptr<Road> &road)
     : m_spline(spline), m_id(id), m_road(road),
-      m_laneType(spline.IsStraight() ? LaneType::Straight : LaneType::Curve),
-      m_length(m_spline.GetLength())
+      length(m_spline.GetLength())
 {
 }
 

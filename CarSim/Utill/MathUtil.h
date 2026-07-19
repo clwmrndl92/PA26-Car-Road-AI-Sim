@@ -5,9 +5,6 @@
 #include <DirectXMath.h>
 #include <string>
 
-// Domain-layer vector type: Jolt's Vec3 is the "main" vector3 used by Car and higher-level
-// classes. Rendering/engine boundaries (which speak DirectX::XMFLOAT3) convert via the helpers
-// below. Aliased to `Vec3` so callers don't have to spell out JPH:: everywhere.
 using Vec3 = JPH::Vec3;
 
 inline DirectX::XMFLOAT3 ToXMFLOAT3(Vec3 v)

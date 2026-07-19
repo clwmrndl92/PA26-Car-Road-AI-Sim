@@ -24,16 +24,17 @@ void DebugConsole::Draw()
 
     if (ImGui::Begin("Console"))
     {
+        
+        for (const auto &line : m_lines)
+        ImGui::TextUnformatted(line.c_str());
+        
         if (ImGui::Button("Copy All"))
             ImGui::LogToClipboard();
-
-        for (const auto &line : m_lines)
-            ImGui::TextUnformatted(line.c_str());
 
         if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
             ImGui::SetScrollHereY(1.0f);
 
-        ImGui::LogFinish(); // LogToClipboard가 안 켜져 있으면 아무것도 안 함
+        ImGui::LogFinish();
     }
     ImGui::End();
 }
