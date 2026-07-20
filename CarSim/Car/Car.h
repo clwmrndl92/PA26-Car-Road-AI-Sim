@@ -29,7 +29,7 @@ public:
     Vec3 GetPosition() const override;
     Vec3 GetForwardAxis() const;
     void SetPosition(Vec3 position) override;
-    void SetRotation(const DirectX::XMFLOAT4 &rotation) override;
+    void SetRotation(Vec3 direction);
 
     // Getter / Setter (Accessors)
     void SetFocused(bool focused) { m_isFocused = focused; }
@@ -200,8 +200,8 @@ private:
     // Park 시퀀스(입차 leg1/대기/leg2, 출차)가 진행 중인 동안 true. 다단계 주차에서 leg 사이에 컨트롤러가
     // 잠깐 finished가 돼도 DecideNextMode가 Park를 계속 유지하게 해, Drive/Stop으로 새는 걸 막는다.
     bool m_parkSequenceActive = false;
-    int m_parkNodeId = -1;                  // 이번 입차의 대상 Park 노드 id (다른 빈 자리 재예약에 씀)
-    unordered_set<int> m_triedParkSpotIds;  // 이번 입차에서 경로탐색이 실패해 이미 시도해본 ParkSpot id들
+    int m_parkNodeId = -1;                 // 이번 입차의 대상 Park 노드 id (다른 빈 자리 재예약에 씀)
+    unordered_set<int> m_triedParkSpotIds; // 이번 입차에서 경로탐색이 실패해 이미 시도해본 ParkSpot id들
     // Park 모드에 막 진입해서 정지 대기 중인지. true인 동안은 RS 계획을 세우지 않고 감속만 하다가,
     // 완전히 멈추면(m_speed==0) 그 위치/방향을 시작점으로 BeginParkPlan을 호출한다.
     bool m_parkPlanPending = false;

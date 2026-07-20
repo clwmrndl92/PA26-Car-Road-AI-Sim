@@ -175,8 +175,11 @@ void Car::SetPosition(Vec3 position)
                                  position.GetZ() - fwd.z * m_wheelbase));
 }
 
-void Car::SetRotation(const DirectX::XMFLOAT4 &rotation)
+void Car::SetRotation(Vec3 direction)
 {
+    float yaw = std::atan2(direction.GetX(), direction.GetZ());
+    DirectX::XMFLOAT4 rotation;
+    DirectX::XMStoreFloat4(&rotation, DirectX::XMQuaternionRotationRollPitchYaw(0.0f, yaw, 0.0f));
     Vec3 frontAxle = GetPosition(); // capture using the OLD rotation, before it changes
     GameObject::SetRotation(rotation);
     SetPosition(frontAxle); // re-derive the rear axle using the NEW rotation
