@@ -87,14 +87,12 @@ inline const unordered_map<string, RoadNodeType> &GetRoadNodeTypeByName()
     return map;
 }
 
-// 도로 위 '지점 이벤트' 마커(정지선/신호/양보 등). 라우팅 그래프의 정점이 아니라 레인에 붙는 부가 정보.
+// 도로 위 '지점 이벤트' 마커(정지선/신호/양보 등)
 struct RoadNode
 {
     int id;
     Vec3 position;
     Vec3 direction;
     RoadNodeType nodeType = RoadNodeType::Unkown;
-    // 예: Park 노드가 자기 소유의 ParkSpot 노드들을 참조 (소유는 RoadDataManager가 하므로
-    // Lane의 left/right처럼 weak_ptr로만 참조해 순환참조 누수를 막는다).
-    vector<weak_ptr<RoadNode>> children;
+    vector<weak_ptr<RoadNode>> children; // 예: Park 노드가 자기 소유의 ParkSpot 노드들을 참조
 };
