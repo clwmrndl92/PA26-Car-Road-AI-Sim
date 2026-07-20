@@ -173,8 +173,8 @@ void Car::BeginParkPlan()
             m_destLane = nullptr;
             return;
         }
-        m_parkNodeId = parkNodeId;   // 재시도(다른 빈 자리)용으로 Park 노드 id 보관
-        m_triedParkSpotIds.clear();  // 새 입차 시퀀스 — 시도 목록 초기화
+        m_parkNodeId = parkNodeId;  // 재시도(다른 빈 자리)용으로 Park 노드 id 보관
+        m_triedParkSpotIds.clear(); // 새 입차 시퀀스 — 시도 목록 초기화
     }
 
     if (m_parkSpot == nullptr)
@@ -255,9 +255,11 @@ bool Car::PlanEnterForCurrentSpot()
 
     if (parkingLanes != nullptr && !parkingLanes->empty())
     {
-        // P: 이 Park의 주차레인들 중 스팟에 가장 가까운 스플라인 점 = 스팟 앞.
+        // P: 이 Park의 주차레인들 중 스팟에 가장 가까운 스플라인 점에서, 그 스플라인을 따라 조금
+        // 더 앞으로(P_LEAD_DISTANCE) 간 점 = 스팟 앞.
+        constexpr float P_LEAD_DISTANCE = 3.0f;
+
         const Spline *bestSpline = nullptr;
-        float bestParam = 0.0f;
         float bestDist = std::numeric_limits<float>::max();
         for (const shared_ptr<Lane> &lane : *parkingLanes)
         {
@@ -267,13 +269,13 @@ bool Car::PlanEnterForCurrentSpot()
             if (dist < bestDist)
             {
                 bestDist = dist;
-                bestParam = param;
                 bestSpline = &spline;
             }
         }
 
-        Vec3 pPos = bestSpline->GetPositionAt(bestParam);
-        float pAngleDeg = DirectionToAngleDeg(bestSpline->GetDirectionAt(bestParam));
+        Vec3 pPos = bestSpline->GetLookaheadPoint(m_parkSpot->position, P_LEAD_DISTANCE);
+        float pParam = bestSpline->GetSplinePosition(pPos);
+        float pAngleDeg = DirectionToAngleDeg(bestSpline->GetDirectionAt(pParam));
 
         if (PlanParkLegTo(pPos, pAngleDeg))
         {

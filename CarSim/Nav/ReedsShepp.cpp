@@ -413,28 +413,71 @@ namespace ReedsShepp
                        path.end());
         }
 
+        // 사람의 운전 선호를 반영한 비용함수 가중치.
+        // 1) 후진은 전진보다 훨씬 불편하다 -> REVERSE_WEIGHT (후진 거리에 곱해 1.5~2.0배 패널티).
+        // 2) 회전(곡선)은 직진보다 불안정하다 -> TURN_WEIGHT (회전 거리에 곱하는 가중치).
+        // 3) 전/후진이 바뀌는 지점(Cusp)은 피로도가 커서 아주 강하게 패널티 -> GEAR_CHANGE_PENALTY.
+        // 4) 핸들을 좌<->우로 바로 반대로 꺾는 건 불편하다 -> STEER_CHANGE_PENALTY.
+        constexpr double REVERSE_WEIGHT = 1.75;
+        constexpr double TURN_WEIGHT = 1.3;
+        constexpr double GEAR_CHANGE_PENALTY = 3.0;
+        constexpr double STEER_CHANGE_PENALTY = 1.0;
+
+        // 세그먼트 하나의 비용: 실제 거리에 회전/후진 가중치를 곱한다(직진-전진이 가중치 1.0 기준).
+        double SegmentCost(const PathElement &e)
+        {
+            double weight = 1.0;
+            if (e.steering != Steering::Straight)
+                weight *= TURN_WEIGHT;
+            if (e.gear == Gear::Backward)
+                weight *= REVERSE_WEIGHT;
+            return static_cast<double>(e.param) * weight;
+        }
+
+        // 경로 전체 비용 = 세그먼트별 거리 비용 합 + 기어 전환(Cusp) 횟수 패널티 + 인접한 회전
+        // 세그먼트끼리 좌/우가 바뀌는 횟수 패널티(사이에 직진이 끼면 카운트하지 않음 — 직진을 섞어
+        // 회전 상태를 완화하는 건 사람도 편하게 느끼므로). 값이 작을수록 사람이 운전할 법한 경로.
+        double PathCost(const Path &path)
+        {
+            double cost = 0.0;
+            for (const PathElement &e : path)
+                cost += SegmentCost(e);
+
+            for (size_t i = 1; i < path.size(); ++i)
+            {
+                if (path[i].gear != path[i - 1].gear)
+                    cost += GEAR_CHANGE_PENALTY;
+                if (path[i].steering != Steering::Straight && path[i - 1].steering != Steering::Straight &&
+                    path[i].steering != path[i - 1].steering)
+                    cost += STEER_CHANGE_PENALTY;
+            }
+
+            return cost;
+        }
+
         // 12개 공식 각각에 4가지 변형(원본/timeflip/reflect/둘 다)을 적용한 최대 48개 후보 중
-        // 최단 경로 하나만 생성/보관해서 돌려준다 (반경 1 기준 정규화 좌표 x, y, phi(deg)).
-        // 후보 벡터를 물리적으로 만들지 않으므로 매 호출의 힙 할당이 48개 → 최대 2개로 줄어든다.
-        // 유효 경로가 없으면 빈 경로를 반환한다.
+        // PathCost가 가장 낮은(=사람이 운전할 법한) 경로 하나만 생성/보관해서 돌려준다 (반경 1
+        // 기준 정규화 좌표 x, y, phi(deg)). 후보 벡터를 물리적으로 만들지 않으므로 매 호출의 힙
+        // 할당이 48개 → 최대 2개로 줄어든다. 유효 경로가 없으면 빈 경로를 반환한다.
         Path GetBestPath(double x, double y, double phiDeg)
         {
             Path best;
-            float bestLength = std::numeric_limits<float>::max();
+            double bestCost = std::numeric_limits<double>::max();
 
             // 생성 순서(공식별 원본→timeflip→reflect→둘 다)와 strict-less 비교를 그대로 유지해
-            // 기존 GetAllPaths+최소선택과 동일한 경로(동점 시 먼저 나온 것)를 고른다.
+            // 동점 시 먼저 나온 후보를 고른다.
             auto consider = [&](Path candidate)
             {
                 StripZeroParams(candidate);
                 if (candidate.empty())
                     return;
-                float length = GetPathLength(candidate);
-                if (length < bestLength)
-                {
-                    bestLength = length;
-                    best = std::move(candidate);
-                }
+
+                double cost = PathCost(candidate);
+                if (cost >= bestCost)
+                    return;
+
+                bestCost = cost;
+                best = std::move(candidate);
             };
 
             for (PathFn fn : kPathFns)
