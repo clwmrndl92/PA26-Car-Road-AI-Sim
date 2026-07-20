@@ -125,6 +125,46 @@ namespace HybridAStar
             return true;
         }
 
+        // origin/direction(단위벡터)이 obstacle 사각형과 만나는 가장 가까운 거리(0~maxDistance)를
+        // hitDistance에 채운다. obstacle의 fwd/right축 기준 로컬 좌표로 바꿔 슬랩(slab) 테스트.
+        bool RayObbHit(const Vec3 &origin, const Vec3 &direction, float maxDistance,
+                       const Obstacle &obstacle, float &hitDistance)
+        {
+            float rad = ToRadians(obstacle.headingDeg);
+            Vec3 fwd(std::cos(rad), 0.0f, std::sin(rad));
+            Vec3 right(-fwd.GetZ(), 0.0f, fwd.GetX());
+
+            Vec3 rel = origin - obstacle.center;
+            float ox = rel.Dot(fwd);
+            float oz = rel.Dot(right);
+            float dx = direction.Dot(fwd);
+            float dz = direction.Dot(right);
+
+            float tMin = 0.0f;
+            float tMax = maxDistance;
+
+            auto ClipAxis = [&tMin, &tMax](float o, float d, float halfExtent)
+            {
+                if (std::fabs(d) < 1e-9f)
+                    return std::fabs(o) <= halfExtent; // 이 축 방향으로는 안 움직임 -> 시작부터 범위 안이어야 함
+                float t1 = (-halfExtent - o) / d;
+                float t2 = (halfExtent - o) / d;
+                if (t1 > t2)
+                    std::swap(t1, t2);
+                tMin = std::max(tMin, t1);
+                tMax = std::min(tMax, t2);
+                return tMin <= tMax;
+            };
+
+            if (!ClipAxis(ox, dx, obstacle.halfLength))
+                return false;
+            if (!ClipAxis(oz, dz, obstacle.halfWidth))
+                return false;
+
+            hitDistance = tMin;
+            return true;
+        }
+
         bool IsPoseCollision(const Pose &pose, const std::vector<Obstacle> &obstacles, const VehicleShape &shape)
         {
             float rad = ToRadians(pose.headingDeg);
@@ -321,5 +361,22 @@ namespace HybridAStar
                      const std::vector<Obstacle> &obstacles, const VehicleShape &shape)
     {
         return IsPoseCollision(Pose{position, headingDeg}, obstacles, shape);
+    }
+
+    bool RayCastObstacles(const Vec3 &origin, const Vec3 &direction, float maxDistance,
+                          const std::vector<Obstacle> &obstacles, float &outDistance)
+    {
+        outDistance = maxDistance;
+        bool hit = false;
+        for (const Obstacle &obstacle : obstacles)
+        {
+            float dist;
+            if (RayObbHit(origin, direction, maxDistance, obstacle, dist) && dist < outDistance)
+            {
+                outDistance = dist;
+                hit = true;
+            }
+        }
+        return hit;
     }
 }

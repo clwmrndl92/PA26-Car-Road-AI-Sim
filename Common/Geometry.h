@@ -4,6 +4,7 @@
 #include <vector>
 #include <string>
 #include <map>
+#include <utility>
 #include <DirectXMath.h>
 #include <functional>
 
@@ -52,6 +53,11 @@ namespace Geometry
     // Create a connected polyline through the given points, as consecutive line segments.
     // Draw with a line-list topology (see BasicEffect::SetRenderLines).
     GeometryData CreatePolyline(const std::vector<DirectX::XMFLOAT3>& points);
+
+    // Create a set of disconnected line segments (each pair is its own from/to, unlike
+    // CreatePolyline which chains points into one strip). Draw with a line-list topology
+    // (see BasicEffect::SetRenderLines).
+    GeometryData CreateLineList(const std::vector<std::pair<DirectX::XMFLOAT3, DirectX::XMFLOAT3>>& segments);
 
     // Create a filled quad from 4 corner points, given in winding order as seen from the
     // face's front (the normal is derived from (p1-p0) x (p2-p0)). Draw with the default

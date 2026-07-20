@@ -58,4 +58,10 @@ namespace HybridAStar
     // 단발 충돌판정만 필요한 곳(예: 주행 중 실시간 회피의 코리도어 스윕)에서 재사용하려고 공개해둔다.
     bool IsColliding(const Vec3 &position, float headingDeg,
                      const std::vector<Obstacle> &obstacles, const VehicleShape &shape);
+
+    // origin에서 direction(단위벡터, XZ 평면) 방향으로 maxDistance까지 레이를 쏴 obstacles 중
+    // 가장 가까운 충돌 거리를 outDistance에 채운다(맞은 게 있으면 true). 국소 반응형 회피
+    // (steering behavior)의 레이 센서 구현에 쓴다 -- IsColliding처럼 검색 트리 없이 단발 판정만.
+    bool RayCastObstacles(const Vec3 &origin, const Vec3 &direction, float maxDistance,
+                          const std::vector<Obstacle> &obstacles, float &outDistance);
 }

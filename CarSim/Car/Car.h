@@ -6,6 +6,8 @@
 #include <deque>
 #include <string>
 #include <array>
+#include <vector>
+#include <utility>
 #include <Nav/RoadDataManager.h>
 #include "Nav/ReedsShepp.h"
 #include "Nav/HybridAStar.h"
@@ -78,6 +80,8 @@ private:
     // Park 계획(OnModeEnter(Park))이 세워질 때 RS 경로 폴리라인 + 목표 위치/방향을 바닥에 그린다.
     void RebuildParkDebugRender(const ReedsShepp::Path &path, const Vec3 &startPos, float startAngleDeg,
                                 float turningRadius, const Vec3 &targetPos, float targetAngleDeg);
+    // ComputeAvoidSteerBias가 채워둔 m_avoidRaySegments(레이 시작-끝 쌍)를 선으로 그린다.
+    void RebuildAvoidRayRender();
 
     bool IsOffCourse();
 
@@ -161,6 +165,12 @@ private:
     // (반환값 true, VehicleController::Tick은 이번 프레임 건너뜀), 완전히 멈추면 m_avoidPending을
     // 켜서 다음 프레임 DecideNextMode가 Avoid 모드(Hybrid A* 우회)로 전환하게 한다.
     bool TryAvoidObstacle();
+    // 전방 부채꼴(좌우 90도)로 레이를 쏴 가까운 장애물일수록 그 반대쪽으로 미는 조향 보정치
+    // (라디안)를 계산한다. DriveControl의 Pure Pursuit 조향에 더해 쓰는 국소 반응형 회피
+    // (steering behavior) -- TryAvoidObstacle/Avoid 모드(정지 후 Hybrid A* 전역 재계획)와 달리
+    // 멈추거나 재계획하지 않고 매 틱 미세하게만 조정한다. m_drawCollider가 켜져 있으면 디버그
+    // 렌더링용으로 각 레이의 시작/끝점을 m_avoidRaySegments에도 채운다(RebuildAvoidRayRender가 사용).
+    float ComputeAvoidSteerBias();
 
 public:
     // 차선 진입 허용 오차/임계값 (예: 현재 타깃 차선에 안착했는지 확인하는 기준)
@@ -258,6 +268,9 @@ private:
     RenderObject m_parkPathRender;   // Park 계획(RS 경로) 폴리라인
     RenderObject m_parkTargetMarker; // Park 목표 위치
     RenderObject m_parkTargetLine;   // Park 목표 방향
+    RenderObject m_avoidRayRender;   // ComputeAvoidSteerBias의 레이 부채꼴
+    // ComputeAvoidSteerBias가 매 틱 채우는 레이 시작-끝 점 쌍 (RebuildAvoidRayRender가 그대로 그림).
+    std::vector<std::pair<Vec3, Vec3>> m_avoidRaySegments;
 };
 
 static float CalcMaxSteerAngle(float speed)

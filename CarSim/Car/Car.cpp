@@ -107,7 +107,7 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
     GameObject::Draw(context, effect);
 
     if (m_drawCollider && (m_rearTrailRender.GetModel() || m_frontTrailRender.GetModel() || m_splineRender.GetModel() ||
-                           m_parkPathRender.GetModel() || m_parkTargetLine.GetModel()))
+                           m_parkPathRender.GetModel() || m_parkTargetLine.GetModel() || m_avoidRayRender.GetModel()))
     {
         if (auto *pBasic = dynamic_cast<BasicEffect *>(&effect))
         {
@@ -122,6 +122,8 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
                 m_parkPathRender.Draw(context, effect);
             if (m_parkTargetLine.GetModel())
                 m_parkTargetLine.Draw(context, effect);
+            if (m_avoidRayRender.GetModel())
+                m_avoidRayRender.Draw(context, effect);
             pBasic->SetRenderDefault();
         }
     }
@@ -917,6 +919,33 @@ void Car::RebuildSplineRender()
     pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f));
     pModel->materials[0].Set<float>("$Opacity", 1.0f);
     m_splineRender.SetModel(pModel);
+}
+
+void Car::RebuildAvoidRayRender()
+{
+    if (!m_drawCollider || m_avoidRaySegments.empty())
+    {
+        m_avoidRayRender.SetModel(nullptr);
+        return;
+    }
+
+    constexpr float DEBUG_LINE_HEIGHT = 0.15f;
+
+    std::vector<std::pair<DirectX::XMFLOAT3, DirectX::XMFLOAT3>> segments;
+    segments.reserve(m_avoidRaySegments.size());
+    for (const auto &segment : m_avoidRaySegments)
+    {
+        DirectX::XMFLOAT3 from = ToXMFLOAT3(segment.first);
+        DirectX::XMFLOAT3 to = ToXMFLOAT3(segment.second);
+        from.y += DEBUG_LINE_HEIGHT;
+        to.y += DEBUG_LINE_HEIGHT;
+        segments.emplace_back(from, to);
+    }
+
+    Model *pModel = ModelManager::Get().CreateFromGeometry("__avoid_rays__:" + GetName(), Geometry::CreateLineList(segments));
+    pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(1.0f, 0.5f, 0.0f, 1.0f));
+    pModel->materials[0].Set<float>("$Opacity", 1.0f);
+    m_avoidRayRender.SetModel(pModel);
 }
 
 void Car::RebuildParkDebugRender(const ReedsShepp::Path &path, const Vec3 &startPos, float startAngleDeg,

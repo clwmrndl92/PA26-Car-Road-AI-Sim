@@ -153,6 +153,15 @@ void Car::OnModeExit(DriveMode mode)
 {
     if (!m_vehicleController.IsFinished())
         m_vehicleController.Abort();
+
+    if (mode == DriveMode::Drive)
+    {
+        // Drive 전용 디버그 선(정속주행 스플라인, 국소 회피 레이)은 DriveControl/CheckPath가 Drive
+        // 중에만 갱신하므로, 안 지우면 Drive를 벗어난 마지막 프레임 모습 그대로 그 자리에 남는다.
+        m_splineRender.SetModel(nullptr);
+        m_avoidRayRender.SetModel(nullptr);
+        m_avoidRaySegments.clear();
+    }
 }
 
 void Car::BeginParkPlan()
@@ -728,6 +737,60 @@ bool Car::CheckPath()
     return true;
 }
 
+// Tier 0 국소 회피: TryAvoidObstacle(코리도어 스윕 -> 완전정지 -> Avoid 모드 재계획)보다 앞서,
+// 매 틱 조향에 살짝 얹는 반응형 보정. 차를 세우거나 경로를 다시 짜지 않고, 가까운 장애물이
+// 있는 쪽 반대로 목표 조향각을 조금 밀 뿐이라 TryAvoidObstacle의 "완전히 막힘" 판정과 역할이
+// 겹치지 않는다 -- 이쪽은 스치듯 지나가는 정도의 소소한 회피, 완전히 막히면 여전히 TryAvoidObstacle이
+// 개입한다.
+float Car::ComputeAvoidSteerBias()
+{
+    m_avoidRaySegments.clear();
+
+    if (m_RoadDataManager == nullptr)
+        return 0.0f;
+
+    const std::vector<HybridAStar::Obstacle> &obstacles = m_RoadDataManager->GetObstacles();
+    if (obstacles.empty())
+        return 0.0f;
+
+    constexpr int RAY_COUNT = 15;                 // 전방 부채꼴에 쏘는 레이 개수
+    constexpr float RAY_RANGE = 8.0f;             // 레이 최대 거리 (m)
+    constexpr float RAY_FOV_DEG = 180.0f;         // 부채꼴 전체 각 (전방 기준 좌우 90도씩)
+    constexpr float STEER_GAIN = 1.2f;            // 레이 하나(정면 90도, 접촉 수준)가 낼 수 있는 조향 기여량(라디안)
+    constexpr float MAX_BIAS = ToRadians(20.0f); // 국소 회피가 낼 수 있는 최대 조향 보정치
+
+    Vec3 fwd = GetForwardAxis();
+    Vec3 right(-fwd.GetZ(), 0.0f, fwd.GetX());
+    Vec3 origin = GetPosition(); // 앞차축 근방에서 발사 -- 정밀 충돌판정은 Hybrid A*/TryAvoidObstacle 쪽 몫.
+
+    if (m_drawCollider)
+        m_avoidRaySegments.reserve(RAY_COUNT);
+
+    float bias = 0.0f;
+    for (int i = 0; i < RAY_COUNT; ++i)
+    {
+        float t = (RAY_COUNT == 1) ? 0.5f : static_cast<float>(i) / (RAY_COUNT - 1); // 0~1
+        float relRad = ToRadians(-RAY_FOV_DEG * 0.5f + RAY_FOV_DEG * t);             // -90도 ~ +90도
+        Vec3 rayDir = fwd * std::cos(relRad) + right * std::sin(relRad);
+
+        float hitDistance = RAY_RANGE;
+        bool hit = HybridAStar::RayCastObstacles(origin, rayDir, RAY_RANGE, obstacles, hitDistance);
+
+        // 디버그 표시용: 맞았으면 맞은 지점까지, 안 맞았으면 센서 최대 거리까지 선을 그린다.
+        if (m_drawCollider)
+            m_avoidRaySegments.emplace_back(origin, origin + rayDir * hitDistance);
+
+        if (!hit)
+            continue;
+
+        float urgency = std::clamp((RAY_RANGE - hitDistance) / RAY_RANGE, 0.0f, 1.0f);
+        // relRad>0(오른쪽 레이)가 맞으면 왼쪽(음수)으로 밀어야 하므로 부호를 반전한다.
+        bias += -STEER_GAIN * urgency * std::sin(relRad);
+    }
+
+    return std::clamp(bias, -MAX_BIAS, MAX_BIAS);
+}
+
 void Car::DriveControl()
 {
     Vec3 position = m_rigidbody.GetPosition();
@@ -736,8 +799,9 @@ void Car::DriveControl()
     constexpr float LOOKAHEAD_TIME = 1.0f;         // 몇 초 앞을 볼지
     float lookaheadDistance = std::max(MIN_LOOKAHEAD_DISTANCE, m_speed * LOOKAHEAD_TIME);
     auto targetPosition = m_currentSpline.GetLookaheadPoint(position, lookaheadDistance);
-    float targetSteer = PurePursuit(targetPosition);
+    float targetSteer = PurePursuit(targetPosition) + ComputeAvoidSteerBias();
     Steer(targetSteer);
+    RebuildAvoidRayRender();
 
     // speed control
     float currentTime = m_currentTime;

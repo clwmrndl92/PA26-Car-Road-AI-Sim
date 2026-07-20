@@ -672,6 +672,38 @@ namespace Geometry
         return geoData;
     }
 
+    GeometryData CreateLineList(const std::vector<std::pair<DirectX::XMFLOAT3, DirectX::XMFLOAT3>> &segments)
+    {
+        using namespace DirectX;
+
+        GeometryData geoData;
+        if (segments.empty())
+            return geoData;
+
+        std::vector<uint32_t> indices;
+        indices.reserve(segments.size() * 2);
+        for (const auto &segment : segments)
+        {
+            uint32_t base = static_cast<uint32_t>(geoData.vertices.size());
+            geoData.vertices.push_back(segment.first);
+            geoData.vertices.push_back(segment.second);
+            indices.push_back(base);
+            indices.push_back(base + 1);
+        }
+
+        // RenderObject::Draw() picks the index buffer format (16 vs 32-bit) from indexCount alone,
+        // so the populated array must match that same 65535 threshold or the GPU misreads the buffer.
+        if (indices.size() > 65535)
+            geoData.indices32 = std::move(indices);
+        else
+            geoData.indices16.assign(indices.begin(), indices.end());
+
+        geoData.normals.resize(geoData.vertices.size(), XMFLOAT3(0.0f, 1.0f, 0.0f));
+        geoData.texcoords.resize(geoData.vertices.size(), XMFLOAT2(0.0f, 0.0f));
+
+        return geoData;
+    }
+
     GeometryData CreatePolyline(const std::vector<DirectX::XMFLOAT3> &points)
     {
         using namespace DirectX;
