@@ -11,7 +11,7 @@
 class Rigidbody
 {
 public:
-    enum class Type { Static, Dynamic };
+    enum class Type { Static, Dynamic, Kinematic };
 
     // position stays the body's rotation pivot (its center of mass); colliderOffset shifts only
     // the collision box within that frame (see Init's OffsetCenterOfMassShape usage).

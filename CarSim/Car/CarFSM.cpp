@@ -473,7 +473,7 @@ void Car::BeginAvoidPlan()
 
 void Car::UpdateAvoid()
 {
-    m_vehicleController.Tick(*this);
+    m_wantSegmentTick = true;
 }
 
 void Car::UpdateFindPath()
@@ -520,7 +520,7 @@ void Car::UpdateStop()
     // Park에서 넘어온 직후면 조향 원복 세그먼트가 아직 안 끝났을 수 있다.
     if (!m_vehicleController.IsFinished())
     {
-        m_vehicleController.Tick(*this);
+        m_wantSegmentTick = true;
         return;
     }
 
@@ -546,9 +546,11 @@ void Car::UpdatePark()
         BeginParkPlan();
     }
 
-    m_vehicleController.Tick(*this);
     if (!m_vehicleController.IsFinished())
+    {
+        m_wantSegmentTick = true;
         return;
+    }
 
     // m_parkSpot!=nullptr 체크는 방어코드 — BeginParkPlan이 예약 실패로 조기 리턴하면
     // m_isExitingPark가 이전 사이클의 스테일 값(true)일 수 있는데, 그 상태에서 m_parkSpot은
@@ -599,7 +601,7 @@ void Car::UpdateDrive()
         return;
     if (TryAvoidObstacle())
         return;
-    m_vehicleController.Tick(*this);
+    m_wantSegmentTick = true;
 }
 
 bool Car::TryAvoidObstacle()

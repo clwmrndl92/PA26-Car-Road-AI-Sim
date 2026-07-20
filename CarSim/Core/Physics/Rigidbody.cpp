@@ -8,13 +8,15 @@ void Rigidbody::Init(JPH::BodyInterface &bodyInterface, JPH::Vec3 halfExtents, J
 {
     m_bodyInterface = &bodyInterface;
 
-    JPH::EMotionType motionType = (type == Type::Dynamic)
-                                      ? JPH::EMotionType::Dynamic
-                                      : JPH::EMotionType::Static;
+    JPH::EMotionType motionType = JPH::EMotionType::Static;
+    if (type == Type::Dynamic)
+        motionType = JPH::EMotionType::Dynamic;
+    else if (type == Type::Kinematic)
+        motionType = JPH::EMotionType::Kinematic;
 
-    JPH::ObjectLayer layer = (type == Type::Dynamic)
-                                 ? Layers::DYNAMIC
-                                 : Layers::STATIC;
+    // Kinematic도 Dynamic과 마찬가지로 "움직이는" 레이어 -- Static(도로/장애물)과의 충돌 감지가
+    // 필요하다(HasNewContact가 이걸로 장애물 접촉을 잡아낸다).
+    JPH::ObjectLayer layer = (type == Type::Static) ? Layers::STATIC : Layers::DYNAMIC;
 
     // Jolt always simulates/rotates a body around Shape::GetCenterOfMass(), regardless of any
     // mass/inertia override -- so just offsetting the box via RotatedTranslatedShape makes the

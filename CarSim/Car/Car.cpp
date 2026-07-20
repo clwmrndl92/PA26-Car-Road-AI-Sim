@@ -31,7 +31,7 @@ void Car::Init(const CarSpec &spec, RoadDataManager *roadDataManager, JPH::Vec3 
                             position.GetY() - fwd.y * m_wheelbase,
                             position.GetZ() - fwd.z * m_wheelbase);
 
-    GameObject::Init(spec.halfExtents, Rigidbody::Type::Dynamic, spec.colliderOffset, spec.mass);
+    GameObject::Init(spec.halfExtents, Rigidbody::Type::Kinematic, spec.colliderOffset, spec.mass);
 
     m_spawnPosition = m_transform.GetPosition();
     m_spawnRotation = m_transform.GetRotationQuat();
@@ -65,6 +65,8 @@ void Car::UpdateAI(float dt)
     m_currentTime += dt;
     UpdateFindPath(); // Update Mode 보다 먼저 실행돼야함
     UpdateMode();
+    // 각 UpdateXxx()가 이번 프레임에 세그먼트를 진행시킬지만 정한다 -- 실제 Tick()은 Update()에서.
+    m_wantSegmentTick = false;
     switch (m_mode)
     {
     case DriveMode::Stop:
@@ -85,6 +87,10 @@ void Car::UpdateAI(float dt)
 void Car::Update(float dt)
 {
     m_deltaTime = dt;
+    // 물리 고정 dt에서 실행 -- ApplyMotion()이 이번 스텝에 실제로 적분할 dt와 정확히 같은 dt로
+    // 세그먼트를 진행시키고(Steer/Accelerate 램프), m_traveled를 누적해야 드리프트가 안 생긴다.
+    if (m_wantSegmentTick)
+        m_vehicleController.Tick(*this);
     UpdateCar();
     ApplyMotion();
     UpdateTrail();
@@ -228,14 +234,11 @@ void Car::Accelerate(float desiredVelocity)
 
 void Car::Steer(float radian, float steerRamp)
 {
+    float maxDelta = steerRamp * m_deltaTime;
     if (m_steerAngle > radian)
-        m_steerAngle -= steerRamp * m_deltaTime;
+        m_steerAngle = std::max(m_steerAngle - maxDelta, radian);
     else if (m_steerAngle < radian)
-        m_steerAngle += steerRamp * m_deltaTime;
-    else if (m_steerAngle > 0.0f) // Return to center
-        m_steerAngle = std::max(m_steerAngle - m_deltaTime, 0.0f);
-    else
-        m_steerAngle = std::min(m_steerAngle + m_deltaTime, 0.0f);
+        m_steerAngle = std::min(m_steerAngle + maxDelta, radian);
 }
 void Car::ChangeGear()
 {

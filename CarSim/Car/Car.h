@@ -17,9 +17,10 @@ public:
     void Init(const CarSpec &spec, RoadDataManager *roadDataManager, JPH::Vec3 position = JPH::Vec3::sZero());
 
     // 부모 클래스 오버라이드 함수 (Overrides)
-    // AI 판단(경로/모드 FSM, 목표 가속/조향 계산): 매 렌더 프레임, 실제 dt로 실행.
+    // AI 판단(경로탐색/모드 FSM, 이번 프레임에 세그먼트를 진행시킬지 게이트만 결정): 매 렌더
+    // 프레임, 실제 dt로 실행. 실제 세그먼트 Tick(목표 가속/조향 계산)은 Update()에서 한다.
     void UpdateAI(float dt) override;
-    // 물리 반영(목표를 실제 rigidbody에 씀): GameApp의 고정 물리 dt로 실행.
+    // 세그먼트 Tick + 물리 반영(목표를 실제 rigidbody에 씀): GameApp의 고정 물리 dt로 실행.
     void Update(float dt) override;
     // ImGui 디버그 창: 물리 스텝과 무관하게 매 렌더 프레임 실행돼야 함(안 그러면 창이 깜빡임).
     void UpdateUI(float dt) override;
@@ -46,6 +47,10 @@ public:
     bool IsReverse() const { return m_isReverse; }
     // Steer()가 램프 중인 실제 현재 조향각 (목표각과 다를 수 있음 - ArcMoveSegment가 정렬 여부 판단에 사용).
     float GetSteerAngle() const { return m_steerAngle; }
+    // rigidbody(=뒷차축, bicycle model의 회전축) 실제 위치. ArcMoveSegment가 m_traveled를 속도
+    // 적분이 아니라 실제 이동량으로 재는 데 쓴다.
+    Vec3 GetRigidbodyPosition() const { return m_rigidbody.GetPosition(); }
+    float GetWheelbase() const { return m_wheelbase; }
 
     // VehicleSegment(SplineFollowSegment)가 호출하는 정속주행 제어 한 틱. VehicleController를
     // 통해서만 호출되도록 의도된 것이라 AI 흐름 밖에서 직접 부르지 않는다.
@@ -221,6 +226,11 @@ private:
     float m_steerAngle = 0.0f;
     bool m_isReverse = false;
     float m_deltaTime = 0.0f;
+    // UpdateAI가 이번 프레임에 현재 세그먼트를 진행시켜도 되는지 정한 게이트. 실제
+    // m_vehicleController.Tick() 호출은 Update()(물리 고정 dt 루프)에서 이 값을 보고 실행한다 --
+    // Tick()이 advance하는 m_traveled와 Steer/Accelerate 램프가 ApplyMotion()의 적분과 같은
+    // dt·같은 빈도로 맞도록.
+    bool m_wantSegmentTick = false;
     enum class AccelMode
     {
         None,
