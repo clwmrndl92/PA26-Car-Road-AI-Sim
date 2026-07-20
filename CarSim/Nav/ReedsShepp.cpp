@@ -403,6 +403,55 @@ namespace ReedsShepp
             return path;
         }
 
+        // 세그먼트 하나를 적분해 월드좌표 폴리라인 점들을 points에 append하고, (x,z,theta)를
+        // 그 세그먼트 끝의 pose로 갱신한다. SamplePath/SampleLegs가 공유하는 핵심 적분 로직.
+        void AppendElementSamples(const PathElement &element, double &x, double y, double &z, double &theta,
+                                  float turningRadius, float sampleSpacing, std::vector<Vec3> &points)
+        {
+            double g = (element.gear == Gear::Backward) ? -1.0 : 1.0;
+            double kappaLabel = 0.0;
+            if (element.steering == Steering::Left)
+                kappaLabel = 1.0 / turningRadius;
+            else if (element.steering == Steering::Right)
+                kappaLabel = -1.0 / turningRadius;
+
+            int sampleCount = std::max(1, static_cast<int>(element.param / sampleSpacing));
+            double ds = element.param / sampleCount;
+
+            if (std::fabs(kappaLabel) < 1e-9)
+            {
+                // 직선: 현재 heading 방향으로 기어에 따른 부호만큼 전진.
+                for (int i = 1; i <= sampleCount; ++i)
+                {
+                    double s = ds * i;
+                    double px = x + g * s * std::cos(theta);
+                    double pz = z + g * s * std::sin(theta);
+                    points.push_back(Vec3(static_cast<float>(px), static_cast<float>(y), static_cast<float>(pz)));
+                }
+                x += g * element.param * std::cos(theta);
+                z += g * element.param * std::sin(theta);
+            }
+            else
+            {
+                // 곡선: 원 중심은 기어와 무관하게 고정, 헤딩만 기어에 따라 반대 방향으로 돈다.
+                double invKappa = 1.0 / kappaLabel;
+                double cx = x - invKappa * std::sin(theta);
+                double cz = z + invKappa * std::cos(theta);
+                double kappaActual = g * kappaLabel;
+                for (int i = 1; i <= sampleCount; ++i)
+                {
+                    double s = ds * i;
+                    double th = theta + kappaActual * s;
+                    double px = cx + invKappa * std::sin(th);
+                    double pz = cz - invKappa * std::cos(th);
+                    points.push_back(Vec3(static_cast<float>(px), static_cast<float>(y), static_cast<float>(pz)));
+                }
+                theta += kappaActual * element.param;
+                x = cx + invKappa * std::sin(theta);
+                z = cz - invKappa * std::cos(theta);
+            }
+        }
+
         // param==0 세그먼트 제거. 길이에는 영향이 없지만(0을 더할 뿐) 반환 경로의 표현을
         // 원본과 동일하게 맞추기 위해 유지한다.
         void StripZeroParams(Path &path)
@@ -530,53 +579,39 @@ namespace ReedsShepp
         double theta = DegToRad(startAngleDeg);
 
         points.push_back(Vec3(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)));
+        for (const PathElement &element : path)
+            AppendElementSamples(element, x, y, z, theta, turningRadius, sampleSpacing, points);
+
+        return points;
+    }
+
+    std::vector<Leg> SampleLegs(const Path &path, const Vec3 &start, float startAngleDeg,
+                                float turningRadius, float sampleSpacing)
+    {
+        std::vector<Leg> legs;
+        if (path.empty() || turningRadius <= 0.0f || sampleSpacing <= 0.0f)
+            return legs;
+
+        double x = start.GetX();
+        double z = start.GetZ();
+        double y = start.GetY();
+        double theta = DegToRad(startAngleDeg);
+
+        Gear legGear = path.front().gear;
+        std::vector<Vec3> legPoints{Vec3(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z))};
 
         for (const PathElement &element : path)
         {
-            double g = (element.gear == Gear::Backward) ? -1.0 : 1.0;
-            double kappaLabel = 0.0;
-            if (element.steering == Steering::Left)
-                kappaLabel = 1.0 / turningRadius;
-            else if (element.steering == Steering::Right)
-                kappaLabel = -1.0 / turningRadius;
-
-            int sampleCount = std::max(1, static_cast<int>(element.param / sampleSpacing));
-            double ds = element.param / sampleCount;
-
-            if (std::fabs(kappaLabel) < 1e-9)
+            if (element.gear != legGear)
             {
-                // 직선: 현재 heading 방향으로 기어에 따른 부호만큼 전진.
-                for (int i = 1; i <= sampleCount; ++i)
-                {
-                    double s = ds * i;
-                    double px = x + g * s * std::cos(theta);
-                    double pz = z + g * s * std::sin(theta);
-                    points.push_back(Vec3(static_cast<float>(px), static_cast<float>(y), static_cast<float>(pz)));
-                }
-                x += g * element.param * std::cos(theta);
-                z += g * element.param * std::sin(theta);
+                legs.push_back(Leg{std::move(legPoints), legGear});
+                legGear = element.gear;
+                legPoints = {Vec3(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z))};
             }
-            else
-            {
-                // 곡선: 원 중심은 기어와 무관하게 고정, 헤딩만 기어에 따라 반대 방향으로 돈다.
-                double invKappa = 1.0 / kappaLabel;
-                double cx = x - invKappa * std::sin(theta);
-                double cz = z + invKappa * std::cos(theta);
-                double kappaActual = g * kappaLabel;
-                for (int i = 1; i <= sampleCount; ++i)
-                {
-                    double s = ds * i;
-                    double th = theta + kappaActual * s;
-                    double px = cx + invKappa * std::sin(th);
-                    double pz = cz - invKappa * std::cos(th);
-                    points.push_back(Vec3(static_cast<float>(px), static_cast<float>(y), static_cast<float>(pz)));
-                }
-                theta += kappaActual * element.param;
-                x = cx + invKappa * std::sin(theta);
-                z = cz - invKappa * std::cos(theta);
-            }
+            AppendElementSamples(element, x, y, z, theta, turningRadius, sampleSpacing, legPoints);
         }
+        legs.push_back(Leg{std::move(legPoints), legGear});
 
-        return points;
+        return legs;
     }
 }

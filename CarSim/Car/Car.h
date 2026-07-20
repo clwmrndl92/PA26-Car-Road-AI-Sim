@@ -45,16 +45,19 @@ public:
     float GetSpeed() const { return m_speed; }
     float GetDeltaTime() const { return m_deltaTime; }
     bool IsReverse() const { return m_isReverse; }
-    // Steer()가 램프 중인 실제 현재 조향각 (목표각과 다를 수 있음 - ArcMoveSegment가 정렬 여부 판단에 사용).
+    // Steer()가 램프 중인 실제 현재 조향각 (목표각과 다를 수 있음 - VehicleController가 기어 전환 전
+    // 정렬 여부 판단에, CenterSteerSegment가 정렬 완료 판단에 사용).
     float GetSteerAngle() const { return m_steerAngle; }
-    // rigidbody(=뒷차축, bicycle model의 회전축) 실제 위치. ArcMoveSegment가 m_traveled를 속도
-    // 적분이 아니라 실제 이동량으로 재는 데 쓴다.
+    // rigidbody(=뒷차축, bicycle model의 회전축) 실제 위치. RSFollowSegment가 추종 중인 폴리라인
+    // 위 최근접점을 찾는 기준점으로 쓴다.
     Vec3 GetRigidbodyPosition() const { return m_rigidbody.GetPosition(); }
     float GetWheelbase() const { return m_wheelbase; }
 
     // VehicleSegment(SplineFollowSegment)가 호출하는 정속주행 제어 한 틱. VehicleController를
     // 통해서만 호출되도록 의도된 것이라 AI 흐름 밖에서 직접 부르지 않는다.
     void DriveControl();
+    // Pure Pursuit 조향각 계산. VehicleSegment(SplineFollowSegment/RSFollowSegment)가 매 틱 호출.
+    float PurePursuit(Vec3 target);
 
 private:
     // 내부 물리 및 제어 로직 (Internal Physics & Control)
@@ -63,8 +66,6 @@ private:
     void ApplyMotion();
     float GetSignedSpeed() const { return m_speed * (m_isReverse ? -1.0f : 1.0f); }
     JPH::Vec3 ComputeDesiredVelocity() const;
-
-    float PurePursuit(Vec3 target);
 
     // 디버그 및 트레일(자국) 렌더링 (Debug & Rendering Helpers)
     void UpdateDebugWindow();

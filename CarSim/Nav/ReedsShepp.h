@@ -30,6 +30,14 @@ namespace ReedsShepp
 
     using Path = std::vector<PathElement>;
 
+    // 기어가 같은 구간(leg) 하나의 월드좌표 폴리라인. points[0]는 이 leg의 시작 pose(이전 leg의
+    // 끝, 또는 경로 전체의 시작)와 일치한다.
+    struct Leg
+    {
+        std::vector<Vec3> points;
+        Gear gear;
+    };
+
     float GetPathLength(const Path &path);
 
     // start/end는 XZ 평면(y는 무시) 위의 위치, 각도는 도(degree) 단위이며 atan2(z, x) 규약
@@ -40,8 +48,12 @@ namespace ReedsShepp
                         float turningRadius);
 
     // path를 start/startAngleDeg에서 시작해 실제 월드 좌표 폴리라인으로 샘플링한다 (디버그 렌더링용).
-    // ArcMoveSegment/Car::ApplyMotion과 같은 부호 규약(기어와 무관하게 Left/Right가 같은 곡률 방향)을
-    // 그대로 따른다.
+    // Car::ApplyMotion과 같은 부호 규약(기어와 무관하게 Left/Right가 같은 곡률 방향)을 그대로 따른다.
     std::vector<Vec3> SamplePath(const Path &path, const Vec3 &start, float startAngleDeg,
                                  float turningRadius, float sampleSpacing = 0.5f);
+
+    // path를 기어가 바뀌는 지점마다 나눠, 각 leg의 월드좌표 폴리라인을 반환한다 (Pure Pursuit
+    // 기반 추종용 -- RSFollowSegment가 leg 하나씩 순서대로 실행한다). 부호 규약은 SamplePath와 동일.
+    std::vector<Leg> SampleLegs(const Path &path, const Vec3 &start, float startAngleDeg,
+                                float turningRadius, float sampleSpacing = 0.5f);
 }

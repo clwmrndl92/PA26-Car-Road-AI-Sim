@@ -12,13 +12,17 @@
 
 namespace
 {
-    // ReedsShepp::Path의 각 세그먼트를 VehicleController가 실행할 수 있는 세그먼트로 변환.
-    std::vector<std::unique_ptr<VehicleSegment>> BuildParkSegments(const ReedsShepp::Path &path, float steerAngle)
+    // ReedsShepp::Path를 기어가 바뀌는 지점마다 leg로 나눠, 각 leg를 Pure Pursuit로 추종하는
+    // RSFollowSegment로 변환한다 (VehicleController가 leg 순서대로 실행, 기어 전환은
+    // VehicleController::Tick이 기존 로직으로 처리).
+    std::vector<std::unique_ptr<VehicleSegment>> BuildParkSegments(const ReedsShepp::Path &path, const Vec3 &startPos,
+                                                                    float startAngleDeg, float turningRadius)
     {
         std::vector<std::unique_ptr<VehicleSegment>> segments;
-        segments.reserve(path.size());
-        for (const ReedsShepp::PathElement &element : path)
-            segments.push_back(std::make_unique<ArcMoveSegment>(element.steering, element.gear, element.param, steerAngle));
+        std::vector<ReedsShepp::Leg> legs = ReedsShepp::SampleLegs(path, startPos, startAngleDeg, turningRadius);
+        segments.reserve(legs.size());
+        for (ReedsShepp::Leg &leg : legs)
+            segments.push_back(std::make_unique<RSFollowSegment>(std::move(leg.points), leg.gear));
         return segments;
     }
 
@@ -229,7 +233,7 @@ void Car::BeginParkPlan()
             m_destLane = nullptr;
             return;
         }
-        m_vehicleController.BeginPlan(BuildParkSegments(path, m_maxSteerAngle));
+        m_vehicleController.BeginPlan(BuildParkSegments(path, startPos, startAngleDeg, turningRadius));
         RebuildParkDebugRender(path, startPos, startAngleDeg, turningRadius, targetPos, targetAngleDeg);
         return;
     }
@@ -336,7 +340,7 @@ bool Car::PlanParkLegTo(const Vec3 &targetPos, float targetAngleDeg)
     if (!foundPath)
         return false;
 
-    m_vehicleController.BeginPlan(BuildParkSegments(path, m_maxSteerAngle));
+    m_vehicleController.BeginPlan(BuildParkSegments(path, startPos, startAngleDeg, turningRadius));
     RebuildParkDebugRender(path, startPos, startAngleDeg, turningRadius, targetPos, targetAngleDeg);
     return true;
 }
@@ -456,6 +460,7 @@ void Car::BeginAvoidPlan()
 
     HybridAStar::VehicleShape shape = BuildVehicleShape();
     const std::vector<HybridAStar::Obstacle> &obstacles = m_RoadDataManager->GetObstacles();
+    float turningRadius = m_wheelbase / tanf(m_maxSteerAngle);
 
     bool foundPath = false;
     ReedsShepp::Path path = HybridAStar::FindPath(startPos, startAngleDeg, targetPos, targetAngleDeg, obstacles, shape, foundPath);
@@ -466,7 +471,7 @@ void Car::BeginAvoidPlan()
         DebugConsole::Log("BeginAvoidPlan: HybridA* failed to find an avoid route, will retry on next detection");
         return;
     }
-    m_vehicleController.BeginPlan(BuildParkSegments(path, m_maxSteerAngle));
+    m_vehicleController.BeginPlan(BuildParkSegments(path, startPos, startAngleDeg, turningRadius));
 
     DebugConsole::Log("Avoid path segments: " + to_string(path.size()));
 }
