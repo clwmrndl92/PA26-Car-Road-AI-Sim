@@ -413,15 +413,10 @@ namespace ReedsShepp
                        path.end());
         }
 
-        // 사람의 운전 선호를 반영한 비용함수 가중치.
-        // 1) 후진은 전진보다 훨씬 불편하다 -> REVERSE_WEIGHT (후진 거리에 곱해 1.5~2.0배 패널티).
-        // 2) 회전(곡선)은 직진보다 불안정하다 -> TURN_WEIGHT (회전 거리에 곱하는 가중치).
-        // 3) 전/후진이 바뀌는 지점(Cusp)은 피로도가 커서 아주 강하게 패널티 -> GEAR_CHANGE_PENALTY.
-        // 4) 핸들을 좌<->우로 바로 반대로 꺾는 건 불편하다 -> STEER_CHANGE_PENALTY.
-        constexpr double REVERSE_WEIGHT = 1.75;
-        constexpr double TURN_WEIGHT = 1.3;
-        constexpr double GEAR_CHANGE_PENALTY = 3.0;
-        constexpr double STEER_CHANGE_PENALTY = 1.0;
+        constexpr double REVERSE_WEIGHT = 1.75;      // 후진 페널티
+        constexpr double TURN_WEIGHT = 1.3;          // 회전 페널티
+        constexpr double GEAR_CHANGE_PENALTY = 3.0;  // 기어변경 페널티
+        constexpr double STEER_CHANGE_PENALTY = 1.0; // 회전 방향 변경 페널티
 
         // 세그먼트 하나의 비용: 실제 거리에 회전/후진 가중치를 곱한다(직진-전진이 가중치 1.0 기준).
         double SegmentCost(const PathElement &e)
