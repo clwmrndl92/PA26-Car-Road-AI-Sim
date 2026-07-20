@@ -39,6 +39,12 @@ protected:
 
     PhysicsSystem m_Physics;
 
+    static constexpr float kMaxFrameDeltaTime = 0.25f;
+
+    float m_PhysicsAccumulator = 0.0f;
+    static constexpr float kFixedPhysicsStep = 1.0f / 60.0f;
+    static constexpr int kMaxPhysicsStepsPerFrame = 8;
+
     std::shared_ptr<Camera> m_pCamera;
 
     RenderObject m_GridXZ;

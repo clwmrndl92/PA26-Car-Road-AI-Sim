@@ -56,8 +56,11 @@ void Car::Init(const CarSpec &spec, RoadDataManager *roadDataManager, JPH::Vec3 
     DebugInit();
 }
 
-void Car::Update(float dt)
+void Car::UpdateAI(float dt)
 {
+    // m_deltaTime is also (re)set by Update() below at the fixed physics dt -- safe because
+    // UpdateAI() always runs to completion before Update() starts this frame (see
+    // GameApp::UpdateScene), so nothing here ever observes the physics dt instead of this one.
     m_deltaTime = dt;
     m_currentTime += dt;
     UpdateFindPath(); // Update Mode 보다 먼저 실행돼야함
@@ -77,11 +80,20 @@ void Car::Update(float dt)
         UpdateAvoid();
         break;
     }
+}
+
+void Car::Update(float dt)
+{
+    m_deltaTime = dt;
     UpdateCar();
-    UpdateDebugWindow();
-    UpdateSpeedProfileWindow();
     ApplyMotion();
     UpdateTrail();
+}
+
+void Car::UpdateUI(float dt)
+{
+    UpdateDebugWindow();
+    UpdateSpeedProfileWindow();
 }
 
 void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)

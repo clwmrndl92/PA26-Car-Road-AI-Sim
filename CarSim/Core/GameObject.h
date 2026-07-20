@@ -17,7 +17,9 @@ public:
     void Init(JPH::Vec3 halfExtents, Rigidbody::Type type = Rigidbody::Type::Dynamic,
               JPH::Vec3 colliderOffset = JPH::Vec3::sZero(), float mass = 1.0f);
 
+    virtual void UpdateAI(float dt) {}
     virtual void Update(float dt) {}
+    virtual void UpdateUI(float dt) {}
     void UpdateRender() { SyncPhysicsToRender(); }
 
     virtual void Draw(ID3D11DeviceContext *context, IEffect &effect);

@@ -143,17 +143,10 @@ LRESULT D3DApp::MsgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         return true;
 
     switch (msg) {
-        // WM_ACTIVATE is sent when the window is activated or deactivated.
-        // We pause the game when the window is deactivated and unpause it
-        // when it becomes active.
+        // WM_ACTIVATE is sent when the window is activated or deactivated. Losing focus
+        // (e.g. alt-tab) intentionally does NOT pause the sim -- only minimize/resize do,
+        // since those genuinely can't render (see WM_SIZE / WM_ENTERSIZEMOVE below).
     case WM_ACTIVATE:
-        if (LOWORD(wParam) == WA_INACTIVE) {
-            m_AppPaused = true;
-            m_Timer.Stop();
-        } else {
-            m_AppPaused = false;
-            m_Timer.Start();
-        }
         return 0;
 
         // WM_SIZE is sent when the user resizes the window.

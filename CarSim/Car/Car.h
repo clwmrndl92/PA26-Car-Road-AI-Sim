@@ -17,7 +17,12 @@ public:
     void Init(const CarSpec &spec, RoadDataManager *roadDataManager, JPH::Vec3 position = JPH::Vec3::sZero());
 
     // 부모 클래스 오버라이드 함수 (Overrides)
+    // AI 판단(경로/모드 FSM, 목표 가속/조향 계산): 매 렌더 프레임, 실제 dt로 실행.
+    void UpdateAI(float dt) override;
+    // 물리 반영(목표를 실제 rigidbody에 씀): GameApp의 고정 물리 dt로 실행.
     void Update(float dt) override;
+    // ImGui 디버그 창: 물리 스텝과 무관하게 매 렌더 프레임 실행돼야 함(안 그러면 창이 깜빡임).
+    void UpdateUI(float dt) override;
     void Draw(ID3D11DeviceContext *context, IEffect &effect) override;
 
     Vec3 GetPosition() const override;

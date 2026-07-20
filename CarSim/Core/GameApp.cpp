@@ -1,6 +1,7 @@
 #include "GameApp.h"
 #include <XUtil.h>
 #include <DXTrace.h>
+#include <algorithm>
 #include "Car/Car.h"
 #include "Utill/DebugConsole.h"
 
@@ -55,18 +56,34 @@ void GameApp::OnResize()
 
 void GameApp::UpdateScene(float dt)
 {
-    // Step 1. Update game objects
+    dt = std::min(dt, kMaxFrameDeltaTime);
+
+    // Step 1. AI/decision logic
+    for (auto &obj : m_GameObjects)
+        obj->UpdateAI(dt);
+
+    // Step 2. Physics-coupled update + physics step
+    m_PhysicsAccumulator += dt;
+    int physicsSteps = 0;
+    while (m_PhysicsAccumulator >= kFixedPhysicsStep && physicsSteps < kMaxPhysicsStepsPerFrame)
+    {
+        for (auto &obj : m_GameObjects)
+            obj->Update(kFixedPhysicsStep);
+
+        m_Physics.Update(kFixedPhysicsStep);
+
+        m_PhysicsAccumulator -= kFixedPhysicsStep;
+        ++physicsSteps;
+    }
+    if (physicsSteps == kMaxPhysicsStepsPerFrame)
+        m_PhysicsAccumulator = 0.0f;
+
+    // Step 3. Sync render transforms + per-object UI, every render frame
     for (auto &obj : m_GameObjects)
     {
-        obj->Update(dt);
-    }
-
-    // Step 2. Calculate physics System
-    m_Physics.Update(dt);
-
-    // Step 3. Update RenderObject
-    for (auto &obj : m_GameObjects)
         obj->UpdateRender();
+        obj->UpdateUI(dt);
+    }
 
     // Step 4. Update camera
     UpdateCamera(dt);
