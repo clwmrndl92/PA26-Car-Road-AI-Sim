@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <memory>
 #include <vector>
 #include "Spline.h"
@@ -6,6 +7,7 @@
 using namespace std;
 
 class Road;
+class Car;
 
 class Lane
 {
@@ -43,6 +45,13 @@ public:
         m_right.reset();
     }
 
+    // 지금 이 레인 위에 있는 차 목록(Car::SetCurrentLane이 관리). 소유권 없는 raw pointer —
+    // 차가 런타임에 파괴되는 경우가 없어(앱 종료 시에만 GameObject 리스트가 비워짐) 수명 문제가 없다.
+    // 다른 차 탐색(IIDM 실제 앞차 반영, MOBIL 이웃 탐색)에 쓴다.
+    void RegisterCar(Car *car) { m_cars.push_back(car); }
+    void UnregisterCar(Car *car) { m_cars.erase(std::remove(m_cars.begin(), m_cars.end(), car), m_cars.end()); }
+    const vector<Car *> &GetCars() const { return m_cars; }
+
     // 끝점 매칭용 헬퍼: 스플라인 시작/끝 지점
     const Vec3 &GetStartPoint() const { return m_spline.GetSplinePoints().front(); }
     const Vec3 &GetEndPoint() const { return m_spline.GetSplinePoints().back(); }
@@ -56,4 +65,5 @@ private:
     vector<weak_ptr<Lane>> m_successors; // 진행 방향으로 이어지는 다음 레인들
     weak_ptr<Lane> m_left;               // 같은 진행방향 좌측 인접 레인 (차선변경)
     weak_ptr<Lane> m_right;              // 같은 진행방향 우측 인접 레인 (차선변경)
+    vector<Car *> m_cars;                // 지금 이 레인 위에 있는 차들 (RegisterCar/UnregisterCar가 관리)
 };

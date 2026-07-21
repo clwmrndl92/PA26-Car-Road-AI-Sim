@@ -5,10 +5,12 @@
 #include <cmath>
 #include <deque>
 #include <string>
-#include <array>
+#include <vector>
 #include <Nav/RoadDataManager.h>
 #include "Nav/ReedsShepp.h"
 #include "Nav/HybridAStar.h"
+#include "Nav/CarFollowing.h"
+#include "Nav/Mobil.h"
 
 class Car : public GameObject
 {
@@ -57,6 +59,11 @@ public:
     // 위 최근접점을 찾는 기준점으로 쓴다.
     Vec3 GetRigidbodyPosition() const { return m_rigidbody.GetPosition(); }
     float GetWheelbase() const { return m_wheelbase; }
+    // 다른 차가 나를 가상/실제 리더로 삼아 IIDM+CAH 가속도를 계산할 때 쓰는 값들 (Car::FindLaneNeighbors,
+    // Car::TryLaneChange가 레지스트리로 찾은 다른 Car에 대해 호출).
+    float GetAcceleration() const { return m_acceleration; }
+    // 범퍼 대 범퍼 gap 계산용 차체 길이. m_halfExtents.z가 반길이(CarSpec::halfExtents 주석 참고).
+    float GetLength() const { return m_halfExtents.GetZ() * 2.0f; }
 
     // VehicleSegment(SplineFollowSegment)가 호출하는 정속주행 제어 한 틱. VehicleController를
     // 통해서만 호출되도록 의도된 것이라 AI 흐름 밖에서 직접 부르지 않는다.
@@ -74,7 +81,7 @@ private:
 
     // 디버그 및 트레일(자국) 렌더링 (Debug & Rendering Helpers)
     void UpdateDebugWindow();
-    // 1~4초 뒤 목표 속도/위치를 보여주는 ImGui 창. 목표 위치는 노란 구 마커로도 표시한다.
+    // m_roadConstraints(IIDM+CAH가 가상 리더로 쓰는 도로 제약 목록)를 가까운 순으로 보여주는 ImGui 창.
     void UpdateSpeedProfileWindow();
     void UpdateTrail();
     void RebuildTrailRender(RenderObject &render, const std::deque<DirectX::XMFLOAT3> &trail,
@@ -148,18 +155,58 @@ private:
     // (UpdatePark) 양쪽에서 공유.
     void EnterCurrentLane();
 
+    // m_currentLane을 바꾸는 유일한 통로. 레인별 차량 레지스트리(Lane::RegisterCar/UnregisterCar)에서도
+    // 같이 등록/해제해야 하므로, m_currentLane을 직접 대입하지 않고 항상 이 함수를 거친다.
+    void SetCurrentLane(const shared_ptr<Lane> &lane);
+
     // 현재 위치에서 주어진 레인 위로 합류하는 연결 스플라인을 만들어 m_currentSpline에 세팅한다.
     void MergeOntoLane(const shared_ptr<Lane> &lane, const Vec3 &position);
 
     void UpdateStop();
     void UpdatePark();
     void UpdateAvoid();
-    void MoveSpeedProfile();
-    void CalculateSpeedProfile();
-    // 브레이킹 램프(SmoothStep(τ/BRAKE_RAMP_DURATION))를 0~0.3=0.3배, 0.3~0.8=0.5배, 0.8~1.0(이후)=1.0배의
-    // 3단계 계단 함수로 근사해, 도달속도(exitSpeed)에서 목표 거리(distance)만큼 거꾸로 감속했을 때의
-    // 진입속도를 구한다. CalculateSpeedProfile/MoveSpeedProfile 양쪽의 감속 역전파에서 공유.
-    float SolveBrakeEntrySpeed(float exitSpeed, float distance) const;
+    // 경로 위 한 지점의 IIDM+CAH용 가상 리더 정보: 그 지점까지의 거리(경로를 따라간 arc length,
+    // m_rigidbody 기준)와 그 지점에서 요구되는 속도(커브 최대속도 / 레인 제한속도 / 정지점=0).
+    struct RoadSpeedSample
+    {
+        Vec3 position;
+        float distance;
+        float speed;
+    };
+    // 현재 위치에서 lookDistance만큼 앞으로 경로(커브/레인 제한속도/경로 끝 정지점)를 훑어, 그 지점들을
+    // IIDM+CAH가 "가상 리더"로 쓸 수 있는 (위치, 그 지점까지 거리, 요구 속도) 목록으로 반환한다.
+    // DriveSpeedIDM이 주기적으로 호출해 m_roadConstraints를 채운다.
+    std::vector<RoadSpeedSample> ScanRoadSpeedConstraints(float lookDistance) const;
+    // ScanRoadSpeedConstraints를 즉시 호출해 m_roadConstraints/m_lastConstraintScanTime을 갱신한다.
+    // 새 레인에 합류하는 시점들(EnterCurrentLane/CheckPath의 차선변경)에서 즉시 호출해, DriveSpeedIDM의
+    // 주기 재스캔을 기다리지 않고 새 경로 기준으로 바로 갱신되게 한다.
+    void RescanRoadSpeedConstraints();
+    // IIDM+CAH 기반 AI 종방향 속도 제어 한 틱. m_roadConstraints의 각 지점을 정지/저속 가상 리더로 보고
+    // CarFollowing::CalculateAcceleration을 계산해 그중 가장 보수적인(작은) 값을 m_acceleration에 쓴다.
+    // DriveControl이 매 틱 호출; 스캔 자체는 내부에서 주기적으로만 갱신한다. steerSpeedCap은 지금 조향각
+    // 기준 순간 최대속도(CalcMaxSpeed(targetSteer) 기반, DriveControl이 계산) -- 커브 lookahead와는 별개로
+    // v0에 바로 걸리는 즉각적인 상한이라 파라미터로 받는다.
+    void DriveSpeedIDM(float steerSpeedCap);
+    // DriveSpeedIDM/TryLaneChange가 같이 쓰는 IIDM+CAH 파라미터 조립 (v0만 상황에 따라 다름).
+    CarFollowing::Params BuildIdmParams(float v0) const;
+
+    // 어떤 레인 위에서 찾은 다른 차 하나 + 그 레인 기준 위치(arclength).
+    struct LaneNeighbor
+    {
+        Car *car = nullptr;
+        float position = 0.0f;
+    };
+    // lane 위에서 myPosition(그 레인의 canonical spline 기준 arclength)보다 앞/뒤로 가장 가까운
+    // 다른 차(this 제외)를 찾는다. lane->GetCars()를 선형 스캔 — 차량 규모가 작아 정렬 구조 없이도 충분하다.
+    // DriveSpeedIDM(실제 앞차 반영)과 TryLaneChange(MOBIL 이웃 탐색) 양쪽이 공유.
+    void FindLaneNeighbors(const shared_ptr<Lane> &lane, float myPosition,
+                           LaneNeighbor &outLeader, LaneNeighbor &outFollower) const;
+    // FindLaneNeighbors가 찾은(반드시 car != nullptr인) 이웃 하나를 Mobil::VehicleState로 변환.
+    Mobil::VehicleState ToVehicleState(const LaneNeighbor &n) const;
+    // 왼쪽/오른쪽 인접 레인에 대해 MOBIL을 평가하고, 승인되면(+목적지 도달 가능하면) 실제로 차선을
+    // 바꾼다. 한 프레임에 최대 한 번만 실행하며, 실행 여부와 무관하게 평가했다는 사실 자체로
+    // m_lastLaneChangeTime을 갱신해 다음 평가까지 쿨다운을 둔다 (왕복 진동 방지).
+    bool TryLaneChange();
     void UpdateDrive();
     // 경로상 다음 레인으로 넘어갈지 판단/처리. false면 경로가 끝난 것이므로 이번 프레임은 조향/가속 제어를 건너뛴다.
     bool CheckPath();
@@ -224,12 +271,30 @@ private:
     vector<LaneStep> m_path;
     size_t m_pathIndex = 0;
     static constexpr float LOOK_PROFILE_TIME = 5.0f;
-    static constexpr size_t SPEED_PROFILE_COUNT = 10;
-    std::array<std::pair<Vec3, float>, SPEED_PROFILE_COUNT> m_speedProfile; // 0.5초단위로 5초까지
-    size_t m_profileIndex = 0;
+    static constexpr size_t SPEED_PROFILE_COUNT = 10; // 재스캔 주기(LOOK_PROFILE_TIME / 이 값) 계산에만 씀
+    // ScanRoadSpeedConstraints가 채우는 캐시. DriveSpeedIDM이 매 틱 이 목록의 각 지점을 가상 리더로
+    // 써서 IIDM+CAH 가속도를 계산한다 (스캔 자체는 주기적으로만 갱신 — 아래 m_lastConstraintScanTime).
+    std::vector<RoadSpeedSample> m_roadConstraints;
+    float m_lastConstraintScanTime = 0.0f;
     Spline m_currentSpline;
     float m_currentTime = 0.0f;
-    float m_lastProfileTime = 0.0f;
+
+    // DriveSpeedIDM이 도로 제약(커브/레인 제한속도/정지점)을 가상 리더로 다룰 때 쓰는 IIDM+CAH 파라미터.
+    // a/b는 기존 물리 상수(m_maxAccel/m_maxBrake)를 그대로 재사용한다.
+    static constexpr float IDM_TIME_HEADWAY = 1.2f;      // T
+    static constexpr float IDM_STANDSTILL_DISTANCE = 2.0f; // s0
+    static constexpr float IDM_ACCEL_EXPONENT = 4.0f;    // delta
+    static constexpr float IDM_COOLNESS = 1.0f;          // c
+
+    // TryLaneChange(MOBIL)가 쓰는 파라미터. b_safe/politeness/a_thr는 notes/help.txt 의사코드가
+    // 제시한 기본값 범위를 그대로 따른다.
+    static constexpr float MOBIL_SAFE_DECEL = 3.0f;  // b_safe
+    static constexpr float MOBIL_POLITENESS = 0.3f;  // p
+    static constexpr float MOBIL_THRESHOLD = 0.2f;   // a_thr
+    // MOBIL 재평가 주기이자, 차선변경을 실행한 뒤 다시 평가하기까지의 쿨다운(왕복 진동 방지) — 평가
+    // 여부(성공/실패 무관)만으로 m_lastLaneChangeTime을 갱신하므로 두 역할을 하나의 값으로 겸한다.
+    static constexpr float MOBIL_EVAL_INTERVAL = 2.0f;
+    float m_lastLaneChangeTime = 0.0f;
 
     // 차량 주행 상태 변수 (Vehicle States)
     float m_speed = 0.0f;

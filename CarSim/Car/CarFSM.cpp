@@ -3,6 +3,7 @@
 #include "Utill/DebugConsole.h"
 #include "Nav/ReedsShepp.h"
 #include "Nav/HybridAStar.h"
+#include "Nav/Mobil.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -230,7 +231,7 @@ void Car::BeginParkPlan()
         float splinePos = closestLane->GetSpline().GetSplinePosition(startPos);
         Vec3 closestPos = closestLane->GetSpline().GetPositionAt(splinePos);
         Vec3 closestDir = closestLane->GetSpline().GetDirectionAt(splinePos);
-        m_currentLane = closestLane;
+        SetCurrentLane(closestLane);
 
         // 이미 레인 진행 방향과 90도 이내로 정렬돼 있으면 RS 출차 매뉴버 없이 바로 주행으로 넘어간다.
         constexpr float EXIT_HEADING_ALIGN_ANGLE = ToRadians(90.0f);
@@ -531,7 +532,7 @@ void Car::UpdateFindPath()
     if (m_parkSpot != nullptr)
         return;
 
-    m_currentLane = m_RoadDataManager->GetClosestLane(position);
+    SetCurrentLane(m_RoadDataManager->GetClosestLane(position));
     EnterCurrentLane();
 }
 
@@ -543,19 +544,19 @@ void Car::EnterCurrentLane()
     if (m_path.empty())
     {
         m_destLane = nullptr;
-        m_currentLane = nullptr;
+        SetCurrentLane(nullptr);
         return;
     }
 
     MergeOntoLane(m_currentLane, position);
-    CalculateSpeedProfile();
+    RescanRoadSpeedConstraints();
 }
 
 void Car::UpdateStop()
 {
     // 정지 조건(목적지 없음/도착)은 DecideNextMode가 이미 판단했으므로 여기선 감속/정지 동작만 한다.
     m_destLane = nullptr;
-    m_currentLane = nullptr;
+    SetCurrentLane(nullptr);
 
     // Park에서 넘어온 직후면 조향 원복 세그먼트가 아직 안 끝났을 수 있다.
     if (!m_vehicleController.IsFinished())
@@ -651,7 +652,7 @@ void Car::UpdatePark()
     {
         m_parkSequenceActive = false; // 입차 시퀀스 종료 — 다음 프레임 Stop으로 전환 허용.
         m_destLane = nullptr;
-        m_currentLane = nullptr;
+        SetCurrentLane(nullptr);
         return;
     }
 }
@@ -660,9 +661,89 @@ void Car::UpdateDrive()
 {
     if (!CheckPath())
         return;
+    TryLaneChange();
     if (TryAvoidObstacle())
         return;
     m_wantSegmentTick = true;
+}
+
+bool Car::TryLaneChange()
+{
+    if (m_currentLane == nullptr || m_currentTime - m_lastLaneChangeTime < MOBIL_EVAL_INTERVAL)
+        return false;
+
+    // 다음 경로 스텝이 이미 라우팅상 차선변경이면(목적지 도달을 위해 필요한 변경) MOBIL이 따로
+    // 끼어들어 다투지 않게 건너뛴다.
+    if (m_pathIndex + 1 < m_path.size() && m_path[m_pathIndex + 1].isLaneChange)
+        return false;
+
+    // 평가했다는 사실 자체로 다음 평가까지 쿨다운(성공/실패 무관 — 왕복 진동 방지).
+    m_lastLaneChangeTime = m_currentTime;
+
+    Vec3 position = m_rigidbody.GetPosition();
+    // position은 "도로를 따라간 거리"라는 하나의 좌표계로 취급한다 — 좌/우 인접 레인은 같은 도로의
+    // 평행한 차선이라 서로 같은 좌표계를 공유한다고 근사한다 (레인마다 다시 투영하지 않음).
+    float egoPosition = m_currentLane->GetSpline().GetSplinePosition(position) * m_currentLane->GetLength();
+
+    LaneNeighbor egoLeaderN, oldFollowerN;
+    FindLaneNeighbors(m_currentLane, egoPosition, egoLeaderN, oldFollowerN);
+
+    float v0 = std::min(m_maxSpeed, m_currentLane->GetLimitSpeed());
+    CarFollowing::Params cfParams = BuildIdmParams(v0);
+    Mobil::Params mobilParams{MOBIL_SAFE_DECEL, MOBIL_POLITENESS, MOBIL_THRESHOLD};
+
+    constexpr float VIRTUAL_LEADER_GAP = 100000.0f; // 실제 리더가 없을 때(뚫린 도로) 쓰는 가상 리더 거리
+    auto virtualLeader = [&](float laneLimitSpeed)
+    { return Mobil::VehicleState{laneLimitSpeed, 0.0f, egoPosition + VIRTUAL_LEADER_GAP, 0.0f}; };
+
+    Mobil::VehicleState ego{m_speed, m_acceleration, egoPosition, GetLength()};
+    Mobil::VehicleState egoLeaderState = (egoLeaderN.car != nullptr) ? ToVehicleState(egoLeaderN) : virtualLeader(v0);
+    Mobil::VehicleState oldFollowerStorage;
+    const Mobil::VehicleState *oldFollowerState = nullptr;
+    if (oldFollowerN.car != nullptr)
+    {
+        oldFollowerStorage = ToVehicleState(oldFollowerN);
+        oldFollowerState = &oldFollowerStorage;
+    }
+
+    for (const weak_ptr<Lane> &candidateWeak : {m_currentLane->GetLeft(), m_currentLane->GetRight()})
+    {
+        shared_ptr<Lane> candidate = candidateWeak.lock();
+        if (candidate == nullptr)
+            continue;
+
+        LaneNeighbor newLeaderN, newFollowerN;
+        FindLaneNeighbors(candidate, egoPosition, newLeaderN, newFollowerN);
+
+        float candidateV0 = std::min(m_maxSpeed, candidate->GetLimitSpeed());
+        Mobil::VehicleState newLeaderState = (newLeaderN.car != nullptr) ? ToVehicleState(newLeaderN) : virtualLeader(candidateV0);
+        Mobil::VehicleState newFollowerStorage;
+        const Mobil::VehicleState *newFollowerState = nullptr;
+        if (newFollowerN.car != nullptr)
+        {
+            newFollowerStorage = ToVehicleState(newFollowerN);
+            newFollowerState = &newFollowerStorage;
+        }
+
+        bool approved = Mobil::EvaluateLaneChange(ego, oldFollowerState, egoLeaderState, newLeaderState,
+                                                   newFollowerState, mobilParams, cfParams);
+        if (!approved)
+            continue;
+
+        // 목적지 도달 가능성 확인 없이 그냥 옮기면, 이 레인이 목적지로 못 가는 레인일 때 경로를 잃는다.
+        vector<LaneStep> newPath = m_RoadDataManager->FindPath(candidate, m_destLane);
+        if (newPath.empty())
+            continue; // 이 후보로는 목적지에 못 감 -- 포기하고 다음 후보(오른쪽)로
+
+        m_path = std::move(newPath);
+        m_pathIndex = 0;
+        MergeOntoLane(candidate, position); // 내부에서 SetCurrentLane까지 처리
+        RescanRoadSpeedConstraints();
+        DebugConsole::Log("MOBIL lane change: " + GetName() + " -> lane " + std::to_string(candidate->GetId()));
+        return true;
+    }
+
+    return false;
 }
 
 bool Car::TryAvoidObstacle()
@@ -753,7 +834,7 @@ bool Car::CheckPath()
     {
         ++m_pathIndex;
         MergeOntoLane(m_path[m_pathIndex].lane, position);
-        CalculateSpeedProfile();
+        RescanRoadSpeedConstraints();
         return true;
     }
 
@@ -765,11 +846,11 @@ bool Car::CheckPath()
         if (m_pathIndex + 1 >= m_path.size())
         {
             m_destLane = nullptr;
-            m_currentLane = nullptr;
+            SetCurrentLane(nullptr);
             return false;
         }
         ++m_pathIndex;
-        m_currentLane = m_path[m_pathIndex].lane;
+        SetCurrentLane(m_path[m_pathIndex].lane);
         enteredByLaneChange = m_path[m_pathIndex].isLaneChange;
         m_currentSpline = m_currentLane->GetSpline();
         laneEndDistance = (m_currentLane->GetEndPoint() - position).Length();
@@ -779,7 +860,7 @@ bool Car::CheckPath()
     if (enteredByLaneChange)
     {
         MergeOntoLane(m_currentLane, position);
-        CalculateSpeedProfile();
+        RescanRoadSpeedConstraints();
     }
     return true;
 }
@@ -796,25 +877,8 @@ void Car::DriveControl()
     Steer(targetSteer);
 
     // speed control
-    float currentTime = m_currentTime;
-    if (currentTime - m_lastProfileTime >= LOOK_PROFILE_TIME / SPEED_PROFILE_COUNT)
-    {
-        float profileSpeed = m_speedProfile[m_profileIndex].second;
-        if (IsOffCourse() || abs(profileSpeed - m_speed) > (5.0f / 3.6f))
-        {
-            // Calculate/Move 둘 다 내부에서 m_profileIndex를 한 칸 전진시켜 두므로 호출부는 대칭이다.
-            CalculateSpeedProfile();
-        }
-        else
-        {
-            MoveSpeedProfile();
-        }
-        m_lastProfileTime = m_currentTime;
-    }
-    float maxSpeed = CalcMaxSpeed(targetSteer) * 0.8f;
-    float targetSpeed = min(m_speedProfile[m_profileIndex].second, maxSpeed);
-
-    Accelerate(targetSpeed);
+    float steerSpeedCap = CalcMaxSpeed(targetSteer) * 0.8f;
+    DriveSpeedIDM(steerSpeedCap);
 
     // Debug
     DirectX::XMFLOAT3 targetMarkerPos = ToXMFLOAT3(targetPosition);

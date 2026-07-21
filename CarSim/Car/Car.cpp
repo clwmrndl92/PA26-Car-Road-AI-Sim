@@ -1,6 +1,7 @@
 #include "Car.h"
 #include "Core/Physics/PhysicsSystem.h"
 #include "Rendering/Effects.h"
+#include "Nav/CarFollowing.h"
 #include <ModelManager.h>
 #include <algorithm>
 #include <cmath>
@@ -46,11 +47,8 @@ void Car::Init(const CarSpec &spec, RoadDataManager *roadDataManager, JPH::Vec3 
     m_parkSpot->direction = GetForwardAxis();
     m_parkSpot->nodeType = RoadNodeType::ParkSpot;
 
-    for (auto &item : m_speedProfile)
-    {
-        item.first = Vec3::sZero();
-        item.second = 0.0f;
-    }
+    m_roadConstraints.clear();
+    m_lastConstraintScanTime = 0.0f;
 
     // DEBUG
     DebugInit();
@@ -280,9 +278,20 @@ bool Car::IsOffCourse()
     return std::acos(dot) > OFF_COURSE_ANGLE;
 }
 
+void Car::SetCurrentLane(const shared_ptr<Lane> &lane)
+{
+    if (m_currentLane == lane)
+        return;
+    if (m_currentLane != nullptr)
+        m_currentLane->UnregisterCar(this);
+    m_currentLane = lane;
+    if (m_currentLane != nullptr)
+        m_currentLane->RegisterCar(this);
+}
+
 void Car::MergeOntoLane(const shared_ptr<Lane> &lane, const Vec3 &position)
 {
-    m_currentLane = lane;
+    SetCurrentLane(lane);
     m_currentSpline = lane->GetSpline();
 
     // 현재 위치에서 레인 위 전방 지점까지 짧은 연결 스플라인을 만들어 앞에 이어 붙여 부드럽게 합류한다.
@@ -292,7 +301,7 @@ void Car::MergeOntoLane(const shared_ptr<Lane> &lane, const Vec3 &position)
     float L = insideRoot > 0 ? sqrt(insideRoot) : 10.0f;
 
     // L이 현재 레인 안에서 안 나오면(레인이 짧으면) 경로상 다음 레인까지 봐서 병합 목표 지점/방향을
-    // 잡는다 (CalculateSpeedProfile/MoveSpeedProfile의 레인-워크와 같은 패턴).
+    // 잡는다 (ScanRoadSpeedConstraints의 레인-워크와 같은 패턴).
     const Spline *spline = &m_currentSpline;
     size_t pathIndex = m_pathIndex;
     Vec3 segmentStart = position;
@@ -339,217 +348,24 @@ void Car::MergeOntoLane(const shared_ptr<Lane> &lane, const Vec3 &position)
     RebuildSplineRender();
 }
 
-void Car::MoveSpeedProfile()
+std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistance) const
 {
-    size_t prevIndex = m_profileIndex;
-    m_profileIndex = (m_profileIndex + 1) % SPEED_PROFILE_COUNT;
-
-    // prevIndex 슬롯은 링버퍼 회전으로 가장 먼 미래(마지막 오프셋) 지점이 됨.
-    // CalculateSpeedProfile 전체 재계산 대신 그 지점 하나만 도로를 훑어서 새로 채우고,
-    // 그 결과를 더 가까운 기존 슬롯들에도 역전파해서 필요하면 미리 감속하게 한다.
-    constexpr float CURVE_SPEED_COEFF = 1.22f; // 최대 코너링 속도 = CURVE_SPEED_COEFF * sqrt(R)
-
-    float deltaTime = LOOK_PROFILE_TIME / SPEED_PROFILE_COUNT;
-    float targetDistance = (SPEED_PROFILE_COUNT - 1) * deltaTime * m_speed;
-
-    const Spline *spline = &m_currentSpline;
-    shared_ptr<Lane> segmentLane = m_currentLane;
-    size_t pathIndex = m_pathIndex;
-    Vec3 segmentStart = m_rigidbody.GetPosition();
-    float remainingDistance = targetDistance;
-    float maxSpeed = m_maxSpeed;
-
-    Vec3 tailPosition = segmentStart;
-    float tailSpeed = maxSpeed;
-
-    while (spline)
-    {
-        float startT = spline->GetSplinePosition(segmentStart);
-        float splineLength = spline->GetLength();
-        float segmentDistance = splineLength > 0.0f ? (1.0f - startT) * splineLength : 0.0f;
-
-        if (splineLength > 0.0f && remainingDistance <= segmentDistance)
-        {
-            float t = std::clamp(startT + remainingDistance / splineLength, 0.0f, 1.0f);
-            const std::vector<Vec3> &points = spline->GetSplinePoints();
-            size_t index = static_cast<size_t>(t * (points.size() - 1));
-
-            // tail 지점 근처만 보면 이전 tail ~ 이번 tail 사이의 코너를 건너뛸 수 있으므로,
-            // 실제로 이동한 구간(startT~t) 전체에서 최소 반경을 구한다.
-            float radius = spline->GetMinRadiusAhead(startT, t);
-            float curveSpeed = radius < std::numeric_limits<float>::max() ? CURVE_SPEED_COEFF * std::sqrt(radius) : m_maxSpeed;
-
-            tailPosition = points[index];
-            tailSpeed = std::min({maxSpeed, curveSpeed, m_maxSpeed});
-            break;
-        }
-
-        remainingDistance -= segmentDistance;
-        shared_ptr<Lane> nextLane = (pathIndex + 1 < m_path.size()) ? m_path[pathIndex + 1].lane : nullptr;
-        if (!nextLane)
-        {
-            tailPosition = segmentLane->GetEndPoint();
-            tailSpeed = (segmentLane == m_destLane) ? 0.0f : maxSpeed;
-            break;
-        }
-
-        maxSpeed = std::min(maxSpeed, nextLane->GetLimitSpeed());
-        segmentLane = nextLane;
-        segmentStart = nextLane->GetStartPoint();
-        spline = &nextLane->GetSpline();
-        ++pathIndex;
-    }
-
-    m_speedProfile[prevIndex] = {tailPosition, tailSpeed};
-
-    // 뒤(먼 미래)에서부터 감속 역전파: 더 가까운 기존 슬롯들도 필요하면 낮춘다.
-    Vec3 nextPosition = tailPosition;
-    float nextSpeed = tailSpeed;
-    for (size_t offset = SPEED_PROFILE_COUNT - 1; offset-- > 0;)
-    {
-        size_t index = (m_profileIndex + offset) % SPEED_PROFILE_COUNT;
-        float distance = (nextPosition - m_speedProfile[index].first).Length();
-        float entrySpeed = SolveBrakeEntrySpeed(nextSpeed, distance);
-        m_speedProfile[index].second = std::min(m_speedProfile[index].second, entrySpeed);
-
-        nextPosition = m_speedProfile[index].first;
-        nextSpeed = m_speedProfile[index].second;
-    }
-
-    float prevSpeed = m_speedProfile[m_profileIndex].second;
-    for (size_t offset = 1; offset < SPEED_PROFILE_COUNT; ++offset)
-    {
-        size_t index = (m_profileIndex + offset) % SPEED_PROFILE_COUNT;
-        float maxReachable = prevSpeed + m_maxAccel * deltaTime;
-        float minReachable = std::max(0.0f, prevSpeed - m_maxBrake * deltaTime);
-        float speed = std::clamp(m_speedProfile[index].second, minReachable, maxReachable);
-
-        m_speedProfile[index].second = speed;
-        prevSpeed = speed;
-    }
-}
-
-float Car::SolveBrakeEntrySpeed(float exitSpeed, float distance) const
-{
-    // 브레이킹 램프(SmoothStep(τ/BRAKE_RAMP_DURATION))를 3단계 계단 함수로 근사:
-    // t(램프 진행률) 0~0.3=0.3, 0.3~0.8=0.5, 0.8~1.0(이후 계속)=1.0 배의 m_maxBrake.
-    // 각 단계는 반드시 순서대로(그리고 앞 단계는 끝까지 다 채운 뒤에만 다음 단계로) 진행되므로,
-    // 도달점(exitSpeed)에서 거꾸로 목표 거리(distance)를 단계별로 소모해가며 진입속도를 구한다.
-    constexpr float BRAKE_PHASE1_FACTOR = 0.3f;
-    constexpr float BRAKE_PHASE2_FACTOR = 0.5f;
-    constexpr float BRAKE_PHASE3_FACTOR = 0.9f;
-    const float brakePhase1Time = 0.3f * BRAKE_RAMP_DURATION;
-    const float brakePhase2Time = 0.5f * BRAKE_RAMP_DURATION; // t: 0.3~0.8
-    const float a1 = BRAKE_PHASE1_FACTOR * m_maxBrake;
-    const float a2 = BRAKE_PHASE2_FACTOR * m_maxBrake;
-    const float a3 = BRAKE_PHASE3_FACTOR * m_maxBrake;
-
-    // Case A: 감속이 Phase1(0~0.3) 안에서 끝남
-    float entryA = std::sqrt(exitSpeed * exitSpeed + 2.0f * a1 * distance);
-    if (entryA - exitSpeed <= a1 * brakePhase1Time)
-        return entryA;
-
-    // Case B: Phase1을 끝까지 다 쓰고 Phase2(0.3~0.8) 안에서 끝남.
-    // v1 = entry - a1*T1, D = T1*entry - 0.5*a1*T1^2 + (v1^2 - exit^2)/(2*a2) 를 entry에 대해 정리.
-    {
-        float T1 = brakePhase1Time;
-        float B = 2.0f * T1 * (a2 - a1);
-        float C = T1 * T1 * a1 * (a1 - a2) - exitSpeed * exitSpeed - 2.0f * a2 * distance;
-        float disc = B * B - 4.0f * C;
-        if (disc >= 0.0f)
-        {
-            float entryB = (-B + std::sqrt(disc)) * 0.5f;
-            float v1 = entryB - T1 * a1;
-            if (v1 >= exitSpeed && (v1 - exitSpeed) <= a2 * brakePhase2Time)
-                return entryB;
-        }
-    }
-
-    // Case C: Phase1, Phase2을 끝까지 다 쓰고 Phase3(0.8~, 무제한)에서 끝남.
-    {
-        float T1 = brakePhase1Time;
-        float T2 = brakePhase2Time;
-        float K = a1 * T1 + a2 * T2;
-        float Q = 0.5f * a1 * T1 * T1 + a1 * T1 * T2 + 0.5f * a2 * T2 * T2;
-        float B = 2.0f * a3 * (T1 + T2) - 2.0f * K;
-        float C = K * K - exitSpeed * exitSpeed - 2.0f * a3 * Q - 2.0f * a3 * distance;
-        float disc = B * B - 4.0f * C;
-        disc = std::max(disc, 0.0f); // 이론상 여기까지 오면 항상 유효한 해가 존재
-        return (-B + std::sqrt(disc)) * 0.5f;
-    }
-}
-
-void Car::CalculateSpeedProfile()
-{
-    m_profileIndex = 0;
-    Vec3 calPosition = m_rigidbody.GetPosition();
-    float calSpeed = m_speed;
-    m_speedProfile[m_profileIndex].first = calPosition;
-    m_speedProfile[m_profileIndex].second = calSpeed;
-
-    float deltaTime = LOOK_PROFILE_TIME / SPEED_PROFILE_COUNT;
-
-    // 가속 램프 도중이면 이미 경과한 시간(rampStart)부터 이어서 S자(SmoothStep) 가속 곡선을 그대로 적분한다.
-    // (지금 감속/정지 중이면 미래에 새로 램프가 시작된다고 보수적으로 가정)
-    float rampStart = (m_accelMode == AccelMode::Accelerating) ? std::min(m_accelRampTime, ACCEL_RAMP_DURATION) : 0.0f;
-    float rampStartProgress = rampStart / ACCEL_RAMP_DURATION;
-
-    // SmoothStep(τ)=3τ²-2τ³ 의 부정적분(F=∫SmoothStep, G=∫F). 속도/거리를 정확히 적분하는 데 사용.
-    auto GetAccelSpeedRatio = [](float nomalizedTime)
-    { return pow(nomalizedTime, 3) - 0.5f * pow(nomalizedTime, 4); };
-    auto GetAccelDistanceRatio = [](float nomalizedTime)
-    { return 0.25f * pow(nomalizedTime, 4) - 0.1f * pow(nomalizedTime, 5); };
-
-    float startAccelSpeedRatio = GetAccelSpeedRatio(rampStartProgress);
-    float startAccelDistanceRatio = GetAccelDistanceRatio(rampStartProgress);
-
-    auto accelDistanceAtTime = [&](float t)
-    {
-        // 램프 구간
-        float rampTime = std::clamp(t, 0.0f, ACCEL_RAMP_DURATION - rampStart);
-        float rampEndProgress = rampStartProgress + rampTime / ACCEL_RAMP_DURATION;
-
-        float distance = (calSpeed - m_maxAccel * ACCEL_RAMP_DURATION * startAccelSpeedRatio) * rampTime +
-                         m_maxAccel * ACCEL_RAMP_DURATION * ACCEL_RAMP_DURATION * (GetAccelDistanceRatio(rampEndProgress) - startAccelDistanceRatio);
-        float rampEndSpeed = calSpeed + m_maxAccel * ACCEL_RAMP_DURATION * (GetAccelSpeedRatio(rampEndProgress) - startAccelSpeedRatio);
-
-        // 풀악셀로 달리기
-        float remainTime = t - rampTime;
-        float fullAccelSpeedTime = std::max(0.0f, (m_maxSpeed - rampEndSpeed) / m_maxAccel);
-        ;
-        float fullAccelTime = std::min(remainTime, fullAccelSpeedTime);
-        float maxSpeed = rampEndSpeed + m_maxAccel * fullAccelTime;
-        distance += (rampEndSpeed + maxSpeed) / 2.0f * fullAccelTime;
-
-        // m_maxSpeed로 달리기
-        float maxSpeedTime = std::max(0.0f, remainTime - fullAccelSpeedTime);
-        distance += m_maxSpeed * maxSpeedTime;
-
-        return distance;
-    };
-
-    float lookDistance = accelDistanceAtTime(LOOK_PROFILE_TIME);
-
     constexpr float ROAD_SAMPLE_SPACING = 5.0f; // 도로 스캔 샘플 간격 (m)
     constexpr float LOCAL_WINDOW = 0.01f;       // 로컬 곡률 추정용 t-window
 
-    struct RoadSample
-    {
-        float distance;
-        float maxSpeed; // 그 지점 자체의 순간 최대 속도 (커브 or 노드 제한속도)
-        Vec3 position;
-    };
+    Vec3 calPosition = m_rigidbody.GetPosition();
 
     // m_currentSpline -> (필요시) path상의 다음 노드들의 lane spline 순으로 lookDistance까지 훑으며
-    // 커브 지점(로컬 곡률 기반 최대속도)과 노드 지점(제한속도)의 샘플을 모은다.
-    std::vector<RoadSample> samples;
+    // 커브 지점(로컬 곡률 기반 최대속도)과 노드 지점(제한속도)의 샘플을 모은다. 각 샘플이 곧 DriveSpeedIDM이
+    // 쓰는 "가상 리더"의 (위치, 거리, 요구 속도) 후보가 된다.
+    std::vector<RoadSpeedSample> samples;
     samples.reserve(static_cast<size_t>(lookDistance / ROAD_SAMPLE_SPACING) + 4);
     {
         float currentNodeT = m_currentSpline.GetSplinePosition(calPosition);
-        Assert(currentNodeT >= 0.0f); // CalculateSpeedProfile 호출 전엔 항상 m_currentSpline이 세팅되어 있어야 함
+        Assert(currentNodeT >= 0.0f); // ScanRoadSpeedConstraints 호출 전엔 항상 m_currentSpline이 세팅되어 있어야 함
         float currentNodeDistance = m_currentSpline.GetLength() * (1.0f - currentNodeT);
         float currentNodeSpeed = (m_currentLane == m_destLane) ? 0.0f : std::min(m_currentLane->GetLimitSpeed(), m_maxSpeed);
-        samples.push_back({currentNodeDistance, currentNodeSpeed, m_currentLane->GetEndPoint()});
+        samples.push_back({m_currentLane->GetEndPoint(), currentNodeDistance, currentNodeSpeed});
     }
     {
         const Spline *spline = &m_currentSpline;
@@ -595,7 +411,7 @@ void Car::CalculateSpeedProfile()
                         float radius = spline->GetMinRadiusAhead(std::max(0.0f, t - LOCAL_WINDOW), std::min(1.0f, t + LOCAL_WINDOW));
                         maxSpeed = radius < std::numeric_limits<float>::max() ? CURVE_SPEED_COEFF * std::sqrt(radius) : m_maxSpeed;
                     }
-                    samples.push_back({traveledDistance + localDistance, maxSpeed, points[index]});
+                    samples.push_back({points[index], traveledDistance + localDistance, maxSpeed});
                 }
             }
 
@@ -609,12 +425,12 @@ void Car::CalculateSpeedProfile()
             {
                 // 경로가 여기서 끝난다는 것은 이 레인이 destLane이라는 뜻: 진짜 정지 지점인 레인 끝에 0속도를 박는다.
                 if (segmentLane == m_destLane)
-                    samples.push_back({traveledDistance, 0.0f, segmentLane->GetEndPoint()});
+                    samples.push_back({segmentLane->GetEndPoint(), traveledDistance, 0.0f});
                 break;
             }
 
             float nextNodeSpeed = std::min(nextLane->GetLimitSpeed(), m_maxSpeed);
-            samples.push_back({traveledDistance, nextNodeSpeed, nextLane->GetStartPoint()});
+            samples.push_back({nextLane->GetStartPoint(), traveledDistance, nextNodeSpeed});
 
             segmentLane = nextLane;
             segmentStart = nextLane->GetStartPoint();
@@ -622,77 +438,108 @@ void Car::CalculateSpeedProfile()
             ++pathIndex;
         }
     }
-    std::sort(samples.begin(), samples.end(), [](const RoadSample &a, const RoadSample &b)
+    std::sort(samples.begin(), samples.end(), [](const RoadSpeedSample &a, const RoadSpeedSample &b)
               { return a.distance < b.distance; });
+    return samples;
+}
 
-    // 뒤에서부터 감속 계획 전파
-    std::vector<float> speedCap(samples.size());
-    if (!samples.empty())
+void Car::RescanRoadSpeedConstraints()
+{
+    // 정지거리(현재 속도로 편안한 감속을 했을 때 필요한 거리)에 여유를 둔 만큼만 앞을 본다 -- 너무 멀리
+    // 보면 스플라인 곡률 스캔 비용만 늘고, 그 범위 밖 제약은 다음 재스캔 전에 어차피 다시 잡힌다.
+    constexpr float MIN_LOOK_DISTANCE = 100.0f;
+    constexpr float LOOK_DISTANCE_MARGIN = 1.5f;
+    float lookDistance = std::max(MIN_LOOK_DISTANCE, (m_speed * m_speed) / (2.0f * m_maxBrake) * LOOK_DISTANCE_MARGIN);
+
+    m_roadConstraints = ScanRoadSpeedConstraints(lookDistance);
+    m_lastConstraintScanTime = m_currentTime;
+}
+
+CarFollowing::Params Car::BuildIdmParams(float v0) const
+{
+    CarFollowing::Params idmParams;
+    idmParams.v0 = v0;
+    idmParams.T = IDM_TIME_HEADWAY;
+    idmParams.s0 = IDM_STANDSTILL_DISTANCE;
+    idmParams.a = m_maxAccel;
+    idmParams.b = m_maxBrake;
+    idmParams.delta = IDM_ACCEL_EXPONENT;
+    idmParams.coolness = IDM_COOLNESS;
+    return idmParams;
+}
+
+void Car::FindLaneNeighbors(const shared_ptr<Lane> &lane, float myPosition,
+                            LaneNeighbor &outLeader, LaneNeighbor &outFollower) const
+{
+    outLeader = LaneNeighbor{};
+    outFollower = LaneNeighbor{};
+
+    const Spline &spline = lane->GetSpline();
+    float length = lane->GetLength();
+    for (Car *other : lane->GetCars())
     {
-        speedCap.back() = samples.back().maxSpeed;
-        for (size_t i = samples.size() - 1; i-- > 0;)
+        if (other == this)
+            continue;
+
+        float otherPosition = spline.GetSplinePosition(other->GetPosition()) * length;
+        if (otherPosition >= myPosition)
         {
-            float distance = samples[i + 1].distance - samples[i].distance;
-            float entrySpeed = SolveBrakeEntrySpeed(speedCap[i + 1], distance);
-            speedCap[i] = std::min(samples[i].maxSpeed, entrySpeed);
+            if (outLeader.car == nullptr || otherPosition < outLeader.position)
+                outLeader = {other, otherPosition};
+        }
+        else
+        {
+            if (outFollower.car == nullptr || otherPosition > outFollower.position)
+                outFollower = {other, otherPosition};
         }
     }
+}
 
-    // distance 지점의 감속계획 속도/위치를 samples에서 보간해서 조회
-    auto sampleAt = [&](float distance) -> std::pair<Vec3, float>
+Mobil::VehicleState Car::ToVehicleState(const LaneNeighbor &n) const
+{
+    return Mobil::VehicleState{n.car->GetSpeed(), n.car->GetAcceleration(), n.position, n.car->GetLength()};
+}
+
+void Car::DriveSpeedIDM(float steerSpeedCap)
+{
+    // 주기 재스캔: 곡률 스캔은 비교적 무거우니 매 틱이 아니라 LOOK_PROFILE_TIME/SPEED_PROFILE_COUNT마다,
+    // 또는 경로를 벗어난 것으로 감지되면(다음 재스캔까지 기다리지 않고) 갱신한다.
+    constexpr float RESCAN_INTERVAL = LOOK_PROFILE_TIME / SPEED_PROFILE_COUNT;
+    if (IsOffCourse() || m_currentTime - m_lastConstraintScanTime >= RESCAN_INTERVAL)
+        RescanRoadSpeedConstraints();
+
+    float v0 = std::min({m_maxSpeed, m_currentLane->GetLimitSpeed(), steerSpeedCap});
+    CarFollowing::Params idmParams = BuildIdmParams(v0);
+
+    // 개방도로(앞을 막는 지점이 전혀 없는) 기준선 -- gap을 아주 크게 줘서 CarFollowing이 자유흐름
+    // 가속도(a_free)로 수렴하게 한다.
+    constexpr float OPEN_ROAD_GAP = 100000.0f;
+    Vec3 position = m_rigidbody.GetPosition();
+    float accel = CarFollowing::CalculateAcceleration(m_speed, m_acceleration, v0, 0.0f, OPEN_ROAD_GAP, idmParams);
+
+    // 캐시된 도로 제약(커브/레인 제한속도/정지점)을 각각 정지/저속 가상 리더로 보고, 그중 가장
+    // 보수적인(작은) 가속도를 채택한다 -- 앞에 여러 제약이 겹쳐 있어도 가장 급한 것에 맞춰 미리 감속한다.
+    for (const RoadSpeedSample &sample : m_roadConstraints)
     {
-        if (samples.empty())
-            return {calPosition, m_maxSpeed};
-        if (distance <= samples.front().distance)
-            return {samples.front().position, speedCap.front()};
-        if (distance >= samples.back().distance)
-            return {samples.back().position, speedCap.back()};
-
-        size_t hi = 1;
-        while (hi < samples.size() && samples[hi].distance < distance)
-            ++hi;
-        size_t lo = hi - 1;
-        float span = samples[hi].distance - samples[lo].distance;
-        float ratio = span > 1e-4f ? (distance - samples[lo].distance) / span : 0.0f;
-        Vec3 position = samples[lo].position + (samples[hi].position - samples[lo].position) * ratio;
-        float speed = speedCap[lo] + (speedCap[hi] - speedCap[lo]) * ratio;
-        return {position, speed};
-    };
-
-    // 이전 슬롯(deltaTime 전) 대비 가속/감속 한계를 S자 램프로 반영해서 스무딩한다.
-    // 방향이 바뀌면 램프를 처음부터 다시 시작하고, 램프 구간 안에서는
-    // (구간 시작 시점의 낮은 가속도) x deltaTime 만큼만 허용해 과대평가를 피한다.
-    AccelMode phase = AccelMode::None;
-    float rampElapsed = 0.0f;
-    float prevSpeed = calSpeed;
-    for (size_t i = 1; i < SPEED_PROFILE_COUNT; ++i)
-    {
-        size_t index = (i + m_profileIndex) % SPEED_PROFILE_COUNT;
-        float distance = accelDistanceAtTime(i * deltaTime);
-        auto [position, speed] = sampleAt(distance);
-
-        speed = std::min(speed, m_maxSpeed);
-
-        AccelMode direction = speed > prevSpeed   ? AccelMode::Accelerating
-                              : speed < prevSpeed ? AccelMode::Braking
-                                                  : AccelMode::None;
-        if (direction != phase)
-        {
-            phase = direction;
-            rampElapsed = 0.0f;
-        }
-
-        float maxReachable = prevSpeed + SmoothStep(rampElapsed / ACCEL_RAMP_DURATION) * m_maxAccel * deltaTime;
-        float minReachable = std::max(0.0f, prevSpeed - SmoothStep(rampElapsed / BRAKE_RAMP_DURATION) * m_maxBrake * deltaTime);
-        rampElapsed += deltaTime;
-
-        speed = std::clamp(speed, minReachable, maxReachable);
-
-        m_speedProfile[index].first = position;
-        m_speedProfile[index].second = speed;
-        prevSpeed = speed;
+        float gap = (sample.position - position).Length();
+        float constrainedAccel = CarFollowing::CalculateAcceleration(m_speed, m_acceleration, sample.speed, 0.0f, gap, idmParams);
+        accel = std::min(accel, constrainedAccel);
     }
-    m_profileIndex = (m_profileIndex + 1) % SPEED_PROFILE_COUNT;
+
+    // 같은 레인의 실제 앞차: MOBIL이 이 차를 근거로 차선변경을 판단하는 것과 일관되게, 실제로도
+    // 이 차를 향해 감속해야 뚫고 지나가지 않는다.
+    float egoLanePos = m_currentLane->GetSpline().GetSplinePosition(position) * m_currentLane->GetLength();
+    LaneNeighbor leader, follower;
+    FindLaneNeighbors(m_currentLane, egoLanePos, leader, follower);
+    if (leader.car != nullptr)
+    {
+        float gap = leader.position - egoLanePos - leader.car->GetLength();
+        float leaderAccel = CarFollowing::CalculateAcceleration(m_speed, m_acceleration, leader.car->GetSpeed(),
+                                                                 leader.car->GetAcceleration(), gap, idmParams);
+        accel = std::min(accel, leaderAccel);
+    }
+
+    m_acceleration = accel;
 }
 
 void Car::UpdateCar()
@@ -836,18 +683,16 @@ void Car::UpdateSpeedProfileWindow()
     if (!m_drawCollider || !m_isFocused)
         return;
 
-    constexpr float PROFILE_STEP_TIME = LOOK_PROFILE_TIME / SPEED_PROFILE_COUNT; // 0.5초
-    constexpr float MARKER_HEIGHT = 0.3f;                                        // 도로/스플라인 디버그 선보다 위로 띄움
+    constexpr size_t MAX_SHOWN = 10; // 가까운 것부터 몇 개만 보여줌 (m_roadConstraints는 정렬돼있음)
 
     if (ImGui::Begin(("Speed Profile: " + GetName()).c_str()))
     {
-        for (int sec = 1; sec <= 4; ++sec)
+        float v0 = (m_currentLane != nullptr) ? std::min(m_maxSpeed, m_currentLane->GetLimitSpeed()) : m_maxSpeed;
+        ImGui::Text("IDM v0: %.1f km/h", v0 * 3.6f);
+        for (size_t i = 0; i < m_roadConstraints.size() && i < MAX_SHOWN; ++i)
         {
-            size_t offset = static_cast<size_t>(sec / PROFILE_STEP_TIME + 0.5f);
-            size_t index = (m_profileIndex + offset) % SPEED_PROFILE_COUNT;
-            const auto &[position, speed] = m_speedProfile[index];
-
-            ImGui::Text("%d초 뒤: %.1f km/h", sec, speed * 3.6f);
+            const RoadSpeedSample &sample = m_roadConstraints[i];
+            ImGui::Text("%.0fm: %.1f km/h", sample.distance, sample.speed * 3.6f);
         }
     }
     ImGui::End();
