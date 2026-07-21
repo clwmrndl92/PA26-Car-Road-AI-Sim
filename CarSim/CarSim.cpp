@@ -68,17 +68,17 @@ bool CarSim::InitResource()
         FocusOnObject(car);
     }
 
-    // Car 2
-    {
-        auto car = std::make_shared<Car>();
-        car->Init(GetCarSpec(CarType::Car1), &m_RoadDataManager, JPH::Vec3(-25.0f, 0.1f, 8.0f));
-        car->SetDrawCollider(true);
-        car->SetDestination(m_RoadDataManager.GetNode(1));
-        car->SetRotation(Vec3(-1, 0, 0));
+    // // Car 2
+    // {
+    //     auto car = std::make_shared<Car>();
+    //     car->Init(GetCarSpec(CarType::Car1), &m_RoadDataManager, JPH::Vec3(-25.0f, 0.1f, 8.0f));
+    //     car->SetDrawCollider(true);
+    //     car->SetDestination(m_RoadDataManager.GetNode(1));
+    //     car->SetRotation(Vec3(-1, 0, 0));
 
-        m_GameObjects.push_back(car);
-        m_CarObjects.push_back(car);
-    }
+    //     m_GameObjects.push_back(car);
+    //     m_CarObjects.push_back(car);
+    // }
 
     return true;
 }
@@ -334,7 +334,7 @@ void CarSim::InitRoadRenderer()
     int obstacleIndex = 0;
     for (const HybridAStar::Obstacle &obstacle : m_RoadDataManager.GetObstacles())
     {
-        float headingRad = ToRadians(obstacle.headingDeg);
+        float headingRad = obstacle.headingRad;
         Vec3 forward(cosf(headingRad), 0.0f, sinf(headingRad));
         Vec3 right(-forward.GetZ(), 0.0f, forward.GetX());
 

@@ -21,7 +21,7 @@ namespace HybridAStar
         struct Pose
         {
             Vec3 position;
-            float headingDeg;
+            float headingRad;
         };
 
         // 탐색 트리 노드. parent==-1이면 시작 노드. steering/gear는 parent -> 이 노드로 온 스텝.
@@ -34,12 +34,12 @@ namespace HybridAStar
             ReedsShepp::Gear gear;
         };
 
-        float NormalizeDeg(float deg)
+        float NormalizeRad(float rad)
         {
-            float d = std::fmod(deg, 360.0f);
-            if (d < 0.0f)
-                d += 360.0f;
-            return d;
+            float r = std::fmod(rad, static_cast<float>(2.0 * PI));
+            if (r < 0.0f)
+                r += static_cast<float>(2.0 * PI);
+            return r;
         }
 
         // closed-set 키: (x격자, z격자, heading격자) 3칸.
@@ -59,8 +59,8 @@ namespace HybridAStar
         {
             int ix = static_cast<int>(std::floor(pose.position.GetX() / params.gridResolution));
             int iz = static_cast<int>(std::floor(pose.position.GetZ() / params.gridResolution));
-            int headingBins = std::max(1, static_cast<int>(360.0f / params.headingResolution));
-            int ith = static_cast<int>(std::floor(NormalizeDeg(pose.headingDeg) / params.headingResolution)) % headingBins;
+            int headingBins = std::max(1, static_cast<int>((2.0 * PI) / params.headingResolutionRad));
+            int ith = static_cast<int>(std::floor(NormalizeRad(pose.headingRad) / params.headingResolutionRad)) % headingBins;
             return {ix, iz, ith};
         }
 
@@ -68,7 +68,7 @@ namespace HybridAStar
         Pose StepPose(const Pose &pose, ReedsShepp::Steering steering, ReedsShepp::Gear gear,
                       float distance, float turningRadius)
         {
-            double theta = static_cast<double>(pose.headingDeg) * PI / 180.0;
+            double theta = static_cast<double>(pose.headingRad);
             double g = (gear == ReedsShepp::Gear::Backward) ? -1.0 : 1.0;
             double kappa = 0.0;
             if (steering == ReedsShepp::Steering::Left)
@@ -97,19 +97,17 @@ namespace HybridAStar
 
             Pose result;
             result.position = Vec3(static_cast<float>(x), pose.position.GetY(), static_cast<float>(z));
-            result.headingDeg = static_cast<float>(theta * 180.0 / PI);
+            result.headingRad = static_cast<float>(theta);
             return result;
         }
 
         // 2D SAT: 두 회전된 사각형(중심+heading+반길이/반폭)이 겹치는지.
-        bool ObbOverlap(const Vec3 &centerA, float halfLengthA, float halfWidthA, float headingDegA,
-                        const Vec3 &centerB, float halfLengthB, float halfWidthB, float headingDegB)
+        bool ObbOverlap(const Vec3 &centerA, float halfLengthA, float halfWidthA, float headingRadA,
+                        const Vec3 &centerB, float halfLengthB, float halfWidthB, float headingRadB)
         {
-            float radA = ToRadians(headingDegA);
-            float radB = ToRadians(headingDegB);
-            Vec3 fwdA(std::cos(radA), 0.0f, std::sin(radA));
+            Vec3 fwdA(std::cos(headingRadA), 0.0f, std::sin(headingRadA));
             Vec3 rightA(-fwdA.GetZ(), 0.0f, fwdA.GetX());
-            Vec3 fwdB(std::cos(radB), 0.0f, std::sin(radB));
+            Vec3 fwdB(std::cos(headingRadB), 0.0f, std::sin(headingRadB));
             Vec3 rightB(-fwdB.GetZ(), 0.0f, fwdB.GetX());
 
             Vec3 d = centerB - centerA;
@@ -127,14 +125,13 @@ namespace HybridAStar
 
         bool IsPoseCollision(const Pose &pose, const std::vector<Obstacle> &obstacles, const VehicleShape &shape)
         {
-            float rad = ToRadians(pose.headingDeg);
-            Vec3 forward(std::cos(rad), 0.0f, std::sin(rad));
+            Vec3 forward(std::cos(pose.headingRad), 0.0f, std::sin(pose.headingRad));
             Vec3 bodyCenter = pose.position + forward * shape.pivotToCenter;
 
             for (const Obstacle &obstacle : obstacles)
             {
-                if (ObbOverlap(bodyCenter, shape.halfLength, shape.halfWidth, pose.headingDeg,
-                               obstacle.center, obstacle.halfLength, obstacle.halfWidth, obstacle.headingDeg))
+                if (ObbOverlap(bodyCenter, shape.halfLength, shape.halfWidth, pose.headingRad,
+                               obstacle.center, obstacle.halfLength, obstacle.halfWidth, obstacle.headingRad))
                     return true;
             }
             return false;
@@ -162,9 +159,9 @@ namespace HybridAStar
         }
 
         // 장애물을 무시한 Reeds-Shepp 최단거리 휴리스틱 (non-holonomic-without-obstacles).
-        float Heuristic(const Pose &pose, const Vec3 &goal, float goalHeadingDeg, float turningRadius)
+        float Heuristic(const Pose &pose, const Vec3 &goal, float goalHeadingRad, float turningRadius)
         {
-            ReedsShepp::Path path = ReedsShepp::GetOptimalPath(pose.position, pose.headingDeg, goal, goalHeadingDeg, turningRadius);
+            ReedsShepp::Path path = ReedsShepp::GetOptimalPath(pose.position, pose.headingRad, goal, goalHeadingRad, turningRadius);
             if (path.empty())
                 return (goal - pose.position).Length();
             return ReedsShepp::GetPathLength(path);
@@ -195,8 +192,8 @@ namespace HybridAStar
         }
     }
 
-    ReedsShepp::Path FindPath(const Vec3 &start, float startHeadingDeg,
-                              const Vec3 &goal, float goalHeadingDeg,
+    ReedsShepp::Path FindPath(const Vec3 &start, float startHeadingRad,
+                              const Vec3 &goal, float goalHeadingRad,
                               const std::vector<Obstacle> &obstacles,
                               const VehicleShape &shape,
                               bool &foundPath,
@@ -213,26 +210,26 @@ namespace HybridAStar
             DebugConsole::Log("HybridAStar::FindPath " + std::string(label) + " in " + std::to_string(elapsedMs) + " ms");
         };
 
-        float turningRadius = shape.wheelbase / std::tan(ToRadians(shape.maxSteerAngleDeg));
+        float turningRadius = shape.wheelbase / std::tan(shape.maxSteerAngleRad);
         if (turningRadius <= 0.0f)
         {
-            DebugConsole::Log("HybridAStar::FindPath failed: invalid turning radius (check maxSteerAngleDeg)");
+            DebugConsole::Log("HybridAStar::FindPath failed: invalid turning radius (check maxSteerAngleRad)");
             return {};
         }
 
         // 시작/목표 pose 자체가 이미 장애물과 겹치면 탐색해봐야 못 찾는다 — 원인 파악용으로 미리 찍어둔다.
-        if (IsPoseCollision(Pose{start, startHeadingDeg}, obstacles, shape))
+        if (IsPoseCollision(Pose{start, startHeadingRad}, obstacles, shape))
             DebugConsole::Log("HybridAStar::FindPath: start pose overlaps an obstacle");
-        if (IsPoseCollision(Pose{goal, goalHeadingDeg}, obstacles, shape))
+        if (IsPoseCollision(Pose{goal, goalHeadingRad}, obstacles, shape))
             DebugConsole::Log("HybridAStar::FindPath: goal pose overlaps an obstacle - path can never succeed");
 
         // 1. Open Set(우선순위 큐)에 시작 노드 삽입
         std::deque<PlanNode> nodes;
-        nodes.push_back(PlanNode{Pose{start, startHeadingDeg}, 0.0f, -1, ReedsShepp::Steering::Straight, ReedsShepp::Gear::Forward});
+        nodes.push_back(PlanNode{Pose{start, startHeadingRad}, 0.0f, -1, ReedsShepp::Steering::Straight, ReedsShepp::Gear::Forward});
 
         using QueueItem = std::pair<float, int>; // (f_cost, node index)
         std::priority_queue<QueueItem, std::vector<QueueItem>, std::greater<QueueItem>> openSet;
-        openSet.push({Heuristic(nodes[0].pose, goal, goalHeadingDeg, turningRadius), 0});
+        openSet.push({Heuristic(nodes[0].pose, goal, goalHeadingRad, turningRadius), 0});
 
         // 3D 방문 여부를 체크할 테이블
         std::unordered_set<StateKey, StateKeyHash> closedSet;
@@ -258,7 +255,7 @@ namespace HybridAStar
             const PlanNode &current = nodes[currentIdx];
 
             // 3. [치트키] 리드-쉽 숏컷 시도 (Shot-to-Goal)
-            ReedsShepp::Path rsPath = ReedsShepp::GetOptimalPath(current.pose.position, current.pose.headingDeg, goal, goalHeadingDeg, turningRadius);
+            ReedsShepp::Path rsPath = ReedsShepp::GetOptimalPath(current.pose.position, current.pose.headingRad, goal, goalHeadingRad, turningRadius);
             if (IsPathCollisionFree(rsPath, current.pose, turningRadius, obstacles, shape))
             {
                 ReedsShepp::Path result = ReconstructPath(nodes, currentIdx, params.stepSize);
@@ -303,7 +300,7 @@ namespace HybridAStar
                     nodes.push_back(PlanNode{nextPose, gCost, currentIdx, steering, gear});
                     int nextIdx = static_cast<int>(nodes.size()) - 1;
 
-                    float fCost = gCost + Heuristic(nextPose, goal, goalHeadingDeg, turningRadius);
+                    float fCost = gCost + Heuristic(nextPose, goal, goalHeadingRad, turningRadius);
                     openSet.push({fCost, nextIdx});
                 }
             }
@@ -317,9 +314,9 @@ namespace HybridAStar
         return {}; // Failure: 경로 없음
     }
 
-    bool IsColliding(const Vec3 &position, float headingDeg,
+    bool IsColliding(const Vec3 &position, float headingRad,
                      const std::vector<Obstacle> &obstacles, const VehicleShape &shape)
     {
-        return IsPoseCollision(Pose{position, headingDeg}, obstacles, shape);
+        return IsPoseCollision(Pose{position, headingRad}, obstacles, shape);
     }
 }

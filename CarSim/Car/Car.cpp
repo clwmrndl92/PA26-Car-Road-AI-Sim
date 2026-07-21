@@ -67,17 +67,14 @@ void Car::UpdateAI(float dt)
     m_wantSegmentTick = false;
     switch (m_mode)
     {
-    case DriveMode::Stop:
+    case State::Stop:
         UpdateStop();
         break;
-    case DriveMode::Park:
+    case State::Park:
         UpdatePark();
         break;
-    case DriveMode::Drive:
+    case State::Drive:
         UpdateDrive();
-        break;
-    case DriveMode::Avoid:
-        UpdateAvoid();
         break;
     }
 }
@@ -97,7 +94,6 @@ void Car::Update(float dt)
 void Car::UpdateUI(float dt)
 {
     UpdateDebugWindow();
-    UpdateSpeedProfileWindow();
 }
 
 void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
@@ -240,12 +236,6 @@ void Car::Steer(float radian, float steerRamp)
         m_steerAngle = std::max(m_steerAngle - maxDelta, radian);
     else if (m_steerAngle < radian)
         m_steerAngle = std::min(m_steerAngle + maxDelta, radian);
-}
-
-void Car::SteerEase(float radian, float rate)
-{
-    float decay = std::exp(-rate * m_deltaTime);
-    m_steerAngle = radian + (m_steerAngle - radian) * decay;
 }
 
 void Car::ChangeGear()
@@ -535,7 +525,7 @@ void Car::DriveSpeedIDM(float steerSpeedCap)
     {
         float gap = leader.position - egoLanePos - leader.car->GetLength();
         float leaderAccel = CarFollowing::CalculateAcceleration(m_speed, m_acceleration, leader.car->GetSpeed(),
-                                                                 leader.car->GetAcceleration(), gap, idmParams);
+                                                                leader.car->GetAcceleration(), gap, idmParams);
         accel = std::min(accel, leaderAccel);
     }
 
@@ -673,27 +663,10 @@ void Car::UpdateDebugWindow()
         ImGui::Text("Steer: %.2f / %.2f", m_steerAngle, m_maxSteerAngle);
         ImGui::Text("ActualVel: %.2f", m_rigidbody.GetLinearVelocity().Length());
         ImGui::Text("DesiredVel: %.2f", ComputeDesiredVelocity().Length());
-        ImGui::Text("Mode: %s", DriveModeToString(m_mode));
-    }
-    ImGui::End();
-}
-
-void Car::UpdateSpeedProfileWindow()
-{
-    if (!m_drawCollider || !m_isFocused)
-        return;
-
-    constexpr size_t MAX_SHOWN = 10; // 가까운 것부터 몇 개만 보여줌 (m_roadConstraints는 정렬돼있음)
-
-    if (ImGui::Begin(("Speed Profile: " + GetName()).c_str()))
-    {
-        float v0 = (m_currentLane != nullptr) ? std::min(m_maxSpeed, m_currentLane->GetLimitSpeed()) : m_maxSpeed;
-        ImGui::Text("IDM v0: %.1f km/h", v0 * 3.6f);
-        for (size_t i = 0; i < m_roadConstraints.size() && i < MAX_SHOWN; ++i)
-        {
-            const RoadSpeedSample &sample = m_roadConstraints[i];
-            ImGui::Text("%.0fm: %.1f km/h", sample.distance, sample.speed * 3.6f);
-        }
+        if (m_mode == State::Drive)
+            ImGui::Text("Mode: %s / %s", StateToString(m_mode), SubStateToString(m_subMode));
+        else
+            ImGui::Text("Mode: %s", StateToString(m_mode));
     }
     ImGui::End();
 }
@@ -771,13 +744,13 @@ void Car::RebuildSplineRender()
     m_splineRender.SetModel(pModel);
 }
 
-void Car::RebuildParkDebugRender(const ReedsShepp::Path &path, const Vec3 &startPos, float startAngleDeg,
-                                 float turningRadius, const Vec3 &targetPos, float targetAngleDeg)
+void Car::RebuildParkDebugRender(const ReedsShepp::Path &path, const Vec3 &startPos, float startAngleRad,
+                                 float turningRadius, const Vec3 &targetPos, float targetAngleRad)
 {
     constexpr float DEBUG_LINE_HEIGHT = 0.15f;
 
     // RS 경로 폴리라인 (보라색)
-    std::vector<Vec3> pathPoints = ReedsShepp::SamplePath(path, startPos, startAngleDeg, turningRadius);
+    std::vector<Vec3> pathPoints = ReedsShepp::SamplePath(path, startPos, startAngleRad, turningRadius);
     if (pathPoints.size() < 2)
     {
         m_parkPathRender.SetModel(nullptr);
@@ -804,9 +777,8 @@ void Car::RebuildParkDebugRender(const ReedsShepp::Path &path, const Vec3 &start
     markerPos.y += DEBUG_LINE_HEIGHT;
     m_parkTargetMarker.GetTransform().SetPosition(markerPos);
 
-    // 목표 방향 선 (초록 선) — 매번 targetPos/targetAngleDeg가 바뀌므로 그때그때 새로 만든다.
+    // 목표 방향 선 (초록 선) — 매번 targetPos/targetAngleRad가 바뀌므로 그때그때 새로 만든다.
     constexpr float TARGET_LINE_LENGTH = 6.0f;
-    float targetAngleRad = ToRadians(targetAngleDeg);
     Vec3 targetDir(cosf(targetAngleRad), 0.0f, sinf(targetAngleRad));
     DirectX::XMFLOAT3 lineStart = ToXMFLOAT3(targetPos);
     DirectX::XMFLOAT3 lineEnd = ToXMFLOAT3(targetPos + targetDir * TARGET_LINE_LENGTH);

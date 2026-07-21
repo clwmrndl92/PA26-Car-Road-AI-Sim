@@ -17,8 +17,6 @@ namespace ReedsShepp
     {
         constexpr double PI = 3.14159265358979323846;
 
-        double DegToRad(double deg) { return PI * deg / 180.0; }
-
         // theta를 [-pi, pi) 범위로 정규화.
         double Mod2Pi(double theta)
         {
@@ -46,22 +44,20 @@ namespace ReedsShepp
         }
 
         // start(x1,y1,theta1)를 원점/각도 0으로 하는 좌표계에서 end의 좌표를 계산.
-        void ChangeOfBasis(double x1, double y1, double theta1Deg,
-                           double x2, double y2, double theta2Deg,
-                           double &outX, double &outY, double &outThetaDeg)
+        void ChangeOfBasis(double x1, double y1, double theta1,
+                           double x2, double y2, double theta2,
+                           double &outX, double &outY, double &outTheta)
         {
-            double theta1 = DegToRad(theta1Deg);
             double dx = x2 - x1;
             double dy = y2 - y1;
             outX = dx * std::cos(theta1) + dy * std::sin(theta1);
             outY = -dx * std::sin(theta1) + dy * std::cos(theta1);
-            outThetaDeg = theta2Deg - theta1Deg;
+            outTheta = theta2 - theta1;
         }
 
-        Path Path1(double x, double y, double phiDeg)
+        Path Path1(double x, double y, double phi)
         {
             // Formula 8.1: CSC (same turns)
-            double phi = DegToRad(phiDeg);
             Path path;
 
             double u, t;
@@ -75,10 +71,10 @@ namespace ReedsShepp
             return path;
         }
 
-        Path Path2(double x, double y, double phiDeg)
+        Path Path2(double x, double y, double phi)
         {
             // Formula 8.2: CSC (opposite turns)
-            double phi = Mod2Pi(DegToRad(phiDeg));
+            phi = Mod2Pi(phi);
             Path path;
 
             double rho, t1;
@@ -98,10 +94,9 @@ namespace ReedsShepp
             return path;
         }
 
-        Path Path3(double x, double y, double phiDeg)
+        Path Path3(double x, double y, double phi)
         {
             // Formula 8.3: C|C|C
-            double phi = DegToRad(phiDeg);
             Path path;
 
             double xi = x - std::sin(phi);
@@ -124,10 +119,9 @@ namespace ReedsShepp
             return path;
         }
 
-        Path Path4(double x, double y, double phiDeg)
+        Path Path4(double x, double y, double phi)
         {
             // Formula 8.4 (1): C|CC
-            double phi = DegToRad(phiDeg);
             Path path;
 
             double xi = x - std::sin(phi);
@@ -150,10 +144,9 @@ namespace ReedsShepp
             return path;
         }
 
-        Path Path5(double x, double y, double phiDeg)
+        Path Path5(double x, double y, double phi)
         {
             // Formula 8.4 (2): CC|C
-            double phi = DegToRad(phiDeg);
             Path path;
 
             double xi = x - std::sin(phi);
@@ -176,10 +169,9 @@ namespace ReedsShepp
             return path;
         }
 
-        Path Path6(double x, double y, double phiDeg)
+        Path Path6(double x, double y, double phi)
         {
             // Formula 8.7: CCu|CuC
-            double phi = DegToRad(phiDeg);
             Path path;
 
             double xi = x + std::sin(phi);
@@ -214,10 +206,9 @@ namespace ReedsShepp
             return path;
         }
 
-        Path Path7(double x, double y, double phiDeg)
+        Path Path7(double x, double y, double phi)
         {
             // Formula 8.8: C|CuCu|C
-            double phi = DegToRad(phiDeg);
             Path path;
 
             double xi = x + std::sin(phi);
@@ -242,10 +233,9 @@ namespace ReedsShepp
             return path;
         }
 
-        Path Path8(double x, double y, double phiDeg)
+        Path Path8(double x, double y, double phi)
         {
             // Formula 8.9 (1): C|C[pi/2]SC
-            double phi = DegToRad(phiDeg);
             Path path;
 
             double xi = x - std::sin(phi);
@@ -269,10 +259,9 @@ namespace ReedsShepp
             return path;
         }
 
-        Path Path9(double x, double y, double phiDeg)
+        Path Path9(double x, double y, double phi)
         {
             // Formula 8.9 (2): CSC[pi/2]|C
-            double phi = DegToRad(phiDeg);
             Path path;
 
             double xi = x - std::sin(phi);
@@ -296,10 +285,9 @@ namespace ReedsShepp
             return path;
         }
 
-        Path Path10(double x, double y, double phiDeg)
+        Path Path10(double x, double y, double phi)
         {
             // Formula 8.10 (1): C|C[pi/2]SC
-            double phi = DegToRad(phiDeg);
             Path path;
 
             double xi = x + std::sin(phi);
@@ -322,10 +310,9 @@ namespace ReedsShepp
             return path;
         }
 
-        Path Path11(double x, double y, double phiDeg)
+        Path Path11(double x, double y, double phi)
         {
             // Formula 8.10 (2): CSC[pi/2]|C
-            double phi = DegToRad(phiDeg);
             Path path;
 
             double xi = x + std::sin(phi);
@@ -348,10 +335,9 @@ namespace ReedsShepp
             return path;
         }
 
-        Path Path12(double x, double y, double phiDeg)
+        Path Path12(double x, double y, double phi)
         {
             // Formula 8.11: C|C[pi/2]SC[pi/2]|C
-            double phi = DegToRad(phiDeg);
             Path path;
 
             double xi = x + std::sin(phi);
@@ -501,9 +487,9 @@ namespace ReedsShepp
 
         // 12개 공식 각각에 4가지 변형(원본/timeflip/reflect/둘 다)을 적용한 최대 48개 후보 중
         // PathCost가 가장 낮은(=사람이 운전할 법한) 경로 하나만 생성/보관해서 돌려준다 (반경 1
-        // 기준 정규화 좌표 x, y, phi(deg)). 후보 벡터를 물리적으로 만들지 않으므로 매 호출의 힙
+        // 기준 정규화 좌표 x, y, phi(rad)). 후보 벡터를 물리적으로 만들지 않으므로 매 호출의 힙
         // 할당이 48개 → 최대 2개로 줄어든다. 유효 경로가 없으면 빈 경로를 반환한다.
-        Path GetBestPath(double x, double y, double phiDeg)
+        Path GetBestPath(double x, double y, double phi)
         {
             Path best;
             double bestCost = std::numeric_limits<double>::max();
@@ -526,10 +512,10 @@ namespace ReedsShepp
 
             for (PathFn fn : kPathFns)
             {
-                consider(fn(x, y, phiDeg));
-                consider(Timeflip(fn(-x, y, -phiDeg)));
-                consider(Reflect(fn(x, -y, -phiDeg)));
-                consider(Reflect(Timeflip(fn(-x, -y, phiDeg))));
+                consider(fn(x, y, phi));
+                consider(Timeflip(fn(-x, y, -phi)));
+                consider(Reflect(fn(x, -y, -phi)));
+                consider(Reflect(Timeflip(fn(-x, -y, phi))));
             }
 
             return best;
@@ -544,20 +530,20 @@ namespace ReedsShepp
         return total;
     }
 
-    Path GetOptimalPath(const Vec3 &start, float startAngleDeg,
-                        const Vec3 &end, float endAngleDeg,
+    Path GetOptimalPath(const Vec3 &start, float startAngleRad,
+                        const Vec3 &end, float endAngleRad,
                         float turningRadius)
     {
-        double localX, localY, localThetaDeg;
-        ChangeOfBasis(start.GetX(), start.GetZ(), startAngleDeg,
-                      end.GetX(), end.GetZ(), endAngleDeg,
-                      localX, localY, localThetaDeg);
+        double localX, localY, localTheta;
+        ChangeOfBasis(start.GetX(), start.GetZ(), startAngleRad,
+                      end.GetX(), end.GetZ(), endAngleRad,
+                      localX, localY, localTheta);
 
         // 공식들은 회전 반경 1을 가정하므로 위치만 반경으로 정규화한다 (각도는 스케일 불변).
         localX /= turningRadius;
         localY /= turningRadius;
 
-        Path best = GetBestPath(localX, localY, localThetaDeg);
+        Path best = GetBestPath(localX, localY, localTheta);
         if (best.empty())
             return {};
 
@@ -566,7 +552,7 @@ namespace ReedsShepp
         return best;
     }
 
-    std::vector<Vec3> SamplePath(const Path &path, const Vec3 &start, float startAngleDeg,
+    std::vector<Vec3> SamplePath(const Path &path, const Vec3 &start, float startAngleRad,
                                  float turningRadius, float sampleSpacing)
     {
         std::vector<Vec3> points;
@@ -576,7 +562,7 @@ namespace ReedsShepp
         double x = start.GetX();
         double z = start.GetZ();
         double y = start.GetY();
-        double theta = DegToRad(startAngleDeg);
+        double theta = startAngleRad;
 
         points.push_back(Vec3(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)));
         for (const PathElement &element : path)
@@ -610,7 +596,7 @@ namespace ReedsShepp
         }
     }
 
-    std::vector<Leg> SampleLegs(const Path &path, const Vec3 &start, float startAngleDeg,
+    std::vector<Leg> SampleLegs(const Path &path, const Vec3 &start, float startAngleRad,
                                 float turningRadius, float sampleSpacing)
     {
         std::vector<Leg> legs;
@@ -620,7 +606,7 @@ namespace ReedsShepp
         double x = start.GetX();
         double z = start.GetZ();
         double y = start.GetY();
-        double theta = DegToRad(startAngleDeg);
+        double theta = startAngleRad;
 
         Gear legGear = path.front().gear;
         std::vector<Vec3> legPoints{Vec3(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z))};

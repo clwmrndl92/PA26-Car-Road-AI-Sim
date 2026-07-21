@@ -45,20 +45,20 @@ namespace ReedsShepp
 
     float GetPathLength(const Path &path);
 
-    // start/end는 XZ 평면(y는 무시) 위의 위치, 각도는 도(degree) 단위이며 atan2(z, x) 규약
+    // start/end는 XZ 평면(y는 무시) 위의 위치, 각도는 라디안 단위이며 atan2(z, x) 규약
     // (각도 0 = +X 방향, 양수 방향 = +X에서 +Z로 회전). turningRadius는 차량의 최소 회전 반경.
     // 존재하는 경로가 없으면 빈 벡터를 반환한다.
-    Path GetOptimalPath(const Vec3 &start, float startAngleDeg,
-                        const Vec3 &end, float endAngleDeg,
+    Path GetOptimalPath(const Vec3 &start, float startAngleRad,
+                        const Vec3 &end, float endAngleRad,
                         float turningRadius);
 
-    // path를 start/startAngleDeg에서 시작해 실제 월드 좌표 폴리라인으로 샘플링한다 (디버그 렌더링용).
+    // path를 start/startAngleRad에서 시작해 실제 월드 좌표 폴리라인으로 샘플링한다 (디버그 렌더링용).
     // Car::ApplyMotion과 같은 부호 규약(기어와 무관하게 Left/Right가 같은 곡률 방향)을 그대로 따른다.
-    std::vector<Vec3> SamplePath(const Path &path, const Vec3 &start, float startAngleDeg,
+    std::vector<Vec3> SamplePath(const Path &path, const Vec3 &start, float startAngleRad,
                                  float turningRadius, float sampleSpacing = 0.5f);
 
     // path를 기어가 바뀌는 지점마다 나눠, 각 leg의 월드좌표 폴리라인을 반환한다 (Pure Pursuit
     // 기반 추종용 -- RSFollowSegment가 leg 하나씩 순서대로 실행한다). 부호 규약은 SamplePath와 동일.
-    std::vector<Leg> SampleLegs(const Path &path, const Vec3 &start, float startAngleDeg,
+    std::vector<Leg> SampleLegs(const Path &path, const Vec3 &start, float startAngleRad,
                                 float turningRadius, float sampleSpacing = 0.5f);
 }

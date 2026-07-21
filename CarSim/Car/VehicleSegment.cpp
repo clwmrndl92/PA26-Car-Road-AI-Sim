@@ -106,10 +106,7 @@ void RSFollowSegment::Tick(Car &car)
     }
 
     float targetSteer = car.PurePursuit(m_points[targetIndex]);
-    if (m_isFinalLeg)
-        car.SteerEase(targetSteer, PARKING_STEER_EASE_RATE);
-    else
-        car.Steer(targetSteer, PARKING_STEER_RAMP_RATE);
+    car.Steer(targetSteer, PARKING_STEER_RAMP_RATE);
 
     float targetSpeed = std::min(MANEUVER_SPEED, std::sqrt(2.0f * DECEL_ESTIMATE * remaining));
     car.Accelerate(targetSpeed);

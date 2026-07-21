@@ -13,14 +13,11 @@
 
 namespace
 {
-    // ReedsShepp::Path를 기어가 바뀌는 지점마다 leg로 나눠, 각 leg를 Pure Pursuit로 추종하는
-    // RSFollowSegment로 변환한다 (VehicleController가 leg 순서대로 실행, 기어 전환은
-    // VehicleController::Tick이 기존 로직으로 처리).
     std::vector<std::unique_ptr<VehicleSegment>> BuildParkSegments(const ReedsShepp::Path &path, const Vec3 &startPos,
-                                                                    float startAngleDeg, float turningRadius)
+                                                                   float startAngleRad, float turningRadius)
     {
         std::vector<std::unique_ptr<VehicleSegment>> segments;
-        std::vector<ReedsShepp::Leg> legs = ReedsShepp::SampleLegs(path, startPos, startAngleDeg, turningRadius);
+        std::vector<ReedsShepp::Leg> legs = ReedsShepp::SampleLegs(path, startPos, startAngleRad, turningRadius);
         segments.reserve(legs.size());
         for (size_t i = 0; i < legs.size(); ++i)
         {
@@ -32,14 +29,6 @@ namespace
         return segments;
     }
 
-    // ReedsShepp::Path를 PathElement 하나당 RSExactSegment 하나로 그대로 변환한다 (정지-조향-이동-정지
-    // 방식의 정밀 실행 -- BuildParkSegments/Pure Pursuit와 달리 추종 오차가 없다. 짧은 최종 정렬
-    // 보정에만 쓴다). Left/Right 곡선은 RS 경로가 항상 최소 회전반경(=최대 조향각)으로만 도므로,
-    // 조향각은 element별 계산 없이 ±maxSteerAngle로 고정.
-    // 부호: Car::PurePursuit()는 목표가 carRight 방향(오른쪽)에 있으면 양수 조향각을 반환하고 그
-    // 방향으로 돌아 실제로 우회전한다(이미 검증된 동작) -- 즉 이 코드베이스에서는 양수 steerAngle =
-    // 우회전. ReedsShepp의 Left는 실제 좌회전(월드 (x,z) 평면에서 진행방향 벡터가 반시계로 회전)이므로
-    // steerAngle은 음수라야 한다.
     std::vector<std::unique_ptr<VehicleSegment>> BuildExactSegments(const ReedsShepp::Path &path, float maxSteerAngle)
     {
         std::vector<std::unique_ptr<VehicleSegment>> segments;
@@ -56,52 +45,43 @@ namespace
         return segments;
     }
 
-    // ReedsShepp이 쓰는 각도 규약(atan2(z, x), degree)으로 방향 벡터를 변환.
-    float DirectionToAngleDeg(const Vec3 &direction)
+    // ReedsShepp이 쓰는 각도 규약(atan2(z, x), radian)으로 방향 벡터를 변환.
+    float DirectionToAngleRad(const Vec3 &direction)
     {
-        return ToDegrees(atan2f(direction.GetZ(), direction.GetX()));
+        return atan2f(direction.GetZ(), direction.GetX());
     }
 }
 
 void Car::UpdateMode()
 {
     const char *reason = "";
-    DriveMode next = DecideNextMode(&reason);
+    State next = DecideNextMode(&reason);
     if (next != m_mode)
     {
-        DebugConsole::Log(std::string(DriveModeToString(m_mode)) + " -> " + DriveModeToString(next) + " (" + reason + ")");
+        DebugConsole::Log(std::string(StateToString(m_mode)) + " -> " + StateToString(next) + " (" + reason + ")");
         OnModeExit(m_mode);
         OnModeEnter(next, m_mode);
         m_mode = next;
     }
 }
 
-Car::DriveMode Car::DecideNextMode(const char **reason) const
+Car::State Car::DecideNextMode(const char **reason) const
 {
-    if (m_mode == DriveMode::Park)
+    if (m_mode == State::Park)
     {
         // 주차 시퀀스가 진행 중이면(정지 대기 m_parkPlanPending, 다단계 사이 idle 포함) Park를 유지한다.
         // m_parkSequenceActive가 없으면 leg1↔leg2 사이의 잠깐 finished 프레임에 Drive로 새어나간다.
         if (m_parkPlanPending || m_parkSequenceActive || !m_vehicleController.IsFinished())
         {
             *reason = "parking in progress";
-            return DriveMode::Park;
+            return State::Park;
         }
     }
 
-    if (m_mode == DriveMode::Avoid)
+    if (m_mode == State::Drive && m_subMode == SubState::D_Avoid && !m_vehicleController.IsFinished())
     {
-        if (!m_vehicleController.IsFinished())
-        {
-            *reason = "avoid maneuver in progress";
-            return DriveMode::Avoid;
-        }
-    }
-
-    if (m_avoidPending)
-    {
-        *reason = "obstacle detected, avoid pending";
-        return DriveMode::Avoid;
+        *reason = "avoid maneuver in progress";
+        return State::Drive;
     }
 
     constexpr float ARRIVE_DISTANCE = 5.0f;
@@ -110,13 +90,13 @@ Car::DriveMode Car::DecideNextMode(const char **reason) const
     if (arrived && GetParkTargetNode() != nullptr)
     {
         *reason = "arrived at destination with park target";
-        return DriveMode::Park;
+        return State::Park;
     }
 
     if (m_destLane == nullptr || arrived)
     {
         *reason = m_destLane == nullptr ? "no destination lane" : "arrived at destination";
-        return DriveMode::Stop;
+        return State::Stop;
     }
 
     if (m_parkSpot != nullptr)
@@ -124,7 +104,7 @@ Car::DriveMode Car::DecideNextMode(const char **reason) const
         if (m_currentLane == nullptr)
         {
             *reason = "park spot reserved, no current lane (exiting park)";
-            return DriveMode::Park;
+            return State::Park;
         }
 
         // 입차: 목적지 레인(주차장 진입 레인)의 끝에 다다르면 RS로 주차칸까지 마무리한다.
@@ -134,43 +114,38 @@ Car::DriveMode Car::DecideNextMode(const char **reason) const
         if (nearFinalLane)
         {
             *reason = "near end of final lane, entering park spot";
-            return DriveMode::Park;
+            return State::Park;
         }
     }
 
     *reason = "normal driving";
-    return DriveMode::Drive;
+    return State::Drive;
 }
 
-void Car::OnModeEnter(DriveMode mode, DriveMode previous)
+void Car::OnModeEnter(State mode, State previous)
 {
-    if (mode == DriveMode::Drive)
+    if (mode == State::Drive)
     {
+        m_subMode = SubState::D_Normal; // 서브상태는 항상 일반주행에서 새로 시작
         std::vector<std::unique_ptr<VehicleSegment>> segments;
         // Park에서 넘어왔다는 건 출차가 막 끝났다는 뜻(입차 완료는 Stop으로 감) — RS 매뉴버로
         // 꺾여있던 조향을 중앙으로 되돌린 뒤 정속주행을 시작한다.
-        if (previous == DriveMode::Park)
+        if (previous == State::Park)
             segments.push_back(std::make_unique<CenterSteerSegment>());
         segments.push_back(std::make_unique<SplineFollowSegment>());
         m_vehicleController.BeginPlan(std::move(segments));
     }
-    else if (mode == DriveMode::Park)
+    else if (mode == State::Park)
     {
         // 도착 즉시 RS를 계산하지 않고, 완전히 멈출 때까지 기다린다 (UpdatePark에서 처리).
         m_parkPlanPending = true;
         m_parkSequenceActive = true; // 주차 시퀀스 시작 — 완료(UpdatePark)까지 Park 유지.
         DebugConsole::Log("Park plan pending: waiting for full stop before planning");
     }
-    else if (mode == DriveMode::Avoid)
-    {
-        // Avoid는 TryAvoidObstacle이 이미 차를 완전히 세운 뒤에만 m_avoidPending을 켜므로, Park와
-        // 달리 정지 대기 없이 바로 계획을 세운다.
-        BeginAvoidPlan();
-    }
-    else if (mode == DriveMode::Stop)
+    else if (mode == State::Stop)
     {
         // 입차 완료 후 Stop으로 오는 경우도 RS 매뉴버로 꺾여있던 조향을 중앙으로 되돌린다.
-        if (previous == DriveMode::Park)
+        if (previous == State::Park)
         {
             std::vector<std::unique_ptr<VehicleSegment>> segments;
             segments.push_back(std::make_unique<CenterSteerSegment>());
@@ -179,7 +154,7 @@ void Car::OnModeEnter(DriveMode mode, DriveMode previous)
     }
 }
 
-void Car::OnModeExit(DriveMode mode)
+void Car::OnModeExit(State mode)
 {
     if (!m_vehicleController.IsFinished())
         m_vehicleController.Abort();
@@ -217,10 +192,11 @@ void Car::BeginParkPlan()
     // 호출 시점에 currentLane 유무로 방향을 판정 — 출차 분기에서 currentLane을 채우므로
     // 반드시 그 전에 캡처해둔다.
     m_isExitingPark = (m_currentLane == nullptr);
+    m_subMode = m_isExitingPark ? SubState::P_IN : SubState::P_OUT; // fsm.txt 서브상태: 출차/주차
 
     float turningRadius = m_wheelbase / tanf(m_maxSteerAngle);
     Vec3 startPos = m_rigidbody.GetPosition();
-    float startAngleDeg = DirectionToAngleDeg(GetForwardAxis());
+    float startAngleRad = DirectionToAngleRad(GetForwardAxis());
     HybridAStar::VehicleShape shape = BuildVehicleShape();
     const std::vector<HybridAStar::Obstacle> &obstacles = m_RoadDataManager->GetObstacles();
 
@@ -252,10 +228,10 @@ void Car::BeginParkPlan()
         float distance = std::max(std::fabs(lateralOffset), MIN_EXIT_NORMAL_DISTANCE);
 
         Vec3 targetPos = closestPos + normalDir * distance;
-        float targetAngleDeg = DirectionToAngleDeg(closestPos - targetPos);
+        float targetAngleRad = DirectionToAngleRad(closestPos - targetPos);
 
         bool foundPath = false;
-        ReedsShepp::Path path = HybridAStar::FindPath(startPos, startAngleDeg, targetPos, targetAngleDeg, obstacles, shape, foundPath);
+        ReedsShepp::Path path = HybridAStar::FindPath(startPos, startAngleRad, targetPos, targetAngleRad, obstacles, shape, foundPath);
         if (!foundPath)
         {
             // 출차 실패는 이미 차가 그 자리를 점유 중이므로 예약을 풀지 않는다.
@@ -263,8 +239,8 @@ void Car::BeginParkPlan()
             m_destLane = nullptr;
             return;
         }
-        m_vehicleController.BeginPlan(BuildParkSegments(path, startPos, startAngleDeg, turningRadius));
-        RebuildParkDebugRender(path, startPos, startAngleDeg, turningRadius, targetPos, targetAngleDeg);
+        m_vehicleController.BeginPlan(BuildParkSegments(path, startPos, startAngleRad, turningRadius));
+        RebuildParkDebugRender(path, startPos, startAngleRad, turningRadius, targetPos, targetAngleRad);
         return;
     }
 
@@ -309,9 +285,9 @@ bool Car::PlanEnterForCurrentSpot()
 
         Vec3 pPos = bestSpline->GetLookaheadPoint(m_parkSpot->position, P_LEAD_DISTANCE);
         float pParam = bestSpline->GetSplinePosition(pPos);
-        float pAngleDeg = DirectionToAngleDeg(bestSpline->GetDirectionAt(pParam));
+        float pAngleRad = DirectionToAngleRad(bestSpline->GetDirectionAt(pParam));
 
-        if (PlanParkLegTo(pPos, pAngleDeg))
+        if (PlanParkLegTo(pPos, pAngleRad))
         {
             m_parkGoingToSpot = false; // leg 1 진행 중 — P 도착 후 UpdatePark가 leg 2를 잇는다.
             return true;
@@ -321,8 +297,8 @@ bool Car::PlanEnterForCurrentSpot()
 
     // 주차레인 없음 -> 스팟으로 직접 (leg 2 단계 없이 한 번에).
     Vec3 spotTarget = m_parkSpot->position - m_parkSpot->direction.Normalized() * m_wheelbase;
-    float spotAngleDeg = DirectionToAngleDeg(m_parkSpot->direction);
-    if (PlanParkLegTo(spotTarget, spotAngleDeg))
+    float spotAngleRad = DirectionToAngleRad(m_parkSpot->direction);
+    if (PlanParkLegTo(spotTarget, spotAngleRad))
     {
         m_parkGoingToSpot = true;
         m_parkAligned = false;
@@ -360,24 +336,24 @@ bool Car::BeginParkEnterOrRetry()
 // 현재 pose -> target 까지 Hybrid A*(장애물 회피)로 계획해 실행시킨다. 못 찾으면 false.
 // exact=true면 Pure Pursuit(BuildParkSegments) 대신 정지-조향-이동-정지 방식의 정밀 실행
 // (BuildExactSegments)을 쓴다 -- 짧은 최종 정렬 보정 등 추종 오차를 남기면 안 되는 경우에만 켠다.
-bool Car::PlanParkLegTo(const Vec3 &targetPos, float targetAngleDeg, bool exact)
+bool Car::PlanParkLegTo(const Vec3 &targetPos, float targetAngleRad, bool exact)
 {
     Vec3 startPos = m_rigidbody.GetPosition();
-    float startAngleDeg = DirectionToAngleDeg(GetForwardAxis());
+    float startAngleRad = DirectionToAngleRad(GetForwardAxis());
     float turningRadius = m_wheelbase / tanf(m_maxSteerAngle);
     HybridAStar::VehicleShape shape = BuildVehicleShape();
     const std::vector<HybridAStar::Obstacle> &obstacles = m_RoadDataManager->GetObstacles();
 
     bool foundPath = false;
-    ReedsShepp::Path path = HybridAStar::FindPath(startPos, startAngleDeg, targetPos, targetAngleDeg, obstacles, shape, foundPath);
+    ReedsShepp::Path path = HybridAStar::FindPath(startPos, startAngleRad, targetPos, targetAngleRad, obstacles, shape, foundPath);
     if (!foundPath)
         return false;
 
     if (exact)
         m_vehicleController.BeginPlan(BuildExactSegments(path, m_maxSteerAngle));
     else
-        m_vehicleController.BeginPlan(BuildParkSegments(path, startPos, startAngleDeg, turningRadius));
-    RebuildParkDebugRender(path, startPos, startAngleDeg, turningRadius, targetPos, targetAngleDeg);
+        m_vehicleController.BeginPlan(BuildParkSegments(path, startPos, startAngleRad, turningRadius));
+    RebuildParkDebugRender(path, startPos, startAngleRad, turningRadius, targetPos, targetAngleRad);
     return true;
 }
 
@@ -386,8 +362,8 @@ bool Car::PlanParkLegTo(const Vec3 &targetPos, float targetAngleDeg, bool exact)
 void Car::BeginParkSpotLeg()
 {
     Vec3 spotTarget = m_parkSpot->position - m_parkSpot->direction.Normalized() * m_wheelbase;
-    float spotAngleDeg = DirectionToAngleDeg(m_parkSpot->direction);
-    if (PlanParkLegTo(spotTarget, spotAngleDeg))
+    float spotAngleRad = DirectionToAngleRad(m_parkSpot->direction);
+    if (PlanParkLegTo(spotTarget, spotAngleRad))
         return; // leg 2 성공
 
     DebugConsole::Log("BeginParkSpotLeg: can't tuck into ParkSpot " + std::to_string(m_parkSpot->id) +
@@ -406,7 +382,7 @@ HybridAStar::VehicleShape Car::BuildVehicleShape() const
 {
     HybridAStar::VehicleShape shape;
     shape.wheelbase = m_wheelbase;
-    shape.maxSteerAngleDeg = ToDegrees(m_maxSteerAngle);
+    shape.maxSteerAngleRad = m_maxSteerAngle;
     shape.pivotToCenter = m_colliderOffset.z;
     shape.halfWidth = m_halfExtents.GetX();
     shape.halfLength = m_halfExtents.GetZ();
@@ -415,11 +391,10 @@ HybridAStar::VehicleShape Car::BuildVehicleShape() const
 
 void Car::BeginAvoidPlan()
 {
-    m_avoidPending = false;
-    DebugConsole::Log("Avoid pending resolved: fully stopped, beginning HybridA* plan");
+    DebugConsole::Log("Entering DriveSubMode::Avoiding: fully stopped, beginning HybridA* plan");
 
     Vec3 startPos = m_rigidbody.GetPosition();
-    float startAngleDeg = DirectionToAngleDeg(GetForwardAxis());
+    float startAngleRad = DirectionToAngleRad(GetForwardAxis());
 
     // 목표: 지금 레인의 스플라인을 따라 장애물을 완전히 지나칠 만큼(코리도어보다 넉넉히) 앞의 지점.
     // 레인을 벗어나지 않고 그 위의 한 점으로 잡아두면, 우회가 끝난 뒤 별도 처리 없이 그냥 Drive로
@@ -429,7 +404,7 @@ void Car::BeginAvoidPlan()
     const std::vector<Vec3> &splinePoints = m_currentSpline.GetSplinePoints();
 
     Vec3 targetPos = startPos;
-    float targetAngleDeg = startAngleDeg;
+    float targetAngleRad = startAngleRad;
     bool foundGoal = false;
     Vec3 prevPoint = startPos;
     float traveled = 0.0f;
@@ -455,7 +430,7 @@ void Car::BeginAvoidPlan()
             if (traveled >= AVOID_GOAL_DISTANCE)
             {
                 targetPos = point;
-                targetAngleDeg = DirectionToAngleDeg(point - prevPoint);
+                targetAngleRad = DirectionToAngleRad(point - prevPoint);
                 foundGoal = true;
                 break;
             }
@@ -472,7 +447,7 @@ void Car::BeginAvoidPlan()
             if (traveled >= AVOID_GOAL_DISTANCE)
             {
                 targetPos = point;
-                targetAngleDeg = DirectionToAngleDeg(point - prevPoint);
+                targetAngleRad = DirectionToAngleRad(point - prevPoint);
                 foundGoal = true;
                 break;
             }
@@ -482,7 +457,7 @@ void Car::BeginAvoidPlan()
         if (!foundGoal)
         {
             targetPos = nextLane->GetEndPoint();
-            targetAngleDeg = DirectionToAngleDeg(nextLane->GetSpline().GetDirectionAt(1.0f));
+            targetAngleRad = DirectionToAngleRad(nextLane->GetSpline().GetDirectionAt(1.0f));
             foundGoal = true;
         }
     }
@@ -491,7 +466,7 @@ void Car::BeginAvoidPlan()
     {
         // 다음 레인도 없음(경로 끝 코앞) -- 현재 레인 끝점을 최선으로 삼는다.
         targetPos = m_currentLane->GetEndPoint();
-        targetAngleDeg = DirectionToAngleDeg(m_currentLane->GetSpline().GetDirectionAt(1.0f));
+        targetAngleRad = DirectionToAngleRad(m_currentLane->GetSpline().GetDirectionAt(1.0f));
     }
 
     HybridAStar::VehicleShape shape = BuildVehicleShape();
@@ -499,22 +474,20 @@ void Car::BeginAvoidPlan()
     float turningRadius = m_wheelbase / tanf(m_maxSteerAngle);
 
     bool foundPath = false;
-    ReedsShepp::Path path = HybridAStar::FindPath(startPos, startAngleDeg, targetPos, targetAngleDeg, obstacles, shape, foundPath);
+    ReedsShepp::Path path = HybridAStar::FindPath(startPos, startAngleRad, targetPos, targetAngleRad, obstacles, shape, foundPath);
     if (!foundPath)
     {
-        // 실패해도 releas할 예약은 없다 — 그냥 Drive로 돌아가고, TryAvoidObstacle이 다음 프레임
-        // 다시 코리도어를 검사해 막혀있으면 재시도(m_avoidPending)를 건다.
-        DebugConsole::Log("BeginAvoidPlan: HybridA* failed to find an avoid route, will retry on next detection");
+        // 경로를 못 찾음 — 정적 장애물이 완전히 막고 있는 상태. fsm.txt의 "회피 재탐색도 없으면
+        // 서브상태:정차로 전환"에 대응 — 정차로 넘어가 쿨다운마다 재시도하게 한다. (예전엔 그냥
+        // 실패만 로그로 남기고 리턴해서, 다음 프레임 Normal로 샜다가 같은 장애물에 다시 걸려
+        // 무한 반복하는 버그가 있었다 — notes/issue.txt)
+        m_subMode = SubState::D_Stop;
+        DebugConsole::Log("BeginAvoidPlan: HybridA* failed to find an avoid route, entering D_Stop to retry later");
         return;
     }
-    m_vehicleController.BeginPlan(BuildParkSegments(path, startPos, startAngleDeg, turningRadius));
+    m_vehicleController.BeginPlan(BuildParkSegments(path, startPos, startAngleRad, turningRadius));
 
     DebugConsole::Log("Avoid path segments: " + to_string(path.size()));
-}
-
-void Car::UpdateAvoid()
-{
-    m_wantSegmentTick = true;
 }
 
 void Car::UpdateFindPath()
@@ -574,6 +547,11 @@ void Car::UpdateStop()
 
 void Car::UpdatePark()
 {
+    // TODO(주차 중 장애물 감시): fsm.txt는 상태:주차(출차) 전체에 박스캐스트 감지 -> 5초 대기 ->
+    // 이동 여부 판단 -> 재탐색 로직을 요구하지만, 여긴 각 leg를 계획하는 시점에 정적 장애물만
+    // 반영하고 실행 중(RS pure pursuit로 이동하는 동안)에는 전혀 재검사하지 않는다. 대기시간을
+    // 셀 멤버 변수가 없어(Car.h는 이번엔 안 건드림) 구현하지 않음 — 넣으려면 Car.h에 타이머 값을
+    // 추가하면서 여기 같이 채워야 한다.
     if (m_parkPlanPending)
     {
         // 완전히 정지할 때까지는 RS 계획을 세우지 않고 감속만 한다.
@@ -639,8 +617,8 @@ void Car::UpdatePark()
         }
         m_parkAligned = true;
         Vec3 spotTarget = m_parkSpot->position - m_parkSpot->direction.Normalized() * m_wheelbase;
-        float spotAngleDeg = DirectionToAngleDeg(m_parkSpot->direction);
-        if (PlanParkLegTo(spotTarget, spotAngleDeg, /*exact=*/true))
+        float spotAngleRad = DirectionToAngleRad(m_parkSpot->direction);
+        if (PlanParkLegTo(spotTarget, spotAngleRad, /*exact=*/true))
             return;
     }
 
@@ -659,8 +637,59 @@ void Car::UpdatePark()
 
 void Car::UpdateDrive()
 {
+    // 서브상태:회피 — Hybrid A* + RS 경로를 다 추종할 때까지는 일반주행 로직(CheckPath/TryLaneChange/
+    // TryAvoidObstacle)을 건드리지 않는다. 완주하면 일반주행으로 복귀한다.
+    // TODO(정차): 회피 경로 추종 "중"에 재장애물 감지는 없다 — notes/fsm.txt의 "2초 대기 후 이동
+    // 여부 판단, 안 움직였으면 재탐색" 분기는 안 만듦. 장애물이 전부 정적이라(움직이지 않음)
+    // 이미 성공한 RS 경로가 도중에 새로 막힐 일이 없어서(고정 장애물 기준으로 계획했으므로)
+    // 실질적으로 발생 안 하는 케이스로 보고 생략함 — 동적 장애물이 생기면 다시 볼 것.
+    if (m_subMode == SubState::D_Avoid)
+    {
+        if (!m_vehicleController.IsFinished())
+        {
+            m_wantSegmentTick = true;
+            return;
+        }
+        // 회피 RS 경로 완주 — m_mode가 계속 Drive라 OnModeEnter(Drive)가 다시 안 불리므로, 예전에
+        // 거기서 하던 일반주행용 SplineFollowSegment 재구성을 여기서 직접 해준다.
+        m_subMode = SubState::D_Normal;
+        std::vector<std::unique_ptr<VehicleSegment>> segments;
+        segments.push_back(std::make_unique<SplineFollowSegment>());
+        m_vehicleController.BeginPlan(std::move(segments));
+    }
+    else if (m_subMode == SubState::D_Stop)
+    {
+        // 서브상태:정차 — BeginAvoidPlan이 경로를 못 찾아 여기로 왔다. fsm.txt는 "2초 대기 -> 이동
+        // 여부 판단 -> 안 움직였으면 재탐색"이지만, 장애물이 전부 정적이라 "움직였는지" 판단 자체가
+        // 불가능하다(TODO: 동적 장애물 도입되면 여기 이동 판단을 추가해야 함). 그 대신 쿨다운마다
+        // Hybrid A* 재탐색만 반복한다. 재탐색 성공하면 BeginAvoidPlan이 알아서 D_Avoid로 옮겨두고,
+        // 실패하면 또 D_Stop으로 되돌려놓으므로(BeginAvoidPlan 참고) 여기선 쿨다운만 관리한다.
+        if (m_speed > 0.0f)
+            Accelerate(0.0f);
+
+        if (m_avoidReplanCooldown > 0.0f)
+            m_avoidReplanCooldown = std::max(0.0f, m_avoidReplanCooldown - m_deltaTime);
+
+        if (m_avoidReplanCooldown > 0.0f)
+        {
+            m_wantSegmentTick = true;
+            return;
+        }
+
+        constexpr float STOPPED_REPLAN_COOLDOWN = 2.0f; // fsm.txt 서브상태:정차의 재탐색 대기(2초)
+        m_avoidReplanCooldown = STOPPED_REPLAN_COOLDOWN;
+        m_subMode = SubState::D_Avoid;
+        BeginAvoidPlan();
+        m_wantSegmentTick = true;
+        return;
+    }
+
     if (!CheckPath())
         return;
+    // TODO(신호대기): 전방 정지신호/정지선 감지 자체가 없다 — RoadNodeType에 신호 타입이 없어서
+    // fsm.txt의 "정지신호 있으면 감속정지 -> 서브상태:신호대기" 분기를 걸 수 없다. 신호 시스템이
+    // 생기면 여기서 검사해 SubState::D_WaitSignal로 전환하고, "초록불이면 Normal로 복귀"하는 분기를
+    // 추가해야 한다 (SubState::D_WaitSignal 값 자체는 이미 선언돼 있음).
     TryLaneChange();
     if (TryAvoidObstacle())
         return;
@@ -726,7 +755,7 @@ bool Car::TryLaneChange()
         }
 
         bool approved = Mobil::EvaluateLaneChange(ego, oldFollowerState, egoLeaderState, newLeaderState,
-                                                   newFollowerState, mobilParams, cfParams);
+                                                  newFollowerState, mobilParams, cfParams);
         if (!approved)
             continue;
 
@@ -801,9 +830,13 @@ bool Car::TryAvoidObstacle()
         }
         sinceLastSample = 0.0f;
 
-        float headingDeg = DirectionToAngleDeg(point - prevPoint);
-        if (HybridAStar::IsColliding(point, headingDeg, obstacles, shape))
+        float headingRad = DirectionToAngleRad(point - prevPoint);
+        if (HybridAStar::IsColliding(point, headingRad, obstacles, shape))
         {
+            // TODO(회피 전 저수준 회피): fsm.txt는 완전정지+Hybrid A* 전에 먼저 가벼운 회피 경로
+            // (Reynolds Obstacle Avoidance 등)를 시도해서, 성공하면 정지하지 않고 그 경로로 계속
+            // 주행하라고 되어 있다. 지금은 그 단계가 없어서 바로 감속/정지 -> 서브상태:회피(Hybrid
+            // A*)로 간다.
             constexpr float AVOID_REPLAN_COOLDOWN = 1.5f; // Hybrid A* 실패 시 매 프레임 재시도하지 않도록.
             if (m_speed > 0.0f)
             {
@@ -812,9 +845,10 @@ bool Car::TryAvoidObstacle()
             }
             else if (m_avoidReplanCooldown <= 0.0f)
             {
-                m_avoidPending = true;
+                // 이미 완전히 멈춘 상태 확인됨 — Park의 m_parkPlanPending 같은 별도 대기 없이 바로 진입.
+                m_subMode = SubState::D_Avoid;
                 m_avoidReplanCooldown = AVOID_REPLAN_COOLDOWN;
-                DebugConsole::Log("Avoid pending: fully stopped, waiting to plan avoid route");
+                BeginAvoidPlan();
             }
             return true;
         }

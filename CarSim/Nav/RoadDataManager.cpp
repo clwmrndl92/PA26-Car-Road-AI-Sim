@@ -173,7 +173,7 @@ void RoadDataManager::BuildRoadData(const string &filePath)
         obstacle.center = Vec3(posJson[0].get<float>(), posJson[1].get<float>(), posJson[2].get<float>());
         obstacle.halfLength = sizeJson[0].get<float>() * 0.5f;
         obstacle.halfWidth = sizeJson[1].get<float>() * 0.5f;
-        obstacle.headingDeg = obstacleJson.value("rotation", 0.0f);
+        obstacle.headingRad = ToRadians(obstacleJson.value("rotation", 0.0f));
         m_obstacles.push_back(obstacle);
     }
 
