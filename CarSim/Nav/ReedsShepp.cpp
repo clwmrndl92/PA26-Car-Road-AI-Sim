@@ -585,6 +585,31 @@ namespace ReedsShepp
         return points;
     }
 
+    namespace
+    {
+        // 경로 전체의 마지막 leg 끝을 이 길이만큼 최종 헤딩 방향으로 연장한다.
+        constexpr float FINAL_ALIGN_EXTENSION_LENGTH = 3.0f;
+
+        size_t ExtendFinalLegForAlignment(std::vector<Vec3> &legPoints, float sampleSpacing)
+        {
+            size_t endIndex = legPoints.size() - 1;
+            if (legPoints.size() < 2)
+                return endIndex;
+
+            Vec3 tangent = legPoints[endIndex] - legPoints[endIndex - 1];
+            float tangentLength = tangent.Length();
+            if (tangentLength < 1e-6f)
+                return endIndex;
+            tangent = tangent * (1.0f / tangentLength);
+
+            int extraSamples = std::max(1, static_cast<int>(FINAL_ALIGN_EXTENSION_LENGTH / sampleSpacing));
+            for (int i = 1; i <= extraSamples; ++i)
+                legPoints.push_back(legPoints[endIndex] + tangent * (sampleSpacing * static_cast<float>(i)));
+
+            return endIndex;
+        }
+    }
+
     std::vector<Leg> SampleLegs(const Path &path, const Vec3 &start, float startAngleDeg,
                                 float turningRadius, float sampleSpacing)
     {
@@ -604,13 +629,15 @@ namespace ReedsShepp
         {
             if (element.gear != legGear)
             {
-                legs.push_back(Leg{std::move(legPoints), legGear});
+                size_t cuspEndIndex = legPoints.size() - 1;
+                legs.push_back(Leg{std::move(legPoints), legGear, cuspEndIndex});
                 legGear = element.gear;
                 legPoints = {Vec3(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z))};
             }
             AppendElementSamples(element, x, y, z, theta, turningRadius, sampleSpacing, legPoints);
         }
-        legs.push_back(Leg{std::move(legPoints), legGear});
+        size_t finalEndIndex = ExtendFinalLegForAlignment(legPoints, sampleSpacing);
+        legs.push_back(Leg{std::move(legPoints), legGear, finalEndIndex});
 
         return legs;
     }

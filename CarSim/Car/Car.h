@@ -41,6 +41,11 @@ public:
     void Accelerate(float desiredVelocity);
     void EmergBrake();
     void Steer(float desiredRadian, float steerRamp = 0.4f);
+    // Steer()의 선형 램프(일정 속도로 움직이다 도착하면 딱 멈춤)와 달리, 목표각에 가까워질수록
+    // 느려지는 지수 감쇠로 조향각을 붙인다. rate가 클수록 빨리 붙는다 (초당 감쇠 비율, 1/s).
+    // 저속 주차 매뉴버(RSFollowSegment)에서 Pure Pursuit 타겟이 흔들려도 조향이 부드럽게
+    // 반응하도록 쓴다.
+    void SteerEase(float desiredRadian, float rate);
     void ChangeGear(); // 속도가 낮을 때 전진/후진 기어 토글
     float GetSpeed() const { return m_speed; }
     float GetDeltaTime() const { return m_deltaTime; }
@@ -121,8 +126,9 @@ private:
     // 끝난 뒤 UpdatePark에서 호출한다. 못 들어가면 다음 빈 자리로 넘어가 leg 1부터 다시 시도한다.
     void BeginParkSpotLeg();
     // 현재 pose -> target까지 Hybrid A*(장애물 회피)로 계획해 실행시킨다. 경로를 못 찾으면 false.
-    // 입차의 두 leg(-> P, -> 스팟)가 공통으로 쓴다.
-    bool PlanParkLegTo(const Vec3 &targetPos, float targetAngleDeg);
+    // 입차의 두 leg(-> P, -> 스팟)가 공통으로 쓴다. exact=true면 Pure Pursuit 대신 정지-조향-이동-정지
+    // 방식의 정밀 실행을 쓴다 (짧은 최종 정렬 보정용).
+    bool PlanParkLegTo(const Vec3 &targetPos, float targetAngleDeg, bool exact = false);
     // m_parkSpot로의 입차 시작 계획(주차레인 있으면 leg 1 -> P, 없으면 -> 스팟). 시작했으면 true.
     bool PlanEnterForCurrentSpot();
     // 현재 m_parkSpot을 tried에 넣고 예약 해제한 뒤, 같은 Park의 다음 빈 자리를 예약한다. 남으면 true.
@@ -198,6 +204,10 @@ private:
     // 입차 2단계 상태: false면 leg 1(-> 스플라인점 P) 실행 중, P 도착 후 true로 바꾸고 leg 2(-> 스팟)를
     // 잇는다. 주차레인이 없어 바로 스팟으로 가는 경우엔 처음부터 true.
     bool m_parkGoingToSpot = false;
+    // m_parkGoingToSpot 진입 시 false로 초기화. 스팟까지의 leg가 pure pursuit로 다 끝난 뒤, 실제
+    // 도착 pose 기준으로 같은 목표까지 RS를 한 번 더 계획해(정지 상태 재계획이라 오차 없음) 최종
+    // 정렬 오차를 없앤다. 한 번 시도하면 true로 바뀌어 재귀적으로 반복하지 않는다.
+    bool m_parkAligned = false;
     // Park 시퀀스(입차 leg1/대기/leg2, 출차)가 진행 중인 동안 true. 다단계 주차에서 leg 사이에 컨트롤러가
     // 잠깐 finished가 돼도 DecideNextMode가 Park를 계속 유지하게 해, Drive/Stop으로 새는 걸 막는다.
     bool m_parkSequenceActive = false;

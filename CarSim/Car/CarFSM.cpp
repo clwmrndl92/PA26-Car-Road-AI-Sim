@@ -21,8 +21,37 @@ namespace
         std::vector<std::unique_ptr<VehicleSegment>> segments;
         std::vector<ReedsShepp::Leg> legs = ReedsShepp::SampleLegs(path, startPos, startAngleDeg, turningRadius);
         segments.reserve(legs.size());
-        for (ReedsShepp::Leg &leg : legs)
-            segments.push_back(std::make_unique<RSFollowSegment>(std::move(leg.points), leg.gear));
+        for (size_t i = 0; i < legs.size(); ++i)
+        {
+            ReedsShepp::Leg &leg = legs[i];
+            bool isFinalLeg = (i + 1 == legs.size());
+            segments.push_back(
+                std::make_unique<RSFollowSegment>(std::move(leg.points), leg.gear, leg.endIndex, isFinalLeg));
+        }
+        return segments;
+    }
+
+    // ReedsShepp::Path를 PathElement 하나당 RSExactSegment 하나로 그대로 변환한다 (정지-조향-이동-정지
+    // 방식의 정밀 실행 -- BuildParkSegments/Pure Pursuit와 달리 추종 오차가 없다. 짧은 최종 정렬
+    // 보정에만 쓴다). Left/Right 곡선은 RS 경로가 항상 최소 회전반경(=최대 조향각)으로만 도므로,
+    // 조향각은 element별 계산 없이 ±maxSteerAngle로 고정.
+    // 부호: Car::PurePursuit()는 목표가 carRight 방향(오른쪽)에 있으면 양수 조향각을 반환하고 그
+    // 방향으로 돌아 실제로 우회전한다(이미 검증된 동작) -- 즉 이 코드베이스에서는 양수 steerAngle =
+    // 우회전. ReedsShepp의 Left는 실제 좌회전(월드 (x,z) 평면에서 진행방향 벡터가 반시계로 회전)이므로
+    // steerAngle은 음수라야 한다.
+    std::vector<std::unique_ptr<VehicleSegment>> BuildExactSegments(const ReedsShepp::Path &path, float maxSteerAngle)
+    {
+        std::vector<std::unique_ptr<VehicleSegment>> segments;
+        segments.reserve(path.size());
+        for (const ReedsShepp::PathElement &element : path)
+        {
+            float steerAngle = 0.0f;
+            if (element.steering == ReedsShepp::Steering::Left)
+                steerAngle = -maxSteerAngle;
+            else if (element.steering == ReedsShepp::Steering::Right)
+                steerAngle = maxSteerAngle;
+            segments.push_back(std::make_unique<RSExactSegment>(element, steerAngle));
+        }
         return segments;
     }
 
@@ -295,6 +324,7 @@ bool Car::PlanEnterForCurrentSpot()
     if (PlanParkLegTo(spotTarget, spotAngleDeg))
     {
         m_parkGoingToSpot = true;
+        m_parkAligned = false;
         return true;
     }
     return false;
@@ -327,7 +357,9 @@ bool Car::BeginParkEnterOrRetry()
 }
 
 // 현재 pose -> target 까지 Hybrid A*(장애물 회피)로 계획해 실행시킨다. 못 찾으면 false.
-bool Car::PlanParkLegTo(const Vec3 &targetPos, float targetAngleDeg)
+// exact=true면 Pure Pursuit(BuildParkSegments) 대신 정지-조향-이동-정지 방식의 정밀 실행
+// (BuildExactSegments)을 쓴다 -- 짧은 최종 정렬 보정 등 추종 오차를 남기면 안 되는 경우에만 켠다.
+bool Car::PlanParkLegTo(const Vec3 &targetPos, float targetAngleDeg, bool exact)
 {
     Vec3 startPos = m_rigidbody.GetPosition();
     float startAngleDeg = DirectionToAngleDeg(GetForwardAxis());
@@ -340,7 +372,10 @@ bool Car::PlanParkLegTo(const Vec3 &targetPos, float targetAngleDeg)
     if (!foundPath)
         return false;
 
-    m_vehicleController.BeginPlan(BuildParkSegments(path, startPos, startAngleDeg, turningRadius));
+    if (exact)
+        m_vehicleController.BeginPlan(BuildExactSegments(path, m_maxSteerAngle));
+    else
+        m_vehicleController.BeginPlan(BuildParkSegments(path, startPos, startAngleDeg, turningRadius));
     RebuildParkDebugRender(path, startPos, startAngleDeg, turningRadius, targetPos, targetAngleDeg);
     return true;
 }
@@ -583,8 +618,29 @@ void Car::UpdatePark()
             return;
         }
         m_parkGoingToSpot = true;
+        m_parkAligned = false;
         BeginParkSpotLeg();
         return;
+    }
+
+    // 스팟까지의 leg가 pure pursuit로 끝났는데 아직 정렬 보정을 안 했으면, 실제로 도착한 pose
+    // 기준으로 같은 목표 pose까지 RS를 한 번 더 계획해 pure pursuit의 잔여 정렬 오차(주로 최종
+    // 헤딩)를 없앤다. exact=true라 정지-조향-이동-정지로 정밀하게 실행돼 이번엔 추종 오차가
+    // 남지 않는다. m_parkAligned를 먼저 true로 세워 재귀적으로 반복되지 않게 한다 -- 이미 목표에
+    // 정확히 있으면(혹은 장애물 등으로 경로를 못 찾으면) PlanParkLegTo가 false를 반환하고 그냥
+    // 완료 처리로 넘어간다.
+    if (!m_isExitingPark && m_parkSpot != nullptr && m_parkGoingToSpot && !m_parkAligned)
+    {
+        if (m_speed > 0.0f)
+        {
+            Accelerate(0.0f);
+            return;
+        }
+        m_parkAligned = true;
+        Vec3 spotTarget = m_parkSpot->position - m_parkSpot->direction.Normalized() * m_wheelbase;
+        float spotAngleDeg = DirectionToAngleDeg(m_parkSpot->direction);
+        if (PlanParkLegTo(spotTarget, spotAngleDeg, /*exact=*/true))
+            return;
     }
 
     // 입차 완료: m_parkSpot은 "지금 여기 주차 중"을 나타내도록 남겨두고 destLane/currentLane만

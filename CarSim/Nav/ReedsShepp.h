@@ -36,6 +36,11 @@ namespace ReedsShepp
     {
         std::vector<Vec3> points;
         Gear gear;
+        // points[endIndex]가 이 leg가 실제로 끝나는 지점(목표 pose). 경로 전체의 마지막 leg는
+        // endIndex 이후에 최종 헤딩 방향으로 연장된 점들이 추가로 붙어있을 수 있다 (Pure Pursuit이
+        // 도착 직전까지 최종 정렬 방향을 계속 조준하게 해 마지막 정렬 오차를 줄이기 위함 -- 실제
+        // 정지/완료 판정은 이 endIndex 기준으로 한다).
+        size_t endIndex = 0;
     };
 
     float GetPathLength(const Path &path);

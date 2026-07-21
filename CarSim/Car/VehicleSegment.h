@@ -27,7 +27,13 @@ public:
 class RSFollowSegment : public VehicleSegment
 {
 public:
-    RSFollowSegment(std::vector<Vec3> points, ReedsShepp::Gear gear);
+    // endIndex: points[endIndex]가 실제 목표 지점. 마지막 leg는 endIndex 이후에 최종 정렬용으로
+    // 연장된 점들이 더 있을 수 있는데(ReedsShepp::SampleLegs 참고), 그 연장분은 Pure Pursuit의
+    // 조준점 후보로만 쓰고 완료/제동 판정에는 쓰지 않는다.
+    // isFinalLeg: 전체 RS 경로의 마지막 leg(이후로 기어가 다시 안 바뀜)인지 -- 중간 leg는 경로
+    // 추종 정확도가 중요해 기존 선형 램프(Steer)를 그대로 쓰고, 마지막 leg만 Pure Pursuit 목표
+    // 조향각에 지수 감쇠(SteerEase)로 부드럽게 붙는다.
+    RSFollowSegment(std::vector<Vec3> points, ReedsShepp::Gear gear, size_t endIndex, bool isFinalLeg);
 
     void Tick(Car &car) override;
     bool IsDone() const override { return m_done; }
@@ -61,8 +67,40 @@ private:
 
     std::vector<Vec3> m_points;
     ReedsShepp::Gear m_gear;
+    size_t m_endIndex;
+    bool m_isFinalLeg;
     bool m_done = false;
     size_t m_lastIndex = 0;
+};
+
+// Reeds-Shepp 경로의 PathElement 하나를 오차 누적 없이 그대로 실행한다: 완전히 멈춘 채로 정확한
+// 조향각까지 돌리고(그 사이 GetRequiredSteerAngle을 통해 VehicleController가 차가 움직이지 못하게
+// 막아준다), 정렬되면 그 조향각을 고정한 채 정확한 거리(param)만큼만 가속-감속해서 이동한 뒤 다시
+// 완전히 멈춘다. RSFollowSegment(Pure Pursuit)와 달리 매 틱 목표점을 다시 겨냥하지 않으므로 추종
+// 오차가 누적되지 않는다 -- 대신 element마다 정지를 거쳐야 해서 느리다. 짧고 정확해야 하는 최종
+// 정렬 보정에만 쓴다.
+class RSExactSegment : public VehicleSegment
+{
+public:
+    RSExactSegment(ReedsShepp::PathElement element, float steerAngle);
+
+    void Tick(Car &car) override;
+    bool IsDone() const override { return m_done; }
+    ReedsShepp::Gear GetRequiredGear() const override { return m_element.gear; }
+    std::optional<float> GetRequiredSteerAngle() const override { return m_steerAngle; }
+
+private:
+    static constexpr float STEER_RAMP_RATE = 1.0f; // 조향 단계 램프 속도 (rad/s)
+    static constexpr float MANEUVER_SPEED = 1.5f;  // 정밀 보정용이라 일반 RS 매뉴버보다 더 저속
+    static constexpr float DECEL_ESTIMATE = 0.4f;  // 남은 거리 기준 감속 프로파일에 쓰는 가정 감속도 (m/s^2)
+    static constexpr float FINISH_DISTANCE = 0.05f; // 목표 거리 도달 판정 (m) -- 정밀 보정용이라 타이트하게
+    static constexpr float STOP_SPEED = 0.05f;       // 이 이하면 완전히 멈췄다고 보고 완료 처리 (m/s)
+
+    ReedsShepp::PathElement m_element;
+    float m_steerAngle;
+    bool m_isSteering = true; // true면 아직 조향 정렬 단계, false면 그 각을 고정한 채 이동 단계
+    float m_traveled = 0.0f;
+    bool m_done = false;
 };
 
 // 기존 정속주행(스플라인을 Pure Pursuit + 속도 프로파일로 추종)을 그대로 실행한다.

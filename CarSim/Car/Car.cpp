@@ -243,6 +243,13 @@ void Car::Steer(float radian, float steerRamp)
     else if (m_steerAngle < radian)
         m_steerAngle = std::min(m_steerAngle + maxDelta, radian);
 }
+
+void Car::SteerEase(float radian, float rate)
+{
+    float decay = std::exp(-rate * m_deltaTime);
+    m_steerAngle = radian + (m_steerAngle - radian) * decay;
+}
+
 void Car::ChangeGear()
 {
     constexpr float GEAR_SWITCH_SPEED_THRESHOLD = 2.0f / 3.6f; // 2 km/h
