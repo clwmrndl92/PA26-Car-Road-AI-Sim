@@ -517,10 +517,6 @@ void Car::BeginParkSpotLeg()
 #pragma region Stop
 void Car::UpdateStop()
 {
-    // 정지 조건(목적지 없음/도착)은 DecideNextMode가 이미 판단했으므로 여기선 감속/정지 동작만 한다.
-    m_destLane = nullptr;
-    SetCurrentLane(nullptr);
-
     // Park에서 넘어온 직후면 조향 원복 세그먼트가 아직 안 끝났을 수 있다.
     if (!m_vehicleController.IsFinished())
     {
@@ -533,6 +529,7 @@ void Car::UpdateStop()
         Accelerate(0.0f);
         return;
     }
+    SetDestination(m_RoadDataManager->GetNode(rand() % 26 + 1));
 }
 #pragma endregion
 
@@ -580,8 +577,7 @@ void Car::UpdateDrive()
 
         constexpr float STOPPED_REPLAN_COOLDOWN = 2.0f; // fsm.txt 서브상태:정차의 재탐색 대기(2초)
         m_avoidReplanCooldown = STOPPED_REPLAN_COOLDOWN;
-        m_subMode = SubState::D_Avoid;
-        // BeginAvoidPlan();
+        BeginAvoidPlan(); // 성공하면 subMode를 D_Avoid로, 실패하면 도로 D_Stop으로 남겨둔다.
         m_wantSegmentTick = true;
         return;
     }
@@ -593,8 +589,8 @@ void Car::UpdateDrive()
     // 생기면 여기서 검사해 SubState::D_WaitSignal로 전환하고, "초록불이면 Normal로 복귀"하는 분기를
     // 추가해야 한다 (SubState::D_WaitSignal 값 자체는 이미 선언돼 있음).
     TryLaneChange();
-    // if (TryAvoidObstacle())
-    //     return;
+    if (TryAvoidObstacle())
+        return;
     m_wantSegmentTick = true;
 }
 
@@ -735,6 +731,15 @@ void Car::DriveControl()
     constexpr float LOOKAHEAD_TIME = 1.0f; // 몇 초 앞을 볼지
     float lookaheadDistance = std::max(minSafeLookahead, m_speed * LOOKAHEAD_TIME);
     auto targetPosition = m_currentSpline.GetLookaheadPoint(position, lookaheadDistance);
+    // TryAvoidObstacle이 전방 코리도어에서 장애물을 감지하고 옆으로 피할 여지를 찾으면 여기서
+    // 조준점 자체를 옆으로 밀어(Reynolds식 측면 회피) 차선 추종을 유지한 채 슬쩍 피해가게 한다.
+    if (m_avoidLateralOffset != 0.0f)
+    {
+        float targetParam = m_currentSpline.GetSplinePosition(targetPosition);
+        Vec3 targetDir = m_currentSpline.GetDirectionAt(targetParam);
+        Vec3 targetNormal = Vec3(-targetDir.GetZ(), 0.0f, targetDir.GetX()).Normalized();
+        targetPosition = targetPosition + targetNormal * m_avoidLateralOffset;
+    }
     float targetSteer = PurePursuit(targetPosition);
     Steer(targetSteer);
 
@@ -746,6 +751,115 @@ void Car::DriveControl()
     DirectX::XMFLOAT3 targetMarkerPos = ToXMFLOAT3(targetPosition);
     targetMarkerPos.y = 0.2f;
     m_targetMarker.GetTransform().SetPosition(targetMarkerPos);
+}
+
+// 전방 코리도어(현재 스플라인을 따라가는, 차량 형상 폭의 가상 박스캐스트)에 장애물이 있는지 본다.
+// 없으면 그냥 일반주행 유지(false). 있으면 옆으로 살짝 피해서(Reynolds식 측면 오프셋) 여전히 갈 수
+// 있는지 찾아보고, 있으면 m_avoidLateralOffset만 세팅한 채 일반주행 유지(false) — DriveControl이
+// 다음 틱부터 그 오프셋만큼 조준점을 밀어서 슬쩍 피해간다. 옆으로도 못 피하면 하이브리드 A* 회피
+// 기동으로 넘긴다(BeginAvoidPlan) — 성공/실패 어느 쪽이든 이번 프레임의 기본 주행 틱은 건너뛴다(true).
+bool Car::TryAvoidObstacle()
+{
+    const std::vector<HybridAStar::Obstacle> &obstacles = m_RoadDataManager->GetObstacles();
+    HybridAStar::VehicleShape shape = BuildVehicleShape();
+    if (obstacles.empty())
+    {
+        m_avoidLateralOffset = 0.0f;
+        return false;
+    }
+
+    Vec3 position = m_rigidbody.GetPosition();
+
+    // lateralOffset만큼 옆으로 민 코리도어를 따라 샘플을 찍어 하나라도 장애물과 겹치면 false.
+    auto sweepClear = [&](float lateralOffset)
+    {
+        for (float d = 0.0f; d <= AVOID_DETECT_DISTANCE; d += AVOID_SAMPLE_STEP)
+        {
+            Vec3 samplePos = m_currentSpline.GetLookaheadPoint(position, d);
+            float sampleParam = m_currentSpline.GetSplinePosition(samplePos);
+            Vec3 sampleDir = m_currentSpline.GetDirectionAt(sampleParam);
+            Vec3 sampleNormal = Vec3(-sampleDir.GetZ(), 0.0f, sampleDir.GetX()).Normalized();
+            Vec3 testPos = samplePos + sampleNormal * lateralOffset;
+            if (HybridAStar::IsColliding(testPos, DirectionToAngleRad(sampleDir), obstacles, shape))
+                return false;
+        }
+        return true;
+    };
+
+    if (sweepClear(0.0f))
+    {
+        m_avoidLateralOffset = 0.0f;
+        return false; // 전방 코리도어 깨끗함
+    }
+
+    // 코리도어를 막는 장애물들 중 감지거리 안에 있는 것들의 스플라인 기준 좌우 위치(부호 있는 옆
+    // 오프셋)를 평균내, 장애물이 몰려있는 반대쪽을 우선 피할 방향으로 삼는다(순수 트라이얼이 아니라
+    // 장애물 위치에 반응한다는 점에서 Reynolds 회피의 "반발" 취지를 살린 것).
+    float biasSum = 0.0f;
+    int biasCount = 0;
+    for (const HybridAStar::Obstacle &obstacle : obstacles)
+    {
+        float obsParam = m_currentSpline.GetSplinePosition(obstacle.center);
+        Vec3 obsSplinePos = m_currentSpline.GetPositionAt(obsParam);
+        float obsForwardDist = (obsSplinePos - position).Length();
+        if (obsForwardDist > AVOID_DETECT_DISTANCE + obstacle.halfLength)
+            continue;
+        Vec3 obsDir = m_currentSpline.GetDirectionAt(obsParam);
+        Vec3 obsNormal = Vec3(-obsDir.GetZ(), 0.0f, obsDir.GetX()).Normalized();
+        float lateral = (obstacle.center - obsSplinePos).Dot(obsNormal);
+        biasSum += lateral;
+        ++biasCount;
+    }
+    float preferredSign = (biasCount > 0 && biasSum != 0.0f) ? -std::copysign(1.0f, biasSum) : 1.0f;
+
+    constexpr float NUDGE_STEP = 0.5f;
+    constexpr float MAX_NUDGE = 2.5f; // 차선 폭 절반 남짓 -- 옆 차선까지 크게 침범하지 않는 한도
+    for (float sign : {preferredSign, -preferredSign})
+    {
+        for (float magnitude = NUDGE_STEP; magnitude <= MAX_NUDGE; magnitude += NUDGE_STEP)
+        {
+            if (sweepClear(sign * magnitude))
+            {
+                m_avoidLateralOffset = sign * magnitude;
+                return false; // 옆으로 피해서 그대로 일반주행 유지
+            }
+        }
+    }
+
+    // 옆으로도 못 피함 -> 하이브리드 A* 회피 기동으로 전환.
+    m_avoidLateralOffset = 0.0f;
+    BeginAvoidPlan();
+    return true;
+}
+
+// 현재 pose에서, 현재 차선을 따라 장애물을 지나칠 만큼 앞선 지점까지 Hybrid A*로 회피 경로를 짜서
+// 실행시킨다(RS pure pursuit로 천천히 주행 — BuildParkSegments 재사용). 성공하면 subMode를 D_Avoid로
+// 세팅, 실패하면 D_Stop으로 세팅해 UpdateDrive의 쿨다운 재탐색 루프가 이어받게 한다.
+void Car::BeginAvoidPlan()
+{
+    Vec3 startPos = m_rigidbody.GetPosition();
+    float startAngleRad = DirectionToAngleRad(GetForwardAxis());
+    HybridAStar::VehicleShape shape = BuildVehicleShape();
+    const std::vector<HybridAStar::Obstacle> &obstacles = m_RoadDataManager->GetObstacles();
+
+    Vec3 goalPos = m_currentSpline.GetLookaheadPoint(startPos, AVOID_DETECT_DISTANCE);
+    float goalParam = m_currentSpline.GetSplinePosition(goalPos);
+    float goalAngleRad = DirectionToAngleRad(m_currentSpline.GetDirectionAt(goalParam));
+
+    bool foundPath = false;
+    ReedsShepp::Path path =
+        HybridAStar::FindPath(startPos, startAngleRad, goalPos, goalAngleRad, obstacles, shape, foundPath);
+    if (!foundPath)
+    {
+        DebugConsole::Log("BeginAvoidPlan: HybridA* failed to find an avoid path, staying in Stop substate");
+        m_subMode = SubState::D_Stop;
+        return;
+    }
+
+    float turningRadius = m_wheelbase / tanf(m_maxSteerAngle);
+    m_subMode = SubState::D_Avoid;
+    m_vehicleController.BeginPlan(BuildParkSegments(path, startPos, startAngleRad, turningRadius));
+    RebuildParkDebugRender(path, startPos, startAngleRad, turningRadius, goalPos, goalAngleRad);
 }
 
 #pragma endregion

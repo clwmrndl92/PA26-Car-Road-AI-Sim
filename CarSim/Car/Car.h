@@ -218,6 +218,9 @@ private:
     bool m_parkPlanPending = false;
 
     float m_avoidReplanCooldown = 0.0f;
+    float m_avoidLateralOffset = 0.0f; // TryAvoidObstacle이 계산한 회피용 좌우 오프셋(+우/-좌, m). DriveControl이 조준점에 더한다.
+    static constexpr float AVOID_DETECT_DISTANCE = 20.0f; // 박스캐스트 코리도어 길이 (전방 감지 거리)
+    static constexpr float AVOID_SAMPLE_STEP = 2.0f;      // 코리도어를 따라 박스를 검사하는 간격
     vector<LaneStep> m_path;
     size_t m_pathIndex = 0;
     static constexpr float LOOK_PROFILE_TIME = 5.0f;
