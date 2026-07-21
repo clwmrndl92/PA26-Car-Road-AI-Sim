@@ -26,7 +26,7 @@ public:
     void Init(const string &filePath);
     void BuildRoadData(const string &filePath);
 
-    shared_ptr<Lane> GetClosestLaneStart(const Vec3 &position) const;
+    shared_ptr<Lane> GetClosestLane(const Vec3 &position) const;
     shared_ptr<Lane> GetClosestLaneEnd(const Vec3 &position) const; // 끝점이 목표 지점에 가장 가까운 레인
     shared_ptr<Lane> GetClosestParkLane(const Vec3 &position, int parkId) const;
     vector<LaneStep> FindPath(const shared_ptr<Lane> &startLane, const shared_ptr<Lane> &destLane) const;

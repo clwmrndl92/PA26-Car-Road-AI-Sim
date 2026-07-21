@@ -208,7 +208,7 @@ void RoadDataManager::BuildSuccessors(const vector<shared_ptr<Lane>> &lanes)
     }
 }
 
-shared_ptr<Lane> RoadDataManager::GetClosestLaneStart(const Vec3 &position) const
+shared_ptr<Lane> RoadDataManager::GetClosestLane(const Vec3 &position) const
 {
     shared_ptr<Lane> closestLane;
     float closestDistance = numeric_limits<float>::max();
@@ -293,7 +293,6 @@ vector<LaneStep> RoadDataManager::FindPath(const shared_ptr<Lane> &startLane, co
     {
         shared_ptr<Lane> current = openList.top().second;
         openList.pop();
-        DebugConsole::Log("Find path " + ToString(current->GetId()));
 
         if (visited.count(current->GetId()))
             continue;

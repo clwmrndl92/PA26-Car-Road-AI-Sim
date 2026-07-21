@@ -80,7 +80,7 @@ void Car::UpdateFindPath()
             position = parkNode->position;
     }
 
-    SetCurrentLane(m_RoadDataManager->GetClosestLaneStart(position));
+    SetCurrentLane(m_RoadDataManager->GetClosestLane(position));
     TryFindPathAndSetLane();
 }
 
@@ -331,19 +331,27 @@ void Car::BeginParkPlan()
     // 출차
     if (m_subMode == SubState::P_EXIT)
     {
-        Vec3 lookupPos = startPos;
-        auto parkNode = m_RoadDataManager->GetNode(m_parkNodeId);
-        if (parkNode != nullptr)
-            lookupPos = parkNode->position;
-
-        shared_ptr<Lane> closestLane = m_RoadDataManager->GetClosestLaneStart(lookupPos);
+        // 이 Park에 전용 주차레인망이 있으면(주차장) 그 레인 위로, 없으면(길가 주차 등 일반 출차)
+        // 메인 레인 위로 나간다. 둘 다 차의 실제 현재 위치(startPos) 기준으로 가장 가까운 레인을 쓴다
+        // — Park 허브 노드 위치를 기준으로 찾으면 그 노드에서 먼 자리일수록 엉뚱한 레인이 걸린다.
+        const std::vector<shared_ptr<Lane>> *parkingLanes =
+            (m_parkNodeId >= 0) ? m_RoadDataManager->GetParkingLanes(m_parkNodeId) : nullptr;
+        shared_ptr<Lane> closestLane = (parkingLanes != nullptr && !parkingLanes->empty())
+                                            ? m_RoadDataManager->GetClosestParkLane(startPos, m_parkNodeId)
+                                            : m_RoadDataManager->GetClosestLane(startPos);
+        if (closestLane == nullptr)
+        {
+            DebugConsole::Log("BeginParkPlan: no lane found to exit onto, abandoning this park attempt");
+            m_destLane = nullptr;
+            m_subMode = SubState::None;
+            return;
+        }
 
         float splinePos = closestLane->GetSpline().GetSplinePosition(startPos);
-        Vec3 closestPos = closestLane->GetSpline().GetPositionAt(splinePos);
         Vec3 closestDir = closestLane->GetSpline().GetDirectionAt(splinePos);
         SetCurrentLane(closestLane);
 
-        // 이미 레인 진행 방향과 90도 이내로 정렬돼 있으면 RS 출차 매뉴버 없이 바로 주행으로 넘어간다.
+        // 이미 레인 진행 방향과 90도 이내로 정렬돼 있으면 RS 출차 매뉴버 없이 바로 주행(-> MOBIL 합류)으로 넘어간다.
         constexpr float EXIT_HEADING_ALIGN_ANGLE = ToRadians(90.0f);
         float headingDot = std::clamp(GetForwardAxis().Dot(closestDir), -1.0f, 1.0f);
         if (std::acos(headingDot) <= EXIT_HEADING_ALIGN_ANGLE)
@@ -352,17 +360,13 @@ void Car::BeginParkPlan()
             return;
         }
 
-        // 출차: 레인 접선에 수직(90도)으로 진입점을 바라보는 위치를 target으로 잡는다.
-        // startPos가 있는 쪽의 법선 방향으로, startPos만큼 떨어져 있되 최소 6만큼은 떨어뜨린다.
-        constexpr float MIN_EXIT_NORMAL_DISTANCE = 6.0f;
-        Vec3 normalDir = Vec3(-closestDir.GetZ(), 0.0f, closestDir.GetX()).Normalized();
-        float lateralOffset = (startPos - closestPos).Dot(normalDir);
-        if (lateralOffset < 0.0f)
-            normalDir = normalDir * -1.0f;
-        float distance = std::max(std::fabs(lateralOffset), MIN_EXIT_NORMAL_DISTANCE);
-
-        Vec3 targetPos = closestPos + normalDir * distance;
-        float targetAngleRad = DirectionToAngleRad(closestPos - targetPos);
+        // 출차 목표: 레인 위, 현재 위치에서 조금 앞선 지점(lookahead)을 target으로 삼고 그 지점의 레인
+        // 진행방향을 목표 heading으로 삼는다 — RS로 레인 위에 정렬해서 올라서면 이후 Drive의 일반 주행/
+        // MOBIL이 알아서 합류를 이어받는다.
+        constexpr float EXIT_LEAD_DISTANCE = 6.0f;
+        Vec3 targetPos = closestLane->GetSpline().GetLookaheadPoint(startPos, EXIT_LEAD_DISTANCE);
+        float targetSplinePos = closestLane->GetSpline().GetSplinePosition(targetPos);
+        float targetAngleRad = DirectionToAngleRad(closestLane->GetSpline().GetDirectionAt(targetSplinePos));
 
         bool foundPath = false;
         ReedsShepp::Path path = HybridAStar::FindPath(startPos, startAngleRad, targetPos, targetAngleRad, obstacles, shape, foundPath);
@@ -420,7 +424,8 @@ bool Car::PlanEnterForCurrentSpot()
 
         Vec3 pPos = bestSpline->GetLookaheadPoint(m_parkSpot->position, P_LEAD_DISTANCE);
         float pParam = bestSpline->GetSplinePosition(pPos);
-        float pAngleRad = DirectionToAngleRad(bestSpline->GetDirectionAt(pParam));
+        // 주차레인의 방향은 출차 기준으로 잡아뒀으므로, 입차 시 P에서의 목표 heading은 그 반대다.
+        float pAngleRad = DirectionToAngleRad(bestSpline->GetDirectionAt(pParam) * -1.0f);
 
         if (PlanParkLegTo(pPos, pAngleRad))
         {
