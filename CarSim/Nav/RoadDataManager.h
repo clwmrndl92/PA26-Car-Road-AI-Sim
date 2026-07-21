@@ -26,15 +26,14 @@ public:
     void Init(const string &filePath);
     void BuildRoadData(const string &filePath);
 
-    // 현재 위치가 올라가 있는(가장 가까운) 레인
-    shared_ptr<Lane> GetClosestLane(const Vec3 &position) const;
-    // 끝점이 목표 지점에 가장 가까운 레인 (목적지 = 그 레인 끝에 도착)
-    shared_ptr<Lane> GetClosestLaneEnd(const Vec3 &position) const;
+    shared_ptr<Lane> GetClosestLaneStart(const Vec3 &position) const;
+    shared_ptr<Lane> GetClosestLaneEnd(const Vec3 &position) const; // 끝점이 목표 지점에 가장 가까운 레인
+    shared_ptr<Lane> GetClosestParkLane(const Vec3 &position, int parkId) const;
     vector<LaneStep> FindPath(const shared_ptr<Lane> &startLane, const shared_ptr<Lane> &destLane) const;
 
 public:
     const vector<shared_ptr<Lane>> &GetLanes() const { return m_lanes; };
-    const vector<shared_ptr<RoadNode>> &GetNodes() const { return m_nodes; };
+    const unordered_map<int, shared_ptr<RoadNode>> &GetNodes() const { return m_nodes; };
     const shared_ptr<RoadNode> GetNode(int nodeId) const;
     // data.json의 "obstacles"(임시 데이터: 실제 장애물 인식 파이프라인이 들어오기 전까지 손으로 채운
     // 사각형 목록)를 그대로 반환한다. 실시간 회피의 코리도어 검사 등에서 쓴다.
@@ -64,7 +63,7 @@ private:
 private:
     vector<shared_ptr<Lane>> m_lanes;
     vector<shared_ptr<Road>> m_roads;
-    vector<shared_ptr<RoadNode>> m_nodes;
+    unordered_map<int, shared_ptr<RoadNode>> m_nodes; // node id -> RoadNode
     vector<HybridAStar::Obstacle> m_obstacles;
     unordered_set<int> m_reservedParkSpotIds; // 예약된(다른 차가 목표로 잡은) ParkSpot 노드 id
     // Park 노드 id -> 그 주차장의 스플라인 레인들. 메인 라우팅(m_lanes)과 분리 보관.

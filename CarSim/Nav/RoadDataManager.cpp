@@ -96,7 +96,6 @@ void RoadDataManager::BuildRoadData(const string &filePath)
         }
     }
 
-    map<int, shared_ptr<RoadNode>> nodeById;
     for (const nlohmann::json &nodeJson : root.value("nodes", nlohmann::json::array()))
     {
         int id = nodeJson.value("id", 0);
@@ -123,22 +122,21 @@ void RoadDataManager::BuildRoadData(const string &filePath)
         node->direction = direction;
         node->nodeType = nodeType;
 
-        m_nodes.push_back(node);
-        nodeById[id] = node;
+        m_nodes[id] = node;
     }
 
     // children(optional): 전방 참조가 있을 수 있어(예: Park보다 ParkSpot이 뒤에 나옴) 모든 노드
     // 생성 후 해석한다 (레인의 left/right와 같은 이유).
     for (const nlohmann::json &nodeJson : root.value("nodes", nlohmann::json::array()))
     {
-        auto nodeIt = nodeById.find(nodeJson.value("id", 0));
-        if (nodeIt == nodeById.end())
+        auto nodeIt = m_nodes.find(nodeJson.value("id", 0));
+        if (nodeIt == m_nodes.end())
             continue;
 
         for (const nlohmann::json &childIdJson : nodeJson.value("child", nlohmann::json::array()))
         {
-            auto childIt = nodeById.find(childIdJson.get<int>());
-            if (childIt != nodeById.end())
+            auto childIt = m_nodes.find(childIdJson.get<int>());
+            if (childIt != m_nodes.end())
                 nodeIt->second->children.push_back(childIt->second);
         }
     }
@@ -210,20 +208,39 @@ void RoadDataManager::BuildSuccessors(const vector<shared_ptr<Lane>> &lanes)
     }
 }
 
-shared_ptr<Lane> RoadDataManager::GetClosestLane(const Vec3 &position) const
+shared_ptr<Lane> RoadDataManager::GetClosestLaneStart(const Vec3 &position) const
 {
     shared_ptr<Lane> closestLane;
     float closestDistance = numeric_limits<float>::max();
     for (const shared_ptr<Lane> &lane : m_lanes)
     {
-        for (const Vec3 &point : lane->GetSpline().GetSplinePoints())
+        float distance = (lane->GetStartPoint() - position).Length();
+        if (distance < closestDistance)
         {
-            float distance = (point - position).Length();
-            if (distance < closestDistance)
-            {
-                closestDistance = distance;
-                closestLane = lane;
-            }
+            closestDistance = distance;
+            closestLane = lane;
+        }
+    }
+    return closestLane;
+}
+shared_ptr<Lane> RoadDataManager::GetClosestParkLane(const Vec3 &position, int parkId) const
+{
+    shared_ptr<Lane> closestLane;
+    float closestDistance = numeric_limits<float>::max();
+
+    auto it = m_parkingLanes.find(parkId);
+    if (it == m_parkingLanes.end())
+        return closestLane;
+
+    for (const shared_ptr<Lane> &lane : it->second)
+    {
+        float distanceEnd = (lane->GetEndPoint() - position).Length();
+        float distanceStart = (lane->GetStartPoint() - position).Length();
+        float distance = min(distanceEnd, distanceStart);
+        if (distance < closestDistance)
+        {
+            closestDistance = distance;
+            closestLane = lane;
         }
     }
     return closestLane;
@@ -322,12 +339,8 @@ vector<LaneStep> RoadDataManager::FindPath(const shared_ptr<Lane> &startLane, co
 
 const shared_ptr<RoadNode> RoadDataManager::GetNode(int nodeId) const
 {
-    for (const shared_ptr<RoadNode> &node : m_nodes)
-    {
-        if (node->id == nodeId)
-            return node;
-    }
-    return nullptr;
+    auto it = m_nodes.find(nodeId);
+    return it != m_nodes.end() ? it->second : nullptr;
 }
 
 shared_ptr<RoadNode> RoadDataManager::TryReserveParkSpot(int parkNodeId, const unordered_set<int> &excludeIds)

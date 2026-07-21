@@ -61,7 +61,6 @@ void Car::UpdateAI(float dt)
     // GameApp::UpdateScene), so nothing here ever observes the physics dt instead of this one.
     m_deltaTime = dt;
     m_currentTime += dt;
-    UpdateFindPath(); // Update Mode 보다 먼저 실행돼야함
     UpdateMode();
     // 각 UpdateXxx()가 이번 프레임에 세그먼트를 진행시킬지만 정한다 -- 실제 Tick()은 Update()에서.
     m_wantSegmentTick = false;
@@ -277,64 +276,7 @@ void Car::SetCurrentLane(const shared_ptr<Lane> &lane)
     m_currentLane = lane;
     if (m_currentLane != nullptr)
         m_currentLane->RegisterCar(this);
-}
 
-void Car::MergeOntoLane(const shared_ptr<Lane> &lane, const Vec3 &position)
-{
-    SetCurrentLane(lane);
-    m_currentSpline = lane->GetSpline();
-
-    // 현재 위치에서 레인 위 전방 지점까지 짧은 연결 스플라인을 만들어 앞에 이어 붙여 부드럽게 합류한다.
-    float minRadius = powf(m_speed / CURVE_SPEED_COEFF, 2);
-    float width = m_RoadDataManager->ROAD_WIDTH;
-    float insideRoot = (4 * minRadius * width) - (width * width);
-    float L = insideRoot > 0 ? sqrt(insideRoot) : 10.0f;
-
-    // L이 현재 레인 안에서 안 나오면(레인이 짧으면) 경로상 다음 레인까지 봐서 병합 목표 지점/방향을
-    // 잡는다 (ScanRoadSpeedConstraints의 레인-워크와 같은 패턴).
-    const Spline *spline = &m_currentSpline;
-    size_t pathIndex = m_pathIndex;
-    Vec3 segmentStart = position;
-    float remaining = L;
-    Vec3 mergePoint = position;
-    Vec3 mergeDirection = GetForwardAxis();
-
-    while (true)
-    {
-        float startT = spline->GetSplinePosition(segmentStart);
-        float splineLength = spline->GetLength();
-        float distanceToEnd = splineLength > 0.0f ? (1.0f - startT) * splineLength : 0.0f;
-
-        if (splineLength <= 0.0f || remaining <= distanceToEnd)
-        {
-            float t = splineLength > 0.0f ? std::clamp(startT + remaining / splineLength, 0.0f, 1.0f) : startT;
-            mergePoint = spline->GetPositionAt(t);
-            mergeDirection = spline->GetDirectionAt(t);
-            break;
-        }
-
-        remaining -= distanceToEnd;
-        shared_ptr<Lane> nextLane = (pathIndex + 1 < m_path.size()) ? m_path[pathIndex + 1].lane : nullptr;
-        if (!nextLane)
-        {
-            mergePoint = spline->GetPositionAt(1.0f);
-            mergeDirection = spline->GetDirectionAt(1.0f);
-            break;
-        }
-
-        spline = &nextLane->GetSpline();
-        segmentStart = nextLane->GetStartPoint();
-        ++pathIndex;
-    }
-
-    float mergeT = m_currentSpline.GetSplinePosition(mergePoint);
-
-    // phantom은 방향만 주면 된다 — 접선 세기(길이)는 Spline이 꺾임 각에 따라 tan로 자동 조정한다.
-    Spline connector({position - GetForwardAxis(),
-                      position,
-                      mergePoint,
-                      mergePoint + mergeDirection});
-    m_currentSpline.AddSplinePointsFront(connector.GetSplinePoints(), mergeT);
     RebuildSplineRender();
 }
 

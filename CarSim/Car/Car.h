@@ -93,6 +93,8 @@ private:
 
     enum class SubState
     {
+        None,
+
         // Drive
         D_Normal,     // 일반 주행
         D_Avoid,      // 회피 하이브리드 A*
@@ -100,8 +102,10 @@ private:
         D_WaitSignal, // 신호대기
 
         // Park
-        P_IN, // 출차
-        P_OUT // 주차
+        P_EXIT,        // 출차
+        P_ENTER_LEG1,  // 입차: 스팟 앞 스플라인 점(P)까지
+        P_ENTER_LEG2,  // 입차: P -> 스팟
+        P_ENTER_ALIGN, // 입차: 최종 정밀 정렬
     };
     const char *Car::SubStateToString(SubState subMode) const
     {
@@ -115,17 +119,21 @@ private:
             return "Stop";
         case SubState::D_WaitSignal:
             return "WaitSignal";
-        case SubState::P_IN:
-            return "ParkIn";
-        case SubState::P_OUT:
-            return "ParkOut";
+        case SubState::P_EXIT:
+            return "ParkExit";
+        case SubState::P_ENTER_LEG1:
+            return "ParkEnterLeg1";
+        case SubState::P_ENTER_LEG2:
+            return "ParkEnterLeg2";
+        case SubState::P_ENTER_ALIGN:
+            return "ParkEnterAlign";
         }
         return "?";
     }
     void UpdateMode();
     State DecideNextMode(const char **reason) const;
-    void OnModeEnter(State mode, State previous);
-    void OnModeExit(State mode);
+    void OnModeEnter(State prev);
+    void OnModeExit(State next); // next: 이번에 새로 전환될 상태(m_mode는 아직 지금 나가는 상태 그대로)
 
     void UpdateStop();
     void UpdatePark();
@@ -145,11 +153,9 @@ private:
     HybridAStar::VehicleShape BuildVehicleShape() const;
 
     void UpdateFindPath();
-    void EnterCurrentLane();
+    bool TryFindPathAndSetLane();
 
     void SetCurrentLane(const shared_ptr<Lane> &lane); // m_currentLane을 직접 대입하지 않고 항상 이 함수를 거친다.
-
-    void MergeOntoLane(const shared_ptr<Lane> &lane, const Vec3 &position);
 
     struct RoadSpeedSample
     {
@@ -206,9 +212,6 @@ private:
 
     shared_ptr<RoadNode> m_parkSpot;        // 예약된 목표 주차칸(있는 동안은 "이 자리에 주차 중/주차 예정")
     shared_ptr<RoadNode> m_pendingParkNode; // 예약 전, 도착하면 그때 주차칸을 예약할 목표 Park 노드
-    bool m_isExitingPark = false;           // 이번 Park 계획이 출차(주차칸->레인)인지, 입차(레인->주차칸)인지
-    bool m_parkGoingToSpot = false;
-    bool m_parkAligned = false;
     bool m_parkSequenceActive = false;
     int m_parkNodeId = -1;                 // 이번 입차의 대상 Park 노드 id (다른 빈 자리 재예약에 씀)
     unordered_set<int> m_triedParkSpotIds; // 이번 입차에서 경로탐색이 실패해 이미 시도해본 ParkSpot id들

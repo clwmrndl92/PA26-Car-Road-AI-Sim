@@ -295,7 +295,7 @@ void CarSim::InitRoadRenderer()
 
     m_RoadRenders.clear();
 
-    for (const auto &node : m_RoadDataManager.GetNodes())
+    for (const auto &[id, node] : m_RoadDataManager.GetNodes())
     {
         Model *pMarker = m_ModelManager.CreateFromGeometry("node_marker" + std::to_string(node->id), Geometry::CreateSphere(NODE_MARKER_RADIUS));
         pMarker->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f));
