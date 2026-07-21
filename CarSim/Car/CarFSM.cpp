@@ -371,6 +371,7 @@ void Car::BeginParkPlan()
             // 출차 실패는 이미 차가 그 자리를 점유 중이므로 예약을 풀지 않는다.
             DebugConsole::Log("BeginParkPlan: HybridA* failed to find an exit path, abandoning this park attempt");
             m_destLane = nullptr;
+            m_subMode = SubState::None;
             return;
         }
         m_vehicleController.BeginPlan(BuildParkSegments(path, startPos, startAngleRad, turningRadius));

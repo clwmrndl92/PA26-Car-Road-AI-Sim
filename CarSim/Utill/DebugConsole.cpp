@@ -1,5 +1,6 @@
 #include "DebugConsole.h"
 #include <imgui.h>
+#include <cstdio>
 
 DebugConsole &DebugConsole::Get()
 {
@@ -7,8 +8,25 @@ DebugConsole &DebugConsole::Get()
     return instance;
 }
 
+DebugConsole::~DebugConsole()
+{
+    if (m_logFile != nullptr)
+        std::fclose(m_logFile);
+}
+
 void DebugConsole::LogImpl(const std::string &line)
 {
+    // 크래시해도 남게 디스크 파일에도 적는다. 매번 flush해서 강제 종료돼도 이미 쓴 줄은 남는다.
+    if (m_logFile == nullptr)
+        m_logFile = std::fopen("debug_log.txt", "w");
+
+    if (m_logFile != nullptr)
+    {
+        std::fputs(line.c_str(), m_logFile);
+        std::fputc('\n', m_logFile);
+        std::fflush(m_logFile);
+    }
+
     m_lines.push_back(line);
     if (m_lines.size() > MAX_LINES)
         m_lines.pop_front();
