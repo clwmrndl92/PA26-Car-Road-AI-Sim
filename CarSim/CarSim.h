@@ -28,6 +28,7 @@ private:
     void FocusOnObject(const std::shared_ptr<Car> &obj);
     void InitRoadRenderer();
     void InitMarkingRenderer();
+    void SpawnCar(CarType type); // parkSpot을 제외한 노드 중 랜덤 스폰 위치/방향/목적지로 차를 생성
 
 private:
     RoadDataManager m_RoadDataManager;

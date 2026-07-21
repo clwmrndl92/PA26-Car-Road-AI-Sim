@@ -27,6 +27,7 @@ enum class CarType
 {
     Car0,
     Car1,
+    Count,
 };
 
 const CarSpec &GetCarSpec(CarType type);

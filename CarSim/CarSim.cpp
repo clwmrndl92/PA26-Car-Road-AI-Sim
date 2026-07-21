@@ -6,6 +6,7 @@
 #include "Utill/DebugConsole.h"
 #include "Nav/Spline.h"
 #include <cmath>
+#include <cstdlib>
 
 using namespace DirectX;
 
@@ -81,6 +82,34 @@ bool CarSim::InitResource()
     }
 
     return true;
+}
+
+void CarSim::SpawnCar(CarType type)
+{
+    std::vector<std::shared_ptr<RoadNode>> candidates;
+    for (const auto &[id, node] : m_RoadDataManager.GetNodes())
+    {
+        if (node->nodeType != RoadNodeType::ParkSpot)
+            candidates.push_back(node);
+    }
+    if (candidates.empty())
+        return;
+
+    const auto &spawnNode = candidates[rand() % candidates.size()];
+    const auto &destNode = candidates[rand() % candidates.size()];
+
+    float yaw = (static_cast<float>(rand()) / static_cast<float>(RAND_MAX)) * XM_2PI;
+    Vec3 direction(std::sin(yaw), 0.0f, std::cos(yaw));
+
+    auto car = std::make_shared<Car>();
+    car->Init(GetCarSpec(type), &m_RoadDataManager,
+              JPH::Vec3(spawnNode->position.GetX(), 0.1f, spawnNode->position.GetZ()));
+    car->SetDrawCollider(true);
+    car->SetRotation(direction);
+    car->SetDestination(destNode);
+
+    m_GameObjects.push_back(car);
+    m_CarObjects.push_back(car);
 }
 
 void CarSim::FocusOnObject(const std::shared_ptr<Car> &obj)
@@ -212,6 +241,16 @@ void CarSim::UpdateUI(float dt)
         else
             ImGui::Text("Picked: %s", m_PickedObjectName.c_str());
 
+        ImGui::Separator();
+        ImGui::Text("Spawn Car");
+        for (int i = 0; i < static_cast<int>(CarType::Count); ++i)
+        {
+            CarType type = static_cast<CarType>(i);
+            ImGui::Text("%s", GetCarSpec(type).name);
+            ImGui::SameLine();
+            if (ImGui::Button(("Spawn##spawnCar" + std::to_string(i)).c_str()))
+                SpawnCar(type);
+        }
         ImGui::Separator();
         for (auto &obj : m_CarObjects)
         {

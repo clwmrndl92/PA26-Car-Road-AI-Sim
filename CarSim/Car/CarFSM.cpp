@@ -529,7 +529,17 @@ void Car::UpdateStop()
         Accelerate(0.0f);
         return;
     }
-    SetDestination(m_RoadDataManager->GetNode(rand() % 26 + 1));
+
+    std::vector<std::shared_ptr<RoadNode>> candidates;
+    for (const auto &[id, node] : m_RoadDataManager->GetNodes())
+    {
+        if (node->nodeType != RoadNodeType::ParkSpot)
+            candidates.push_back(node);
+    }
+    if (candidates.empty())
+        return;
+
+    SetDestination(candidates[rand() % candidates.size()]);
 }
 #pragma endregion
 
