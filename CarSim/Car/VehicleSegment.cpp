@@ -41,8 +41,8 @@ void RSFollowSegment::Tick(Car &car)
         return;
     }
 
-    Vec3 position = car.GetRigidbodyPosition();
-    size_t closest = ClosestIndex(position);
+    Vec3 rigidPosition = car.GetRigidbodyPosition();
+    size_t closest = ClosestIndex(rigidPosition);
 
     // remaining은 실제 목표(m_endIndex)까지의 거리 -- 마지막 leg는 그 뒤로 정렬용 연장 점들이
     // 더 있을 수 있지만(ReedsShepp::SampleLegs), 완료/제동 판정은 그 연장분을 무시하고 실제
@@ -55,7 +55,7 @@ void RSFollowSegment::Tick(Car &car)
     }
     else
     {
-        remaining = (m_points[m_endIndex] - position).Length();
+        remaining = (m_points[m_endIndex] - rigidPosition).Length();
     }
 
     if (remaining < FINISH_DISTANCE)

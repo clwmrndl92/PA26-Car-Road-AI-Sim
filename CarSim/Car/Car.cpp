@@ -315,7 +315,7 @@ std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistan
     constexpr float ROAD_SAMPLE_SPACING = 5.0f; // 도로 스캔 샘플 간격 (m)
     constexpr float LOCAL_WINDOW = 0.01f;       // 로컬 곡률 추정용 t-window
 
-    Vec3 calPosition = m_rigidbody.GetPosition();
+    Vec3 calPosition = GetPosition();
 
     // m_currentSpline -> (필요시) path상의 다음 노드들의 lane spline 순으로 lookDistance까지 훑으며
     // 커브 지점(로컬 곡률 기반 최대속도)과 노드 지점(제한속도)의 샘플을 모은다. 각 샘플이 곧 DriveSpeedIDM이
@@ -476,7 +476,7 @@ void Car::DriveSpeedIDM(float steerSpeedCap)
     // 개방도로(앞을 막는 지점이 전혀 없는) 기준선 -- gap을 아주 크게 줘서 CarFollowing이 자유흐름
     // 가속도(a_free)로 수렴하게 한다.
     constexpr float OPEN_ROAD_GAP = 100000.0f;
-    Vec3 position = m_rigidbody.GetPosition();
+    Vec3 position = GetPosition();
     float accel = CarFollowing::CalculateAcceleration(m_speed, m_acceleration, v0, 0.0f, OPEN_ROAD_GAP, idmParams);
 
     // 캐시된 도로 제약(커브/레인 제한속도/정지점)을 각각 정지/저속 가상 리더로 보고, 그중 가장
@@ -607,8 +607,8 @@ JPH::Vec3 Car::ComputeDesiredVelocity() const
 
 float Car::PurePursuit(Vec3 target)
 {
-    Vec3 carPos = m_rigidbody.GetPosition();
-    Vec3 targetVec = target - carPos;
+    Vec3 rigidPosition = m_rigidbody.GetPosition();
+    Vec3 targetVec = target - rigidPosition;
 
     float distance = targetVec.Length();
 

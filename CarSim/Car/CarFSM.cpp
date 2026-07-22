@@ -342,7 +342,7 @@ void Car::BeginParkPlan()
         return;
 
     float turningRadius = m_wheelbase / tanf(m_maxSteerAngle);
-    Vec3 startPos = m_rigidbody.GetPosition();
+    Vec3 rigidPosition = m_rigidbody.GetPosition();
     float startAngleRad = DirectionToAngleRad(GetForwardAxis());
     HybridAStar::VehicleShape shape = BuildVehicleShape();
     const std::vector<HybridAStar::Obstacle> &obstacles = m_RoadDataManager->GetObstacles();
@@ -350,14 +350,13 @@ void Car::BeginParkPlan()
     // 출차
     if (m_subMode == SubMode::P_EXIT)
     {
-        // 이 Park에 전용 주차레인망이 있으면(주차장) 그 레인 위로, 없으면(길가 주차 등 일반 출차)
-        // 메인 레인 위로 나간다. 둘 다 차의 실제 현재 위치(startPos) 기준으로 가장 가까운 레인을 쓴다
-        // — Park 허브 노드 위치를 기준으로 찾으면 그 노드에서 먼 자리일수록 엉뚱한 레인이 걸린다.
+        // CheckPath와 기준 맞추려 앞바퀴 위치로 레인 검색
+        Vec3 frontPos = GetPosition();
         const std::vector<shared_ptr<Lane>> *parkingLanes =
             (m_parkNodeId >= 0) ? m_RoadDataManager->GetParkingLanes(m_parkNodeId) : nullptr;
         shared_ptr<Lane> closestLane = (parkingLanes != nullptr && !parkingLanes->empty())
-                                           ? m_RoadDataManager->GetClosestParkLane(startPos, m_parkNodeId)
-                                           : m_RoadDataManager->GetClosestLane(startPos);
+                                           ? m_RoadDataManager->GetClosestParkLane(frontPos, m_parkNodeId)
+                                           : m_RoadDataManager->GetClosestLane(frontPos);
         if (closestLane == nullptr)
         {
             DebugConsole::Log("BeginParkPlan: no lane found to exit onto, abandoning this park attempt");
@@ -366,7 +365,7 @@ void Car::BeginParkPlan()
             return;
         }
 
-        float splinePos = closestLane->GetSpline().GetSplinePosition(startPos);
+        float splinePos = closestLane->GetSpline().GetSplinePosition(frontPos);
         Vec3 closestDir = closestLane->GetSpline().GetDirectionAt(splinePos);
         SetCurrentLane(closestLane);
 
@@ -383,12 +382,12 @@ void Car::BeginParkPlan()
         // 진행방향을 목표 heading으로 삼는다 — RS로 레인 위에 정렬해서 올라서면 이후 Drive의 일반 주행/
         // MOBIL이 알아서 합류를 이어받는다.
         constexpr float EXIT_LEAD_DISTANCE = 6.0f;
-        Vec3 targetPos = closestLane->GetSpline().GetLookaheadPoint(startPos, EXIT_LEAD_DISTANCE);
+        Vec3 targetPos = closestLane->GetSpline().GetLookaheadPoint(rigidPosition, EXIT_LEAD_DISTANCE);
         float targetSplinePos = closestLane->GetSpline().GetSplinePosition(targetPos);
         float targetAngleRad = DirectionToAngleRad(closestLane->GetSpline().GetDirectionAt(targetSplinePos));
 
         bool foundPath = false;
-        ReedsShepp::Path path = HybridAStar::FindPath(startPos, startAngleRad, targetPos, targetAngleRad, obstacles, shape, foundPath);
+        ReedsShepp::Path path = HybridAStar::FindPath(rigidPosition, startAngleRad, targetPos, targetAngleRad, obstacles, shape, foundPath);
         if (!foundPath)
         {
             // 출차 실패는 이미 차가 그 자리를 점유 중이므로 예약을 풀지 않는다.
@@ -397,8 +396,8 @@ void Car::BeginParkPlan()
             SetSubMode(SubMode::None);
             return;
         }
-        m_vehicleController.BeginPlan(BuildReedSheppSegments(path, startPos, startAngleRad, turningRadius));
-        RebuildRSDebugRender(path, startPos, startAngleRad, turningRadius, targetPos, targetAngleRad);
+        m_vehicleController.BeginPlan(BuildReedSheppSegments(path, rigidPosition, startAngleRad, turningRadius));
+        RebuildRSDebugRender(path, rigidPosition, startAngleRad, turningRadius, targetPos, targetAngleRad);
         return;
     }
     // 주차 (BeginParkPlan은 Park 진입시 딱 한 번만 불리므로 여기 오는 시점의 subMode는 항상 leg1)
@@ -496,22 +495,22 @@ bool Car::BeginParkEnterOrRetry()
 // (BuildExactSegments)을 쓴다 -- 짧은 최종 정렬 보정 등 추종 오차를 남기면 안 되는 경우에만 켠다.
 bool Car::PlanParkLegTo(const Vec3 &targetPos, float targetAngleRad, bool exact)
 {
-    Vec3 startPos = m_rigidbody.GetPosition();
+    Vec3 rigidPosition = m_rigidbody.GetPosition();
     float startAngleRad = DirectionToAngleRad(GetForwardAxis());
     float turningRadius = m_wheelbase / tanf(m_maxSteerAngle);
     HybridAStar::VehicleShape shape = BuildVehicleShape();
     const std::vector<HybridAStar::Obstacle> &obstacles = m_RoadDataManager->GetObstacles();
 
     bool foundPath = false;
-    ReedsShepp::Path path = HybridAStar::FindPath(startPos, startAngleRad, targetPos, targetAngleRad, obstacles, shape, foundPath);
+    ReedsShepp::Path path = HybridAStar::FindPath(rigidPosition, startAngleRad, targetPos, targetAngleRad, obstacles, shape, foundPath);
     if (!foundPath)
         return false;
 
     if (exact)
         m_vehicleController.BeginPlan(BuildExactSegments(path, m_maxSteerAngle));
     else
-        m_vehicleController.BeginPlan(BuildReedSheppSegments(path, startPos, startAngleRad, turningRadius));
-    RebuildRSDebugRender(path, startPos, startAngleRad, turningRadius, targetPos, targetAngleRad);
+        m_vehicleController.BeginPlan(BuildReedSheppSegments(path, rigidPosition, startAngleRad, turningRadius));
+    RebuildRSDebugRender(path, rigidPosition, startAngleRad, turningRadius, targetPos, targetAngleRad);
     return true;
 }
 
@@ -637,7 +636,7 @@ bool Car::TryLaneChange(bool ignoreCooldown)
     // 평가했다는 사실 자체로 다음 평가까지 쿨다운(성공/실패 무관 — 왕복 진동 방지).
     m_lastLaneChangeTime = m_currentTime;
 
-    Vec3 position = m_rigidbody.GetPosition();
+    Vec3 position = GetPosition();
     // position은 "도로를 따라간 거리"라는 하나의 좌표계로 취급한다 — 좌/우 인접 레인은 같은 도로의
     // 평행한 차선이라 서로 같은 좌표계를 공유한다고 근사한다 (레인마다 다시 투영하지 않음).
     float egoPosition = m_currentLane->GetSpline().GetSplinePosition(position) * m_currentLane->GetLength();
@@ -762,9 +761,9 @@ float Car::ComputeLookaheadDistance() const
 
 void Car::DriveControl()
 {
-    Vec3 position = m_rigidbody.GetPosition();
+    Vec3 rigidPosition = GetRigidbodyPosition();
     float lookaheadDistance = ComputeLookaheadDistance();
-    auto targetPosition = m_currentSpline.GetLookaheadPoint(position, lookaheadDistance);
+    auto targetPosition = m_currentSpline.GetLookaheadPoint(rigidPosition, lookaheadDistance);
     // TryAvoidObstacle이 전방 코리도어에서 장애물을 감지하고 옆으로 피할 여지를 찾으면 여기서
     // 조준점 자체를 옆으로 밀어(Reynolds식 측면 회피) 차선 추종을 유지한 채 슬쩍 피해가게 한다.
     if (m_avoidLateralOffset != 0.0f)
@@ -1016,18 +1015,18 @@ void Car::BeginAvoidPlan()
 {
     EmergBrake(); // 회피 재계획에 들어왔다는 것 자체가 이미 위험 신호 -- 경로 탐색/실행 전에 즉시 감속부터 시작.
 
-    Vec3 startPos = m_rigidbody.GetPosition();
+    Vec3 rigidPosition = m_rigidbody.GetPosition();
     float startAngleRad = DirectionToAngleRad(GetForwardAxis());
     HybridAStar::VehicleShape shape = BuildVehicleShape();
     const std::vector<HybridAStar::Obstacle> &obstacles = m_RoadDataManager->GetObstacles();
 
-    Vec3 goalPos = m_currentSpline.GetLookaheadPoint(startPos, AVOID_DETECT_DISTANCE);
+    Vec3 goalPos = m_currentSpline.GetLookaheadPoint(rigidPosition, AVOID_DETECT_DISTANCE);
     float goalParam = m_currentSpline.GetSplinePosition(goalPos);
     float goalAngleRad = DirectionToAngleRad(m_currentSpline.GetDirectionAt(goalParam));
 
     bool foundPath = false;
     ReedsShepp::Path path =
-        HybridAStar::FindPath(startPos, startAngleRad, goalPos, goalAngleRad, obstacles, shape, foundPath);
+        HybridAStar::FindPath(rigidPosition, startAngleRad, goalPos, goalAngleRad, obstacles, shape, foundPath);
     if (!foundPath)
     {
         DebugConsole::Log("BeginAvoidPlan: HybridA* failed to find an avoid path, staying in Stop substate");
@@ -1037,8 +1036,8 @@ void Car::BeginAvoidPlan()
 
     float turningRadius = m_wheelbase / tanf(m_maxSteerAngle);
     SetSubMode(SubMode::D_Avoid);
-    m_vehicleController.BeginPlan(BuildReedSheppSegments(path, startPos, startAngleRad, turningRadius));
-    RebuildRSDebugRender(path, startPos, startAngleRad, turningRadius, goalPos, goalAngleRad);
+    m_vehicleController.BeginPlan(BuildReedSheppSegments(path, rigidPosition, startAngleRad, turningRadius));
+    RebuildRSDebugRender(path, rigidPosition, startAngleRad, turningRadius, goalPos, goalAngleRad);
 }
 
 #pragma endregion
