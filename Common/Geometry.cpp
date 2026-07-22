@@ -497,6 +497,63 @@ namespace Geometry
         return CreatePlane(planeSize.x, planeSize.y, maxTexCoord.x, maxTexCoord.y);
     }
 
+    GeometryData CreateCircle(float radius, uint32_t slices)
+    {
+        using namespace DirectX;
+
+        GeometryData geoData;
+
+        uint32_t vertexCount = slices + 1; // ring + center
+        uint32_t indexCount = 3 * slices;
+        geoData.vertices.resize(vertexCount);
+        geoData.normals.resize(vertexCount);
+        geoData.tangents.resize(vertexCount);
+        geoData.texcoords.resize(vertexCount);
+
+        if (indexCount > 65535)
+            geoData.indices32.resize(indexCount);
+        else
+            geoData.indices16.resize(indexCount);
+
+        float per_theta = 2 * PI / slices;
+
+        uint32_t vIndex = 0;
+        for (uint32_t i = 0; i < slices; ++i)
+        {
+            float theta = i * per_theta;
+            geoData.vertices[vIndex] = XMFLOAT3(radius * cosf(theta), 0.0f, radius * sinf(theta));
+            geoData.normals[vIndex] = XMFLOAT3(0.0f, 1.0f, 0.0f);
+            geoData.tangents[vIndex] = XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f);
+            geoData.texcoords[vIndex++] = XMFLOAT2(cosf(theta) / 2 + 0.5f, sinf(theta) / 2 + 0.5f);
+        }
+        // Center vertex (fan hub).
+        geoData.vertices[vIndex] = XMFLOAT3(0.0f, 0.0f, 0.0f);
+        geoData.normals[vIndex] = XMFLOAT3(0.0f, 1.0f, 0.0f);
+        geoData.tangents[vIndex] = XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f);
+        geoData.texcoords[vIndex++] = XMFLOAT2(0.5f, 0.5f);
+
+        // Winding matches CreateSphere's +Y-normal apex fan (center, next ring vertex, current
+        // ring vertex) so the front face is the +Y side, same convention as the rest of the file.
+        uint32_t iIndex = 0;
+        for (uint32_t i = 0; i < slices; ++i)
+        {
+            if (indexCount > 65535)
+            {
+                geoData.indices32[iIndex++] = slices;
+                geoData.indices32[iIndex++] = (i + 1) % slices;
+                geoData.indices32[iIndex++] = i;
+            }
+            else
+            {
+                geoData.indices16[iIndex++] = (uint16_t)slices;
+                geoData.indices16[iIndex++] = (uint16_t)((i + 1) % slices);
+                geoData.indices16[iIndex++] = (uint16_t)i;
+            }
+        }
+
+        return geoData;
+    }
+
     GeometryData CreatePlane(float width, float depth, float texU, float texV)
     {
         using namespace DirectX;

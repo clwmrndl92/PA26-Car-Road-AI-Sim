@@ -33,6 +33,34 @@ bool CarSim::Init()
     return true;
 }
 
+void CarSim::UpdateScene(float dt)
+{
+    m_RoadDataManager.Tick(dt);
+    UpdateSignalMarkers();
+    GameApp::UpdateScene(dt);
+}
+
+void CarSim::UpdateSignalMarkers()
+{
+    for (const SignalMarker &marker : m_SignalMarkers)
+    {
+        XMFLOAT4 color;
+        switch (m_RoadDataManager.GetSignalColor(marker.phaseOffset))
+        {
+        case TrafficSignal::Color::Red:
+            color = XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f);
+            break;
+        case TrafficSignal::Color::Yellow:
+            color = XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f);
+            break;
+        default:
+            color = XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f);
+            break;
+        }
+        marker.model->materials[0].Set<XMFLOAT4>("$DiffuseColor", color);
+    }
+}
+
 bool CarSim::InitResource()
 {
     // ******************
@@ -285,6 +313,8 @@ void CarSim::DrawScene()
         markingRender.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     for (auto &obstacleRender : m_ObstacleRenders)
         obstacleRender.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
+    for (auto &signalRender : m_SignalRenders)
+        signalRender.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
 
     m_BasicEffect.SetRenderLines();
     if (m_ShowGridXZ)
@@ -337,6 +367,35 @@ void CarSim::InitRoadRenderer()
         RenderObject &nodeRender = m_RoadRenders.emplace_back();
         nodeRender.SetModel(pMarker);
         nodeRender.GetTransform().SetPosition(ToXMFLOAT3(node->position));
+    }
+
+    // 신호(traffic_light) 노드: 채워진 원 마커. phaseOffset이 신호마다 달라 동시에 다른 색일 수
+    // 있으므로 Model을 공유하지 않고 노드마다 따로 만든다 (UpdateSignalMarkers가 매 프레임 각자의
+    // phaseOffset으로 자기 Model의 색만 갈아끼움).
+    {
+        constexpr float SIGNAL_MARKER_RADIUS = 1.0f;
+        constexpr float SIGNAL_MARKER_LIFT = 0.15f; // 도로면/노드 마커와 겹치지 않게 살짝 띄운다.
+
+        m_SignalRenders.clear();
+        m_SignalMarkers.clear();
+
+        for (const auto &[id, node] : m_RoadDataManager.GetNodes())
+        {
+            if (node->nodeType != RoadNodeType::TrafficLight)
+                continue;
+
+            Model *pMarker = m_ModelManager.CreateFromGeometry("signal_marker" + std::to_string(node->id), Geometry::CreateCircle(SIGNAL_MARKER_RADIUS));
+            pMarker->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f));
+            pMarker->materials[0].Set<float>("$Opacity", 1.0f);
+
+            RenderObject &signalRender = m_SignalRenders.emplace_back();
+            signalRender.SetModel(pMarker);
+            XMFLOAT3 pos = ToXMFLOAT3(node->position);
+            pos.y += SIGNAL_MARKER_LIFT;
+            signalRender.GetTransform().SetPosition(pos);
+
+            m_SignalMarkers.push_back({pMarker, node->signalPhaseOffset});
+        }
     }
 
     // 레인 그래프의 successor 연결(레인 끝 -> 다음 레인 시작)을 노란 선으로 시각화한다.

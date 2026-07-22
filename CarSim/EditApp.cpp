@@ -132,8 +132,10 @@ void EditApp::UpdateDrag()
     }
     else
     {
-        m_DraggingPoint = -1;
-        return;
+        // Nothing (draggable) selected -- leave pts empty so the click-handling below falls
+        // straight through to lane-spline picking instead of bailing out early.
+        radius = CP_RADIUS;
+        snap = GRID_SNAP;
     }
 
     ImGuiIO &io = ImGui::GetIO();
@@ -161,6 +163,11 @@ void EditApp::UpdateDrag()
             }
         }
         m_DraggingPoint = best;
+
+        // Missed every draggable control point: try picking a lane by its debug spline
+        // instead, so clicking the red line selects that lane in the Lane window.
+        if (best == -1)
+            PickLaneUnderMouse(ray);
     }
 
     // Continue the drag: intersect the ray with the point's horizontal plane,
@@ -183,6 +190,72 @@ void EditApp::UpdateDrag()
             }
         }
     }
+}
+
+namespace
+{
+    // XZ-plane distance from a point to a segment (splines are authored flat on y = 0, so the
+    // vertical component only matters for the initial ray/plane intersection, not for picking).
+    float DistancePointToSegmentXZ(const XMFLOAT3 &p, const XMFLOAT3 &a, const XMFLOAT3 &b)
+    {
+        float abx = b.x - a.x, abz = b.z - a.z;
+        float apx = p.x - a.x, apz = p.z - a.z;
+        float lenSq = abx * abx + abz * abz;
+        float t = lenSq > 1e-6f ? std::clamp((apx * abx + apz * abz) / lenSq, 0.0f, 1.0f) : 0.0f;
+        float dx = p.x - (a.x + abx * t);
+        float dz = p.z - (a.z + abz * t);
+        return std::sqrt(dx * dx + dz * dz);
+    }
+}
+
+bool EditApp::PickLaneUnderMouse(const Ray &ray)
+{
+    // Splines are rendered lifted to y = 0.1f (RebuildRenderObjects); intersect the ray with
+    // that plane to get a world-space click point, then find the nearest lane polyline to it.
+    constexpr float SPLINE_RENDER_Y = 0.1f;
+    constexpr float LANE_PICK_RADIUS = 1.0f;
+
+    if (fabsf(ray.direction.y) <= 1e-5f)
+        return false;
+
+    float t = (SPLINE_RENDER_Y - ray.origin.y) / ray.direction.y;
+    if (t <= 0.0f)
+        return false;
+
+    XMFLOAT3 clickPoint(ray.origin.x + t * ray.direction.x, SPLINE_RENDER_Y, ray.origin.z + t * ray.direction.z);
+
+    float bestDist = LANE_PICK_RADIUS;
+    int best = -1;
+    for (int i = 0; i < (int)m_Lanes.size(); ++i)
+    {
+        const EditLane &lane = m_Lanes[i];
+        if (lane.points.size() < 4)
+            continue;
+
+        std::vector<Vec3> cps;
+        cps.reserve(lane.points.size());
+        for (const auto &p : lane.points)
+            cps.push_back(ToVec3(p));
+
+        Spline spline(cps);
+        const std::vector<Vec3> &samples = spline.GetSplinePoints();
+        for (size_t s = 0; s + 1 < samples.size(); ++s)
+        {
+            float dist = DistancePointToSegmentXZ(clickPoint, ToXMFLOAT3(samples[s]), ToXMFLOAT3(samples[s + 1]));
+            if (dist < bestDist)
+            {
+                bestDist = dist;
+                best = i;
+            }
+        }
+    }
+
+    if (best < 0)
+        return false;
+
+    m_Selection = Selection::Lane;
+    m_SelectedLane = best;
+    return true;
 }
 
 void EditApp::RebuildRenderObjects()
@@ -464,6 +537,10 @@ void EditApp::SaveToJson()
         jn["type"] = n.type;
         if (!n.children.empty())
             jn["child"] = n.children;
+        if (!n.lanes.empty())
+            jn["lanes"] = n.lanes;
+        if (n.phaseOffset != 0.0f)
+            jn["phase_offset"] = n.phaseOffset;
         root["nodes"].push_back(jn);
     }
 
@@ -574,6 +651,9 @@ void EditApp::LoadFromJson(const std::filesystem::path &path)
         copyStr(n.type, sizeof(n.type), jn.value("type", std::string("unknown")));
         for (const auto &childIdJson : jn.value("child", nlohmann::json::array()))
             n.children.push_back(childIdJson.get<int>());
+        for (const auto &laneIdJson : jn.value("lanes", nlohmann::json::array()))
+            n.lanes.push_back(laneIdJson.get<int>());
+        n.phaseOffset = jn.value("phase_offset", 0.0f);
         m_Nodes.push_back(n);
     }
 
@@ -1102,7 +1182,7 @@ void EditApp::DrawNodeEditWindow()
         ImGui::TextDisabled("(ParkSpot's target heading; unused by other types)");
 
         // RoadDataManager::GetRoadNodeTypeByName()이 인식하는 값만 골라 오타를 방지한다.
-        static const char *typeNames[] = {"unknown", "park", "park_spot"};
+        static const char *typeNames[] = {"unknown", "park", "park_spot", "traffic_light"};
         int typeIdx = 0;
         for (int i = 0; i < IM_ARRAYSIZE(typeNames); ++i)
         {
@@ -1132,6 +1212,28 @@ void EditApp::DrawNodeEditWindow()
             node.children.erase(node.children.begin() + eraseIdx);
         if (ImGui::Button("Add Child"))
             node.children.push_back(0);
+
+        ImGui::Separator();
+        ImGui::Text("Governed Lanes (traffic_light only)");
+        int eraseLaneIdx = -1;
+        for (int i = 0; i < (int)node.lanes.size(); ++i)
+        {
+            ImGui::PushID(i);
+            ImGui::SetNextItemWidth(100.0f);
+            ImGui::InputInt("##lane", &node.lanes[i]);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("X"))
+                eraseLaneIdx = i;
+            ImGui::PopID();
+        }
+        if (eraseLaneIdx >= 0)
+            node.lanes.erase(node.lanes.begin() + eraseLaneIdx);
+        if (ImGui::Button("Add Lane"))
+            node.lanes.push_back(0);
+
+        ImGui::Separator();
+        ImGui::DragFloat("Phase Offset (traffic_light only)", &node.phaseOffset, 0.5f, 0.0f, 0.0f, "%.1f");
+        ImGui::TextDisabled("(seconds; same value on multiple signals = in sync)");
     }
     ImGui::End();
 

@@ -8,6 +8,7 @@
 #include <map>
 #include <limits>
 #include <algorithm>
+#include "TrafficSignal.h"
 #include "Utill/DebugConsole.h"
 #include "Utill/Assert.h"
 
@@ -122,6 +123,7 @@ void RoadDataManager::BuildRoadData(const string &filePath)
         node->position = position;
         node->direction = direction;
         node->nodeType = nodeType;
+        node->signalPhaseOffset = nodeJson.value("phase_offset", 0.0f); // traffic_light 전용, 없으면 0
 
         m_nodes[id] = node;
     }
@@ -139,6 +141,21 @@ void RoadDataManager::BuildRoadData(const string &filePath)
             auto childIt = m_nodes.find(childIdJson.get<int>());
             if (childIt != m_nodes.end())
                 nodeIt->second->children.push_back(childIt->second);
+        }
+    }
+
+    // lanes(optional, traffic_light 전용): 역방향(레인->노드)으로 세팅해 Lane에서 O(1) 조회하게 한다.
+    for (const nlohmann::json &nodeJson : root.value("nodes", nlohmann::json::array()))
+    {
+        auto nodeIt = m_nodes.find(nodeJson.value("id", 0));
+        if (nodeIt == m_nodes.end() || nodeIt->second->nodeType != RoadNodeType::TrafficLight)
+            continue;
+
+        for (const nlohmann::json &laneIdJson : nodeJson.value("lanes", nlohmann::json::array()))
+        {
+            auto laneIt = laneById.find(laneIdJson.get<int>());
+            if (laneIt != laneById.end())
+                laneIt->second->SetSignalNode(nodeIt->second);
         }
     }
 
@@ -348,7 +365,7 @@ shared_ptr<RoadNode> RoadDataManager::GetRandomDestNode() const
     vector<shared_ptr<RoadNode>> candidates;
     for (const auto &[id, node] : m_nodes)
     {
-        if (node->nodeType != RoadNodeType::ParkSpot)
+        if (node->nodeType != RoadNodeType::ParkSpot && node->nodeType != RoadNodeType::TrafficLight)
             candidates.push_back(node);
     }
     if (candidates.empty())
@@ -380,4 +397,9 @@ shared_ptr<RoadNode> RoadDataManager::TryReserveParkSpot(int parkNodeId, const u
 void RoadDataManager::ReleaseParkSpot(int spotNodeId)
 {
     m_reservedParkSpotIds.erase(spotNodeId);
+}
+
+TrafficSignal::Color RoadDataManager::GetSignalColor(float phaseOffset) const
+{
+    return TrafficSignal::GetColor(SIGNAL_GREEN_DURATION, SIGNAL_YELLOW_DURATION, SIGNAL_RED_DURATION, phaseOffset, m_simTime);
 }

@@ -344,6 +344,45 @@ std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistan
             float segmentDistance = splineLength > 0.0f ? (1.0f - startT) * splineLength : 0.0f;
             float walkDistance = std::min(segmentDistance, remainingDistance);
 
+            // 노란불 순간 정지거리 안쪽이면 통과 확정(초록될 때까지 유지) -- 안 그러면 빨간불에서 급정거.
+            if (shared_ptr<RoadNode> signalNode = segmentLane->GetSignalNode())
+            {
+                TrafficSignal::Color color = m_RoadDataManager->GetSignalColor(signalNode->signalPhaseOffset);
+                bool shouldStop = false;
+
+                if (color == TrafficSignal::Color::Green)
+                {
+                    if (m_committedYellowNodeId == signalNode->id)
+                        m_committedYellowNodeId = -1; // 다음 사이클에 대비해 리셋
+                }
+                else if (color == TrafficSignal::Color::Yellow)
+                {
+                    if (m_committedYellowNodeId != signalNode->id)
+                    {
+                        float gapToNode = (signalNode->position - calPosition).Length();
+                        float comfortableStopDistance = (m_speed * m_speed) / (2.0f * m_maxBrake);
+                        if (gapToNode <= comfortableStopDistance)
+                            m_committedYellowNodeId = signalNode->id; // 이미 정지거리 안쪽 -- 통과 확정
+                    }
+                    shouldStop = (m_committedYellowNodeId != signalNode->id);
+                }
+                else // Red
+                {
+                    shouldStop = (m_committedYellowNodeId != signalNode->id);
+                }
+
+                // nodeT < startT면 이미 지나온 신호라 건너뛴다 (안 그러면 통과 직후 급제동).
+                if (splineLength > 0.0f && shouldStop)
+                {
+                    float nodeT = spline->GetSplinePosition(signalNode->position);
+                    if (nodeT >= startT)
+                    {
+                        float nodeDistance = traveledDistance + (nodeT - startT) * splineLength;
+                        samples.push_back({signalNode->position, nodeDistance, 0.0f});
+                    }
+                }
+            }
+
             const std::vector<Vec3> &points = spline->GetSplinePoints();
             if (!points.empty() && splineLength > 0.0f)
             {

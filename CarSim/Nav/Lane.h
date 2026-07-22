@@ -8,6 +8,7 @@ using namespace std;
 
 class Road;
 class Car;
+struct RoadNode;
 
 class Lane
 {
@@ -56,6 +57,10 @@ public:
     const Vec3 &GetStartPoint() const { return m_spline.GetSplinePoints().front(); }
     const Vec3 &GetEndPoint() const { return m_spline.GetSplinePoints().back(); }
 
+    // 이 레인에 걸린 신호(있으면). BuildRoadData가 1회 세팅.
+    void SetSignalNode(const shared_ptr<RoadNode> &node) { m_signalNode = node; }
+    shared_ptr<RoadNode> GetSignalNode() const { return m_signalNode.lock(); }
+
 private:
     Spline m_spline; // Spline representing the lane's path
     int m_id;
@@ -66,4 +71,5 @@ private:
     weak_ptr<Lane> m_left;               // 같은 진행방향 좌측 인접 레인 (차선변경)
     weak_ptr<Lane> m_right;              // 같은 진행방향 우측 인접 레인 (차선변경)
     vector<Car *> m_cars;                // 지금 이 레인 위에 있는 차들 (RegisterCar/UnregisterCar가 관리)
+    weak_ptr<RoadNode> m_signalNode;      // 소유는 RoadDataManager(m_nodes)가 하므로 weak_ptr로만 참조
 };

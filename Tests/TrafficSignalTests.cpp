@@ -1,37 +1,60 @@
 #include "TestHarness.h"
 #include "Nav/TrafficSignal.h"
 
-TEST_CASE(TrafficSignal_WithinRedWindow_ReturnsRed)
+namespace
 {
-    CHECK(TrafficSignal::GetColor(20.0f, 12.0f, 0.0f, 5.0f) == TrafficSignal::Color::Red);
+    // green=8, yellow=3, red=12 -> cycle=23. Phase order: [0,8)=Green, [8,11)=Yellow, [11,23)=Red.
+    TrafficSignal::Color ColorAt(float simTime, float phaseOffset = 0.0f)
+    {
+        return TrafficSignal::GetColor(8.0f, 3.0f, 12.0f, phaseOffset, simTime);
+    }
 }
 
 TEST_CASE(TrafficSignal_WithinGreenWindow_ReturnsGreen)
 {
-    CHECK(TrafficSignal::GetColor(20.0f, 12.0f, 0.0f, 15.0f) == TrafficSignal::Color::Green);
+    CHECK(ColorAt(0.0f) == TrafficSignal::Color::Green);
+    CHECK(ColorAt(5.0f) == TrafficSignal::Color::Green);
 }
 
-TEST_CASE(TrafficSignal_AtRedGreenBoundary_ReturnsGreen)
+TEST_CASE(TrafficSignal_WithinYellowWindow_ReturnsYellow)
 {
-    // t == redDuration은 이미 초록 구간 (경계는 [0, redDuration)만 빨강).
-    CHECK(TrafficSignal::GetColor(20.0f, 12.0f, 0.0f, 12.0f) == TrafficSignal::Color::Green);
+    CHECK(ColorAt(8.0f) == TrafficSignal::Color::Yellow);
+    CHECK(ColorAt(10.0f) == TrafficSignal::Color::Yellow);
+}
+
+TEST_CASE(TrafficSignal_WithinRedWindow_ReturnsRed)
+{
+    CHECK(ColorAt(11.0f) == TrafficSignal::Color::Red);
+    CHECK(ColorAt(20.0f) == TrafficSignal::Color::Red);
+}
+
+TEST_CASE(TrafficSignal_AtGreenYellowBoundary_ReturnsYellow)
+{
+    // t == greenDuration은 이미 노란불 구간 (초록은 [0, green)만).
+    CHECK(ColorAt(8.0f) == TrafficSignal::Color::Yellow);
+}
+
+TEST_CASE(TrafficSignal_AtYellowRedBoundary_ReturnsRed)
+{
+    CHECK(ColorAt(11.0f) == TrafficSignal::Color::Red);
 }
 
 TEST_CASE(TrafficSignal_WrapsAcrossMultipleCycles)
 {
-    // 45초 = 2주기(40) + 5초 -> 주기 안 5초 지점과 같은 결과여야 함.
-    CHECK(TrafficSignal::GetColor(20.0f, 12.0f, 0.0f, 45.0f) == TrafficSignal::Color::Red);
-    CHECK(TrafficSignal::GetColor(20.0f, 12.0f, 0.0f, 55.0f) == TrafficSignal::Color::Green);
+    // 23(cycle) + 5초 -> 주기 안 5초 지점(초록)과 같은 결과여야 함.
+    CHECK(ColorAt(28.0f) == TrafficSignal::Color::Green);
+    // 23 + 9초 -> 주기 안 9초 지점(노랑)과 같아야 함.
+    CHECK(ColorAt(32.0f) == TrafficSignal::Color::Yellow);
 }
 
 TEST_CASE(TrafficSignal_PhaseOffsetShiftsBoundary)
 {
-    // phaseOffset=10인 신호는 simTime=5일 때 (5+10)=15초 지점 -> 초록.
-    CHECK(TrafficSignal::GetColor(20.0f, 12.0f, 10.0f, 5.0f) == TrafficSignal::Color::Green);
+    // phaseOffset=10인 신호는 simTime=0일 때 (0+10)=10초 지점 -> 노랑.
+    CHECK(ColorAt(0.0f, 10.0f) == TrafficSignal::Color::Yellow);
 }
 
 TEST_CASE(TrafficSignal_NegativeSimTime_StillWrapsCorrectly)
 {
-    // -5초 -> fmod가 음수를 줄 수 있는 경계 케이스. 주기 보정 후 15초 지점과 같아야 함(초록).
-    CHECK(TrafficSignal::GetColor(20.0f, 12.0f, 0.0f, -5.0f) == TrafficSignal::Color::Green);
+    // -3초 -> fmod가 음수를 줄 수 있는 경계 케이스. 주기 보정 후 20초 지점(빨강)과 같아야 함.
+    CHECK(ColorAt(-3.0f) == TrafficSignal::Color::Red);
 }

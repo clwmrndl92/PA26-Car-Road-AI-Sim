@@ -119,6 +119,8 @@ private:
     {
         switch (subMode)
         {
+        case SubMode::None:
+            return "None";
         case SubMode::D_Normal:
             return "Normal";
         case SubMode::D_Avoid:
@@ -246,6 +248,8 @@ private:
     float m_lastConstraintScanTime = 0.0f;
     Spline m_currentSpline;
     float m_currentTime = 0.0f;
+    // 노란불 때 "정지거리 안쪽이라 통과" 확정한 신호 id(초록될 때까지 유지). 없으면 -1.
+    mutable int m_committedYellowNodeId = -1;
 
     // DriveSpeedIDM이 도로 제약(커브/레인 제한속도/정지점)을 가상 리더로 다룰 때 쓰는 IIDM+CAH 파라미터.
     static constexpr float IDM_TIME_HEADWAY = 1.2f;        // T
@@ -282,7 +286,7 @@ private:
 
     // 트레일 및 디버그 렌더링 리소스 (Render Resources & Trail Data)
     static constexpr float TRAIL_SAMPLE_DISTANCE = 0.5f;
-    static constexpr size_t TRAIL_MAX_POINTS = 2000;
+    static constexpr size_t TRAIL_MAX_POINTS = 200;
 
     std::deque<DirectX::XMFLOAT3> m_rearTrail;
     std::deque<DirectX::XMFLOAT3> m_frontTrail;

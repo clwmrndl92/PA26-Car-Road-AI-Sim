@@ -19,6 +19,7 @@ public:
 
     bool Init();
     void InitCamera();
+    void UpdateScene(float dt);
     void UpdateCamera(float dt);
     void UpdateUI(float dt);
     void DrawScene();
@@ -29,6 +30,7 @@ private:
     void InitRoadRenderer();
     void InitMarkingRenderer();
     void SpawnCar(CarType type);
+    void UpdateSignalMarkers();
 
 private:
     RoadDataManager m_RoadDataManager;
@@ -45,6 +47,14 @@ private:
     std::vector<RenderObject> m_RoadEdgeRenders;
     std::vector<RenderObject> m_MarkingRenders;
     std::vector<RenderObject> m_ObstacleRenders; // data.json의 obstacles를 파란 사각형 외곽선으로 시각화
+    std::vector<RenderObject> m_SignalRenders;   // traffic_light 노드 위치의 채워진 원 마커 (m_SignalMarkers와 같은 순서)
+
+    struct SignalMarker
+    {
+        Model *model = nullptr;
+        float phaseOffset = 0.0f;
+    };
+    std::vector<SignalMarker> m_SignalMarkers;
 };
 
 #endif

@@ -36,6 +36,10 @@ namespace Geometry
     GeometryData CreatePlane(const DirectX::XMFLOAT2& planeSize, const DirectX::XMFLOAT2& maxTexCoord = { 1.0f, 1.0f });
     GeometryData CreatePlane(float width = 10.0f, float depth = 10.0f, float texU = 1.0f, float texV = 1.0f);
 
+    // Create a filled disc (flat circle) lying in the local XZ plane (y = 0), normal facing +Y.
+    // Draw with the default (triangle-list) topology.
+    GeometryData CreateCircle(float radius = 1.0f, uint32_t slices = 20);
+
     // Create a grid
     GeometryData CreateGrid(const DirectX::XMFLOAT2& gridSize, const DirectX::XMUINT2& slices, const DirectX::XMFLOAT2& maxTexCoord,
         const std::function<float(float, float)>& heightFunc = [](float x, float z) { return 0.0f; },

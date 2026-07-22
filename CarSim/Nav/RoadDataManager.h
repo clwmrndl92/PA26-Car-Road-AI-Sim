@@ -6,6 +6,7 @@
 #include "Lane.h"
 #include "Road.h"
 #include "HybridAStar.h"
+#include "TrafficSignal.h"
 
 using namespace std;
 
@@ -35,27 +36,26 @@ public:
     const vector<shared_ptr<Lane>> &GetLanes() const { return m_lanes; };
     const unordered_map<int, shared_ptr<RoadNode>> &GetNodes() const { return m_nodes; };
     const shared_ptr<RoadNode> GetNode(int nodeId) const;
-    // ParkSpot이 아닌 노드 중 하나를 무작위로 반환한다 (목적지/스폰 지점 선택용). 후보가 없으면 nullptr.
     shared_ptr<RoadNode> GetRandomDestNode() const;
-    // data.json의 "obstacles"(임시 데이터: 실제 장애물 인식 파이프라인이 들어오기 전까지 손으로 채운
-    // 사각형 목록)를 그대로 반환한다. 실시간 회피의 코리도어 검사 등에서 쓴다.
     const vector<HybridAStar::Obstacle> &GetObstacles() const { return m_obstacles; }
 
-    // parkNodeId 소속 주차 스플라인 레인들(메인 라우팅 그래프 m_lanes와 분리). 해당 park가 없으면 nullptr.
     const vector<shared_ptr<Lane>> *GetParkingLanes(int parkNodeId) const;
 
-    // parkNodeId(Park 타입 노드)의 children 중 아직 예약되지 않은 ParkSpot을 하나 찾아 예약하고
-    // 반환한다. 빈 자리가 없으면 nullptr. 예약 상태는 정적 도로 데이터(RoadNode)와 분리해서
-    // 여기서만 관리한다. excludeIds에 담긴 스팟은 건너뛴다 (경로탐색 실패로 이미 시도해본 자리 재시도 방지용).
     shared_ptr<RoadNode> TryReserveParkSpot(int parkNodeId, const unordered_set<int> &excludeIds = {});
-    // spotNodeId의 예약을 해제한다 (출차 완료 시 호출).
     void ReleaseParkSpot(int spotNodeId);
 
+    // 전역 시뮬레이션 시계 누적 (CarSim::UpdateScene에서 매 프레임 한 번만 호출)
+    void Tick(float dt) { m_simTime += dt; }
+    TrafficSignal::Color GetSignalColor(float phaseOffset) const;
+
 public:
-    static constexpr float ROAD_WIDTH = 3.2f;         // 차선 폭
-    static constexpr float CONNECT_EPSILON = 0.1f;    // 두 레인의 끝점/시작점이 이 거리 안이면 이어진 것으로 본다.
-    static constexpr float LANE_CHANGE_COST = 5.0f;   // 차선변경(좌/우 인접 레인으로 이동) 간선의 비용
-    static constexpr float CURVE_SPEED_COEFF = 1.22f; // 최대 코너링 속도 = CURVE_SPEED_COEFF * sqrt(R)
+    static constexpr float ROAD_WIDTH = 3.2f;             // 차선 폭
+    static constexpr float CONNECT_EPSILON = 0.1f;        // 두 레인의 끝점/시작점이 이 거리 안이면 이어진 것으로 본다.
+    static constexpr float LANE_CHANGE_COST = 5.0f;       // 차선변경(좌/우 인접 레인으로 이동) 간선의 비용
+    static constexpr float CURVE_SPEED_COEFF = 1.22f;     // 최대 코너링 속도 = CURVE_SPEED_COEFF * sqrt(R)
+    static constexpr float SIGNAL_GREEN_DURATION = 8.0f;  // 초록불 지속 시간
+    static constexpr float SIGNAL_YELLOW_DURATION = 3.0f; // 노란불 지속 시간
+    static constexpr float SIGNAL_RED_DURATION = 12.0f;   // 빨간불 지속 시간
 
 private:
     // 주어진 레인 집합 안에서 끝점<->시작점을 공간 매칭해 successors를 구성한다. 메인 레인과 각
@@ -68,15 +68,16 @@ private:
     unordered_map<int, shared_ptr<RoadNode>> m_nodes; // node id -> RoadNode
     vector<HybridAStar::Obstacle> m_obstacles;
     unordered_set<int> m_reservedParkSpotIds; // 예약된(다른 차가 목표로 잡은) ParkSpot 노드 id
-    // Park 노드 id -> 그 주차장의 스플라인 레인들. 메인 라우팅(m_lanes)과 분리 보관.
     unordered_map<int, vector<shared_ptr<Lane>>> m_parkingLanes;
+    float m_simTime = 0.0f; // Tick()으로만 누적되는 전역 시뮬레이션 시계. 신호 색 계산 전용.
 };
 
 enum class RoadNodeType
 {
     Unkown,
     Park,
-    ParkSpot
+    ParkSpot,
+    TrafficLight
 };
 
 inline const unordered_map<string, RoadNodeType> &GetRoadNodeTypeByName()
@@ -84,7 +85,8 @@ inline const unordered_map<string, RoadNodeType> &GetRoadNodeTypeByName()
     static const unordered_map<string, RoadNodeType> map = {
         {"unknown", RoadNodeType::Unkown},
         {"park", RoadNodeType::Park},
-        {"park_spot", RoadNodeType::ParkSpot}};
+        {"park_spot", RoadNodeType::ParkSpot},
+        {"traffic_light", RoadNodeType::TrafficLight}};
     return map;
 }
 
@@ -96,4 +98,5 @@ struct RoadNode
     Vec3 direction;
     RoadNodeType nodeType = RoadNodeType::Unkown;
     vector<weak_ptr<RoadNode>> children; // 예: Park 노드가 자기 소유의 ParkSpot 노드들을 참조
+    float signalPhaseOffset = 0.0f;      // traffic_light 노드 전용
 };

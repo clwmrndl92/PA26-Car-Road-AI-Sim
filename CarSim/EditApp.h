@@ -68,9 +68,14 @@ private:
         // Park/ParkSpot처럼 자기만의 목표 heading이 필요한 노드용. RoadDataManager의 RoadNode와
         // 필드를 맞춘 것 (기본값도 로더의 fallback인 +X와 동일).
         DirectX::XMFLOAT3 direction{1.0f, 0.0f, 0.0f};
-        char type[32] = "unknown"; // "unknown" | "park" | "park_spot" (RoadNodeType과 매칭)
+        char type[32] = "unknown"; // "unknown" | "park" | "park_spot" | "traffic_light" (RoadNodeType과 매칭)
         // 예: Park 노드가 자기 소유의 ParkSpot 노드 id들을 참조 (RoadNode::children과 같은 개념).
         std::vector<int> children;
+        // traffic_light 노드 전용: 이 신호가 걸린 레인 id들 (RoadDataManager가 Lane::SetSignalNode로 역연결).
+        std::vector<int> lanes;
+        // traffic_light 노드 전용: TrafficSignal::GetColor의 phaseOffset. 신호마다 다르게 둬서
+        // 교차로 안 서로 다른 방향끼리 엇갈리게(또는 여러 교차로를 동기화) 할 때 쓴다.
+        float phaseOffset = 0.0f;
     };
 
     // Freehand road-marking line (lane paint, median, shoulder), independent of EditLane's
@@ -111,6 +116,9 @@ private:
 
     // Interaction / rendering
     void UpdateDrag();
+    // 클릭 지점이 어떤 레인의 디버그 스플라인(빨간 선)에 충분히 가까우면 그 레인을 선택한다.
+    // 선택되면 true (UpdateDrag가 그 결과로 드래그를 새로 시작하지 않도록).
+    bool PickLaneUnderMouse(const Ray &ray);
     void RebuildRenderObjects();
     void SaveToJson();
     void LoadFromJson(const std::filesystem::path &path);

@@ -54,10 +54,12 @@ namespace PerfLog
     inline void LogMemory(const std::string &label)
     {
         PROCESS_MEMORY_COUNTERS counters{};
-        if (K32GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters)))
+        if (GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters)))
         {
-            double workingSetMB = static_cast<double>(counters.WorkingSetSize) / (1024.0 * 1024.0);
-            Emit(label + ": working set " + std::to_string(workingSetMB) + " MB");
+            double currentMB = static_cast<double>(counters.WorkingSetSize) / (1024.0 * 1024.0);
+            double peakMB = static_cast<double>(counters.PeakWorkingSetSize) / (1024.0 * 1024.0);
+
+            Emit(label + ": Current " + std::to_string(currentMB) + " MB | Peak " + std::to_string(peakMB) + " MB");
         }
     }
 }
