@@ -129,7 +129,7 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
     }
 
     if ((m_rearTrailRender.GetModel() || m_frontTrailRender.GetModel() || m_splineRender.GetModel() ||
-         m_parkPathRender.GetModel() || m_parkTargetLine.GetModel()))
+         m_parkPathRender.GetModel() || m_parkTargetLine.GetModel() || !m_corridorDebugRenders.empty()))
     {
         if (auto *pBasic = dynamic_cast<BasicEffect *>(&effect))
         {
@@ -144,6 +144,9 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
                 m_parkPathRender.Draw(context, effect);
             if (m_parkTargetLine.GetModel())
                 m_parkTargetLine.Draw(context, effect);
+            for (RenderObject &corridorRender : m_corridorDebugRenders)
+                if (corridorRender.GetModel())
+                    corridorRender.Draw(context, effect);
             pBasic->SetRenderDefault();
         }
     }
@@ -498,6 +501,17 @@ void Car::DriveSpeedIDM(float steerSpeedCap)
         accel = std::min(accel, leaderAccel);
     }
 
+    // TryAvoidObstacle이 경로 폭 안에서 찾아둔 최근접 장애물: 정지한 가상 선행차량으로 취급해 감속한다.
+    // s0는 일반 차량 추종용(IDM_STANDSTILL_DISTANCE)보다 작게 따로 둔다 -- 정적 장애물은 다른 차만큼
+    // 넉넉한 여유를 안 두고 더 붙어도 된다.
+    if (m_obstacleAheadGap >= 0.0f)
+    {
+        CarFollowing::Params obstacleParams = idmParams;
+        obstacleParams.s0 = AVOID_OBSTACLE_STANDSTILL_DISTANCE;
+        float obstacleAccel = CarFollowing::CalculateAcceleration(m_speed, m_acceleration, 0.0f, 0.0f, m_obstacleAheadGap, obstacleParams);
+        accel = std::min(accel, obstacleAccel);
+    }
+
     m_acceleration = accel;
 }
 
@@ -713,8 +727,8 @@ void Car::RebuildSplineRender()
     m_splineRender.SetModel(pModel);
 }
 
-void Car::RebuildParkDebugRender(const ReedsShepp::Path &path, const Vec3 &startPos, float startAngleRad,
-                                 float turningRadius, const Vec3 &targetPos, float targetAngleRad)
+void Car::RebuildRSDebugRender(const ReedsShepp::Path &path, const Vec3 &startPos, float startAngleRad,
+                               float turningRadius, const Vec3 &targetPos, float targetAngleRad)
 {
     constexpr float DEBUG_LINE_HEIGHT = 0.15f;
 
@@ -759,6 +773,63 @@ void Car::RebuildParkDebugRender(const ReedsShepp::Path &path, const Vec3 &start
     pTargetLineModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f));
     pTargetLineModel->materials[0].Set<float>("$Opacity", 1.0f);
     m_parkTargetLine.SetModel(pTargetLineModel);
+}
+
+// TryAvoidObstacle의 sweepClear와 같은 샘플 지점들을 그대로 훑되, 첫 충돌에서 멈추지 않고 전부 박스
+// 윤곽선으로 그린다 — 충돌한 샘플은 빨강, 통과한 샘플은 초록.
+void Car::RebuildCorridorDebugRender(const Vec3 &position, float lateralOffset,
+                                     const std::vector<HybridAStar::Obstacle> &obstacles,
+                                     const HybridAStar::VehicleShape &shape)
+{
+    constexpr float DEBUG_LINE_HEIGHT = 0.15f;
+    float minReachDistance = 2.0f * m_wheelbase / tanf(m_maxSteerAngle);
+
+    m_corridorDebugRenders.clear();
+    int sampleIndex = 0;
+    for (float d = 0.0f; d <= AVOID_DETECT_DISTANCE; d += AVOID_SAMPLE_STEP)
+    {
+        if (lateralOffset != 0.0f && d < minReachDistance)
+            continue;
+
+        Vec3 samplePos, sampleDir;
+        if (d == 0.0f) // TryAvoidObstacle::sweepClear와 동일 -- 지금 이 자리는 실제 차 heading으로 본다.
+        {
+            samplePos = position;
+            sampleDir = GetForwardAxis();
+        }
+        else
+        {
+            GetCorridorPose(position, d, samplePos, sampleDir);
+        }
+        Vec3 sampleNormal = Vec3(-sampleDir.GetZ(), 0.0f, sampleDir.GetX()).Normalized();
+        Vec3 testPos = samplePos + sampleNormal * lateralOffset;
+        float headingRad = atan2f(sampleDir.GetZ(), sampleDir.GetX());
+        bool colliding = HybridAStar::IsColliding(testPos, headingRad, obstacles, shape);
+
+        // IsColliding과 동일하게, 실제 충돌판정 박스 중심은 pivot(testPos)에서 heading 방향으로
+        // pivotToCenter만큼 떨어진 지점이다 (HybridAStar.cpp IsPoseCollision 참고).
+        Vec3 forward(cosf(headingRad), 0.0f, sinf(headingRad));
+        Vec3 right(-forward.GetZ(), 0.0f, forward.GetX());
+        Vec3 bodyCenter = testPos + forward * shape.pivotToCenter;
+
+        auto corner = [&](float alongSign, float acrossSign)
+        {
+            DirectX::XMFLOAT3 p = ToXMFLOAT3(bodyCenter + forward * (shape.halfLength * alongSign) + right * (shape.halfWidth * acrossSign));
+            p.y += DEBUG_LINE_HEIGHT;
+            return p;
+        };
+        std::vector<DirectX::XMFLOAT3> corners = {
+            corner(1.0f, 1.0f), corner(1.0f, -1.0f), corner(-1.0f, -1.0f), corner(-1.0f, 1.0f), corner(1.0f, 1.0f)};
+
+        Model *pModel = ModelManager::Get().CreateFromGeometry(
+            "__corridor_box__:" + GetName() + ":" + std::to_string(sampleIndex++), Geometry::CreatePolyline(corners));
+        DirectX::XMFLOAT4 color = colliding ? DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f) : DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f);
+        pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", color);
+        pModel->materials[0].Set<float>("$Opacity", 1.0f);
+
+        RenderObject &render = m_corridorDebugRenders.emplace_back();
+        render.SetModel(pModel);
+    }
 }
 
 void Car::SetDestination(const shared_ptr<RoadNode> &destNode)

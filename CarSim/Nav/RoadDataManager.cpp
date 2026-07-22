@@ -3,6 +3,7 @@
 #include <nlohmann/json.hpp>
 #include <queue>
 #include <cmath>
+#include <cstdlib>
 #include <unordered_set>
 #include <map>
 #include <limits>
@@ -340,6 +341,20 @@ const shared_ptr<RoadNode> RoadDataManager::GetNode(int nodeId) const
 {
     auto it = m_nodes.find(nodeId);
     return it != m_nodes.end() ? it->second : nullptr;
+}
+
+shared_ptr<RoadNode> RoadDataManager::GetRandomDestNode() const
+{
+    vector<shared_ptr<RoadNode>> candidates;
+    for (const auto &[id, node] : m_nodes)
+    {
+        if (node->nodeType != RoadNodeType::ParkSpot)
+            candidates.push_back(node);
+    }
+    if (candidates.empty())
+        return nullptr;
+
+    return candidates[rand() % candidates.size()];
 }
 
 shared_ptr<RoadNode> RoadDataManager::TryReserveParkSpot(int parkNodeId, const unordered_set<int> &excludeIds)

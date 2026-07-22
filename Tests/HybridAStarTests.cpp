@@ -70,7 +70,7 @@ TEST_CASE(FindPath_GoalBoxedIn_FailsGracefully)
 // 타는지 확실치 않다. 이 케이스는 시작 pose를 거대한 장애물 하나로 통째로 뒤덮어서, 첫 확장에서
 // 6방향(전/후진 x 좌/직진/우) 전부가 그 장애물 안에 그대로 남아 즉시 충돌 처리된다 -> openSet에
 // 아무것도 안 쌓이고 첫 pop 직후 바로 비어서, maxExpansions 값과 무관하게 "open set exhausted"
-// 분기(HybridAStar.cpp:307)를 항상, 그것도 즉시(expansions==1) 탄다. PerfLog::LogMemory로 그
+// 분기(HybridAStar.cpp:307)를 항상, 그것도 즉시(expansions==1) 탄다. PERF_LOG_MEMORY로 그
 // 분기를 확인하고 싶을 때 이 케이스로 재현하면 된다.
 TEST_CASE(FindPath_StartEngulfed_AlwaysExhaustsOpenSet)
 {

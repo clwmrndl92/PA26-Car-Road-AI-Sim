@@ -68,8 +68,11 @@ private:
     void RebuildTrailRender(RenderObject &render, const std::deque<DirectX::XMFLOAT3> &trail,
                             const std::string &name, const DirectX::XMFLOAT4 &color);
     void RebuildSplineRender();
-    void RebuildParkDebugRender(const ReedsShepp::Path &path, const Vec3 &startPos, float startAngleRad,
-                                float turningRadius, const Vec3 &targetPos, float targetAngleRad);
+    void RebuildRSDebugRender(const ReedsShepp::Path &path, const Vec3 &startPos, float startAngleRad,
+                              float turningRadius, const Vec3 &targetPos, float targetAngleRad);
+    void RebuildCorridorDebugRender(const Vec3 &position, float lateralOffset,
+                                    const std::vector<HybridAStar::Obstacle> &obstacles,
+                                    const HybridAStar::VehicleShape &shape);
 
     bool IsOffCourse();
 
@@ -138,14 +141,19 @@ private:
     void UpdateMode();
     Mode DecideNextMode(const char **reason) const;
     void OnModeEnter(Mode prev);
-    void OnModeExit(Mode next); // next: 이번에 새로 전환될 상태(m_mode는 아직 지금 나가는 상태 그대로)
+    void OnModeExit(Mode next);    // next: 이번에 새로 전환될 상태(m_mode는 아직 지금 나가는 상태 그대로)
+    void SetSubMode(SubMode next); // m_subMode를 직접 대입하지 않고 항상 이 함수를 거친다 (전환 로그).
 
     void UpdateStop();
     void UpdatePark();
     void UpdateDrive();
     bool CheckPath();
-    bool TryLaneChange();
+    bool TryLaneChange(bool ignoreCooldown = false);
     bool TryAvoidObstacle();
+    // 현재 위치(fromPosition)에서 경로를 따라 distance만큼 앞선 지점의 위치/진행방향. 현재 레인 끝을
+    // 넘으면(스플라인 클램프 대신) ScanRoadSpeedConstraints처럼 m_path의 다음 레인 스플라인으로 이어서
+    // 계속 걷는다 — 코리도어 스윕(TryAvoidObstacle)이 레인 경계에서 끊기지 않게.
+    void GetCorridorPose(const Vec3 &fromPosition, float distance, Vec3 &outPosition, Vec3 &outDirection) const;
 
     void BeginParkPlan();
     void BeginParkSpotLeg();
@@ -187,7 +195,7 @@ public:
     // 차선 진입 허용 오차/임계값 (예: 현재 타깃 차선에 안착했는지 확인하는 기준)
     static constexpr float LANE_ENTRY_THRESHOLD = 5.0f;
     // 다음 차선으로 완전히 넘어가는(전환되는) 임계값
-    static constexpr float LANE_TRANSITION_THRESHOLD = 2.0f;
+    static constexpr float LANE_TRANSITION_THRESHOLD = 3.0f;
 
 private:
     // 설정 및 스펙 상수/변수 (Constants & Specifications)
@@ -223,9 +231,12 @@ private:
     bool m_parkPlanPending = false;
 
     float m_avoidReplanCooldown = 0.0f;
-    float m_avoidLateralOffset = 0.0f;                    // TryAvoidObstacle이 계산한 회피용 좌우 오프셋(+우/-좌, m). DriveControl이 조준점에 더한다.
-    static constexpr float AVOID_DETECT_DISTANCE = 20.0f; // 박스캐스트 코리도어 길이 (전방 감지 거리)
-    static constexpr float AVOID_SAMPLE_STEP = 2.0f;      // 코리도어를 따라 박스를 검사하는 간격
+    float m_avoidLateralOffset = 0.0f;                         // TryAvoidObstacle이 계산한 회피용 좌우 오프셋(+우/-좌, m). DriveControl이 조준점에 더한다.
+    float m_obstacleAheadGap = -1.0f;                          // TryAvoidObstacle이 찾은, 경로 폭 안 최근접 장애물까지의 범퍼 대 범퍼 거리(m). 없으면 -1. DriveSpeedIDM이 가상 정지 리더로 사용.
+    static constexpr float AVOID_DETECT_DISTANCE = 20.0f;      // 박스캐스트 코리도어 길이 (전방 감지 거리)
+    static constexpr float AVOID_SAMPLE_STEP = 2.0f;           // 코리도어를 따라 박스를 검사하는 간격
+    static constexpr float AVOID_CLOSE_DISTANCE_MARGIN = 1.5f;      // 제동거리 기반 "너무 가까움" 임계값의 여유 배수
+    static constexpr float AVOID_OBSTACLE_STANDSTILL_DISTANCE = 0.5f; // 장애물 가상 리더용 s0 -- 일반 차량 추종(IDM_STANDSTILL_DISTANCE=2m)보다 더 붙어도 되게 별도로 둔다.
     vector<LaneStep> m_path;
     size_t m_pathIndex = 0;
     static constexpr float LOOK_PROFILE_TIME = 5.0f;
@@ -282,9 +293,10 @@ private:
     RenderObject m_steerLine;
     RenderObject m_targetMarker;
     RenderObject m_splineRender;
-    RenderObject m_parkPathRender;   // Park 계획(RS 경로) 폴리라인
-    RenderObject m_parkTargetMarker; // Park 목표 위치
-    RenderObject m_parkTargetLine;   // Park 목표 방향
+    RenderObject m_parkPathRender;                    // Park 계획(RS 경로) 폴리라인
+    RenderObject m_parkTargetMarker;                  // Park 목표 위치
+    RenderObject m_parkTargetLine;                    // Park 목표 방향
+    std::vector<RenderObject> m_corridorDebugRenders; // TryAvoidObstacle 코리도어 샘플 박스(충돌=빨강/통과=초록)
 };
 
 static float CalcMaxSteerAngle(float speed)

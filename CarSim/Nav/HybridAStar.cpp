@@ -199,8 +199,8 @@ namespace HybridAStar
                               bool &foundPath,
                               const Params &params)
     {
-        PERF_LOG_SCOPE("Hybrid A* FindPath");
-        PerfLog::LogMemory("Hybrid A* FindPath Start");
+        // PERF_LOG_SCOPE("Hybrid A* FindPath");
+        // PERF_LOG_MEMORY("Hybrid A* FindPath Start");
         foundPath = false;
 
         auto startTime = std::chrono::steady_clock::now();
@@ -250,7 +250,7 @@ namespace HybridAStar
                 DebugConsole::Log("HybridAStar::FindPath failed: exceeded maxExpansions (" +
                                   std::to_string(params.maxExpansions) + ")");
                 LogElapsed("failed (maxExpansions)");
-                PerfLog::LogMemory("Hybrid A* FindPath maxExpansions " + std::to_string(params.maxExpansions));
+                // PERF_LOG_MEMORY("Hybrid A* FindPath maxExpansions " + std::to_string(params.maxExpansions));
                 return {}; // Failure: 탐색 한도 초과
             }
 
@@ -269,7 +269,7 @@ namespace HybridAStar
                 foundPath = true;
                 LogElapsed("succeeded");
 
-                PerfLog::LogMemory("Hybrid A* FindPath Succeeded " + std::to_string(expansions));
+                // PERF_LOG_MEMORY("Hybrid A* FindPath Succeeded " + std::to_string(expansions));
                 return result;
             }
 
@@ -315,7 +315,7 @@ namespace HybridAStar
                           std::to_string(expansions) + " expansions");
         LogElapsed("failed (open set exhausted)");
 
-        PerfLog::LogMemory("Hybrid A* FindPath exhausted");
+        // PERF_LOG_MEMORY("Hybrid A* FindPath exhausted");
         return {}; // Failure: 경로 없음
     }
 

@@ -35,6 +35,8 @@ public:
     const vector<shared_ptr<Lane>> &GetLanes() const { return m_lanes; };
     const unordered_map<int, shared_ptr<RoadNode>> &GetNodes() const { return m_nodes; };
     const shared_ptr<RoadNode> GetNode(int nodeId) const;
+    // ParkSpot이 아닌 노드 중 하나를 무작위로 반환한다 (목적지/스폰 지점 선택용). 후보가 없으면 nullptr.
+    shared_ptr<RoadNode> GetRandomDestNode() const;
     // data.json의 "obstacles"(임시 데이터: 실제 장애물 인식 파이프라인이 들어오기 전까지 손으로 채운
     // 사각형 목록)를 그대로 반환한다. 실시간 회피의 코리도어 검사 등에서 쓴다.
     const vector<HybridAStar::Obstacle> &GetObstacles() const { return m_obstacles; }

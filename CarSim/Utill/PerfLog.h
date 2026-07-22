@@ -15,7 +15,7 @@
 #include <string>
 
 // 필요한 곳에 수동으로 찍어보는 성능/메모리 로그.
-// 메모리 : PerfLog::LogMemory("FindPath 진입 전");
+// 메모리 : PERF_LOG_MEMORY("FindPath 진입 전");
 // 성능 : void Foo() { PERF_LOG_SCOPE("Foo"); ... }
 namespace PerfLog
 {
@@ -28,7 +28,7 @@ namespace PerfLog
     }
 
     // 생성부터 소멸까지(return/예외로 스코프를 벗어나는 경우 포함) 걸린 시간을 ms 단위로 로그.
-    // 직접 쓰기보다 PERF_LOG_SCOPE(label) 매크로로 선언해서 쓰는 걸 권장.
+    // 직접 쓰기보다 PERF_LOG_SCOPE(label) / PERF_LOG_MEMORY(label) 매크로로 선언해서 쓰는 걸 권장.
     class ScopedTimer
     {
     public:
@@ -66,3 +66,4 @@ namespace PerfLog
 #define PERF_LOG_CONCAT(a, b) PERF_LOG_CONCAT_INNER(a, b)
 
 #define PERF_LOG_SCOPE(label) ::PerfLog::ScopedTimer PERF_LOG_CONCAT(perfLogScope_, __LINE__)(label)
+#define PERF_LOG_MEMORY(label) ::PerfLog::LogMemory(label)

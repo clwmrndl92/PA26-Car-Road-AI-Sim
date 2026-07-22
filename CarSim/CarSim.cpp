@@ -60,7 +60,10 @@ bool CarSim::InitResource()
     {
         auto car = std::make_shared<Car>();
         car->Init(GetCarSpec(CarType::Car0), &m_RoadDataManager, JPH::Vec3(-20.0f, 0.1f, 8.0f));
-        car->SetDestination(m_RoadDataManager.GetNode(1));
+
+        std::shared_ptr<RoadNode> dest = m_RoadDataManager.GetRandomDestNode();
+        if (dest)
+            car->SetDestination(dest);
         car->SetRotation(Vec3(-1, 0, 0));
 
         m_GameObjects.push_back(car);
@@ -84,17 +87,10 @@ bool CarSim::InitResource()
 
 void CarSim::SpawnCar(CarType type)
 {
-    std::vector<std::shared_ptr<RoadNode>> candidates;
-    for (const auto &[id, node] : m_RoadDataManager.GetNodes())
-    {
-        if (node->nodeType != RoadNodeType::ParkSpot)
-            candidates.push_back(node);
-    }
-    if (candidates.empty())
+    auto spawnNode = m_RoadDataManager.GetRandomDestNode();
+    auto destNode = m_RoadDataManager.GetRandomDestNode();
+    if (!spawnNode || !destNode)
         return;
-
-    const auto &spawnNode = candidates[rand() % candidates.size()];
-    const auto &destNode = candidates[rand() % candidates.size()];
 
     float yaw = (static_cast<float>(rand()) / static_cast<float>(RAND_MAX)) * XM_2PI;
     Vec3 direction(std::sin(yaw), 0.0f, std::cos(yaw));
