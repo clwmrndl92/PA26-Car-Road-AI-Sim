@@ -504,13 +504,13 @@ void Car::DriveSpeedIDM(float steerSpeedCap)
     // TryAvoidObstacle이 경로 폭 안에서 찾아둔 최근접 장애물: 정지한 가상 선행차량으로 취급해 감속한다.
     // s0는 일반 차량 추종용(IDM_STANDSTILL_DISTANCE)보다 작게 따로 둔다 -- 정적 장애물은 다른 차만큼
     // 넉넉한 여유를 안 두고 더 붙어도 된다.
-    if (m_obstacleAheadGap >= 0.0f)
-    {
-        CarFollowing::Params obstacleParams = idmParams;
-        obstacleParams.s0 = AVOID_OBSTACLE_STANDSTILL_DISTANCE;
-        float obstacleAccel = CarFollowing::CalculateAcceleration(m_speed, m_acceleration, 0.0f, 0.0f, m_obstacleAheadGap, obstacleParams);
-        accel = std::min(accel, obstacleAccel);
-    }
+    // if (m_obstacleAheadGap >= 0.0f)
+    // {
+    //     CarFollowing::Params obstacleParams = idmParams;
+    //     obstacleParams.s0 = AVOID_OBSTACLE_STANDSTILL_DISTANCE;
+    //     float obstacleAccel = CarFollowing::CalculateAcceleration(m_speed, m_acceleration, 0.0f, 0.0f, m_obstacleAheadGap, obstacleParams);
+    //     accel = std::min(accel, obstacleAccel);
+    // }
 
     m_acceleration = accel;
 }
@@ -775,42 +775,27 @@ void Car::RebuildRSDebugRender(const ReedsShepp::Path &path, const Vec3 &startPo
     m_parkTargetLine.SetModel(pTargetLineModel);
 }
 
-// TryAvoidObstacle의 sweepClear와 같은 샘플 지점들을 그대로 훑되, 첫 충돌에서 멈추지 않고 전부 박스
-// 윤곽선으로 그린다 — 충돌한 샘플은 빨강, 통과한 샘플은 초록.
-void Car::RebuildCorridorDebugRender(const Vec3 &position, float lateralOffset,
+// TryAvoidObstacle이 SimulateCorridorTrajectory로 예측한 궤적을 그대로 훑어 전부 박스 윤곽선으로
+// 그린다(첫 충돌에서 멈추지 않음) — 충돌한 샘플은 빨강, 통과한 샘플은 초록.
+void Car::RebuildCorridorDebugRender(const std::vector<Vec3> &positions, const std::vector<Vec3> &directions,
                                      const std::vector<HybridAStar::Obstacle> &obstacles,
                                      const HybridAStar::VehicleShape &shape)
 {
     constexpr float DEBUG_LINE_HEIGHT = 0.15f;
-    float minReachDistance = 2.0f * m_wheelbase / tanf(m_maxSteerAngle);
 
     m_corridorDebugRenders.clear();
-    int sampleIndex = 0;
-    for (float d = 0.0f; d <= AVOID_DETECT_DISTANCE; d += AVOID_SAMPLE_STEP)
+    for (size_t sampleIndex = 0; sampleIndex < positions.size(); ++sampleIndex)
     {
-        if (lateralOffset != 0.0f && d < minReachDistance)
-            continue;
-
-        Vec3 samplePos, sampleDir;
-        if (d == 0.0f) // TryAvoidObstacle::sweepClear와 동일 -- 지금 이 자리는 실제 차 heading으로 본다.
-        {
-            samplePos = position;
-            sampleDir = GetForwardAxis();
-        }
-        else
-        {
-            GetCorridorPose(position, d, samplePos, sampleDir);
-        }
-        Vec3 sampleNormal = Vec3(-sampleDir.GetZ(), 0.0f, sampleDir.GetX()).Normalized();
-        Vec3 testPos = samplePos + sampleNormal * lateralOffset;
+        const Vec3 &samplePos = positions[sampleIndex];
+        const Vec3 &sampleDir = directions[sampleIndex];
         float headingRad = atan2f(sampleDir.GetZ(), sampleDir.GetX());
-        bool colliding = HybridAStar::IsColliding(testPos, headingRad, obstacles, shape);
+        bool colliding = HybridAStar::IsColliding(samplePos, headingRad, obstacles, shape);
 
-        // IsColliding과 동일하게, 실제 충돌판정 박스 중심은 pivot(testPos)에서 heading 방향으로
+        // IsColliding과 동일하게, 실제 충돌판정 박스 중심은 pivot(samplePos)에서 heading 방향으로
         // pivotToCenter만큼 떨어진 지점이다 (HybridAStar.cpp IsPoseCollision 참고).
         Vec3 forward(cosf(headingRad), 0.0f, sinf(headingRad));
         Vec3 right(-forward.GetZ(), 0.0f, forward.GetX());
-        Vec3 bodyCenter = testPos + forward * shape.pivotToCenter;
+        Vec3 bodyCenter = samplePos + forward * shape.pivotToCenter;
 
         auto corner = [&](float alongSign, float acrossSign)
         {
@@ -822,7 +807,7 @@ void Car::RebuildCorridorDebugRender(const Vec3 &position, float lateralOffset,
             corner(1.0f, 1.0f), corner(1.0f, -1.0f), corner(-1.0f, -1.0f), corner(-1.0f, 1.0f), corner(1.0f, 1.0f)};
 
         Model *pModel = ModelManager::Get().CreateFromGeometry(
-            "__corridor_box__:" + GetName() + ":" + std::to_string(sampleIndex++), Geometry::CreatePolyline(corners));
+            "__corridor_box__:" + GetName() + ":" + std::to_string(sampleIndex), Geometry::CreatePolyline(corners));
         DirectX::XMFLOAT4 color = colliding ? DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f) : DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f);
         pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", color);
         pModel->materials[0].Set<float>("$Opacity", 1.0f);

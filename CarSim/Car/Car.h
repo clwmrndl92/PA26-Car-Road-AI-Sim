@@ -70,7 +70,7 @@ private:
     void RebuildSplineRender();
     void RebuildRSDebugRender(const ReedsShepp::Path &path, const Vec3 &startPos, float startAngleRad,
                               float turningRadius, const Vec3 &targetPos, float targetAngleRad);
-    void RebuildCorridorDebugRender(const Vec3 &position, float lateralOffset,
+    void RebuildCorridorDebugRender(const std::vector<Vec3> &positions, const std::vector<Vec3> &directions,
                                     const std::vector<HybridAStar::Obstacle> &obstacles,
                                     const HybridAStar::VehicleShape &shape);
 
@@ -150,10 +150,22 @@ private:
     bool CheckPath();
     bool TryLaneChange(bool ignoreCooldown = false);
     bool TryAvoidObstacle();
-    // 현재 위치(fromPosition)에서 경로를 따라 distance만큼 앞선 지점의 위치/진행방향. 현재 레인 끝을
-    // 넘으면(스플라인 클램프 대신) ScanRoadSpeedConstraints처럼 m_path의 다음 레인 스플라인으로 이어서
-    // 계속 걷는다 — 코리도어 스윕(TryAvoidObstacle)이 레인 경계에서 끊기지 않게.
-    void GetCorridorPose(const Vec3 &fromPosition, float distance, Vec3 &outPosition, Vec3 &outDirection) const;
+    // (startSpline/startLane/startPathIndex)를 기준 레인으로 삼아, fromPosition에서 distance만큼 앞선
+    // 지점의 위치/진행방향을 구한다. 그 레인 끝을 넘으면(스플라인 클램프 대신) ScanRoadSpeedConstraints
+    // 처럼 m_path의 다음 레인 스플라인으로 이어서 계속 걷는다. 기준 레인을 파라미터로 받는 이유:
+    // SimulateCorridorTrajectory가 반복 호출할 때 매번 m_currentSpline/m_pathIndex(차의 "실제" 현재
+    // 레인)에서 다시 걷기 시작하면, 시뮬레이션 중인 위치가 이미 그 레인을 넘어간 뒤에도 계속 그 레인
+    // 기준으로 계산해서 조준점이 고정돼버린다 — 호출부가 자신이 지금 어느 레인에 있는지 넘겨야 한다.
+    void GetCorridorPose(const Spline *startSpline, const shared_ptr<Lane> &startLane, size_t startPathIndex,
+                        const Vec3 &fromPosition, float distance, Vec3 &outPosition, Vec3 &outDirection) const;
+    // DriveControl과 동일한 lookahead 거리 계산 (최소 회전지름 하한 + 속도 기반).
+    float ComputeLookaheadDistance() const;
+    // TryAvoidObstacle이 쓰는 코리도어 생성기. 스플라인에 점을 그냥 투영하는 대신, DriveControl의
+    // PurePursuit 스티어링을 그대로 시뮬레이션해서 지금 위치/heading에서 시작해 lateralOffset만큼
+    // 조준점을 민 채로 차가 실제로 지나갈 물리적 궤적을 스텝별(AVOID_SAMPLE_STEP)로 예측한다 — pure
+    // pursuit 진입 직후처럼 heading이 라인과 안 맞을 때도 실제 궤적 기준이라 정확하다.
+    void SimulateCorridorTrajectory(float lateralOffset, std::vector<Vec3> &outPositions,
+                                    std::vector<Vec3> &outDirections) const;
 
     void BeginParkPlan();
     void BeginParkSpotLeg();

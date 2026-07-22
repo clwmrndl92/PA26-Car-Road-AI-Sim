@@ -753,12 +753,17 @@ bool Car::CheckPath()
     return true;
 }
 
+float Car::ComputeLookaheadDistance() const
+{
+    float minSafeLookahead = 2.0f * m_wheelbase / tanf(m_maxSteerAngle);
+    constexpr float LOOKAHEAD_TIME = 1.0f; // 몇 초 앞을 볼지
+    return std::max(minSafeLookahead, m_speed * LOOKAHEAD_TIME);
+}
+
 void Car::DriveControl()
 {
     Vec3 position = m_rigidbody.GetPosition();
-    float minSafeLookahead = 2.0f * m_wheelbase / tanf(m_maxSteerAngle);
-    constexpr float LOOKAHEAD_TIME = 1.0f; // 몇 초 앞을 볼지
-    float lookaheadDistance = std::max(minSafeLookahead, m_speed * LOOKAHEAD_TIME);
+    float lookaheadDistance = ComputeLookaheadDistance();
     auto targetPosition = m_currentSpline.GetLookaheadPoint(position, lookaheadDistance);
     // TryAvoidObstacle이 전방 코리도어에서 장애물을 감지하고 옆으로 피할 여지를 찾으면 여기서
     // 조준점 자체를 옆으로 밀어(Reynolds식 측면 회피) 차선 추종을 유지한 채 슬쩍 피해가게 한다.
@@ -782,11 +787,12 @@ void Car::DriveControl()
     m_targetMarker.GetTransform().SetPosition(targetMarkerPos);
 }
 
-void Car::GetCorridorPose(const Vec3 &fromPosition, float distance, Vec3 &outPosition, Vec3 &outDirection) const
+void Car::GetCorridorPose(const Spline *startSpline, const shared_ptr<Lane> &startLane, size_t startPathIndex,
+                          const Vec3 &fromPosition, float distance, Vec3 &outPosition, Vec3 &outDirection) const
 {
-    const Spline *spline = &m_currentSpline;
-    shared_ptr<Lane> segmentLane = m_currentLane;
-    size_t pathIndex = m_pathIndex;
+    const Spline *spline = startSpline;
+    shared_ptr<Lane> segmentLane = startLane;
+    size_t pathIndex = startPathIndex;
     Vec3 segmentStart = fromPosition;
     float remainingDistance = distance;
 
@@ -821,13 +827,81 @@ void Car::GetCorridorPose(const Vec3 &fromPosition, float distance, Vec3 &outPos
     }
 }
 
-// 1) 경로 폭 안 최근접 장애물까지 거리를 재서, 제동거리 기준으로 이미 너무 가까우면(완만한 대응으론
-// 늦음) 바로 하이브리드 A*+RS 회피 기동으로 전환한다(true). 2) 아직 여유 있으면 그 장애물을 정지한
-// 가상 선행차량으로 노출해(m_obstacleAheadGap) DriveSpeedIDM이 자연스럽게 감속하게 한다. 3) 그래도
-// 전방 코리도어(차량 형상 폭의 박스캐스트)가 막혀 있으면, 차가 실제로 도달 가능한 지점만으로 옆
-// 오프셋을 찾아보고 + MOBIL로 차선변경도 안전한지 확인해서 — 둘 다 되면 오프셋만 세팅한 채 일반주행
-// 유지(false, DriveControl이 조준점을 밀거나 이미 바뀐 레인을 그대로 따라감). 어느 하나라도 안 되면
-// 정지 후 RS 회피로 넘어간다(true).
+void Car::SimulateCorridorTrajectory(float lateralOffset, std::vector<Vec3> &outPositions,
+                                     std::vector<Vec3> &outDirections) const
+{
+    outPositions.clear();
+    outDirections.clear();
+
+    Vec3 pos = m_rigidbody.GetPosition();
+    Vec3 dir = GetForwardAxis();
+    float lookaheadDistance = ComputeLookaheadDistance();
+
+    const Spline *posSpline = &m_currentSpline; // pos가 지금 어느 레인 위에 있는지 추적하는 커서
+    shared_ptr<Lane> posLane = m_currentLane;
+    size_t posPathIndex = m_pathIndex;
+
+    constexpr float TRAJECTORY_SUBSTEP = 0.25f; // 오버슈트 방지용 적분 스텝
+
+    for (float traveled = 0.0f; traveled <= AVOID_DETECT_DISTANCE; traveled += AVOID_SAMPLE_STEP)
+    {
+        outPositions.push_back(pos);
+        outDirections.push_back(dir);
+
+        float remaining = AVOID_SAMPLE_STEP;
+        while (remaining > 0.0f)
+        {
+            float step = std::min(TRAJECTORY_SUBSTEP, remaining);
+
+            // pos가 posSpline 끝에 사실상 도달했으면(가장 가까운 점이 마지막 샘플) 경로상 다음 레인으로
+            // 커서를 옮긴다 -- ScanRoadSpeedConstraints/GetCorridorPose와 같은 판정 방식.
+            while (posSpline->GetLength() > 0.0f &&
+                   (1.0f - posSpline->GetSplinePosition(pos)) * posSpline->GetLength() < TRAJECTORY_SUBSTEP * 0.5f)
+            {
+                shared_ptr<Lane> nextLane = (posPathIndex + 1 < m_path.size()) ? m_path[posPathIndex + 1].lane : nullptr;
+                if (!nextLane)
+                    break; // 경로 끝 -- 이 레인 기준으로 계속(기존 클램프 동작과 동일)
+                posLane = nextLane;
+                posSpline = &nextLane->GetSpline();
+                ++posPathIndex;
+            }
+
+            // DriveControl과 동일한 조준점(+lateralOffset) -- pos가 속한 레인(posSpline 등)부터 걸어서
+            // 찾는다. "지금 시뮬레이션 중인" pos 기준으로 매 서브스텝 다시 구하는 건 실제 주행도 매
+            // 프레임 그 시점 위치에서 다시 구하는 것과 동일하다.
+            Vec3 targetPos, targetDir;
+            GetCorridorPose(posSpline, posLane, posPathIndex, pos, lookaheadDistance, targetPos, targetDir);
+            if (lateralOffset != 0.0f)
+            {
+                Vec3 targetNormal = Vec3(-targetDir.GetZ(), 0.0f, targetDir.GetX()).Normalized();
+                targetPos = targetPos + targetNormal * lateralOffset;
+            }
+
+            // Car::PurePursuit와 동일한 조향각 공식을, atan2(z,x) 부호 규약의 signed heading error로
+            // 다시 쓴 것 -- 결과는 같지만 carRight 없이 dir/toTarget만으로 부호까지 바로 나온다.
+            Vec3 toTarget = targetPos - pos;
+            float distance = toTarget.Length();
+            float steerAngle = 0.0f;
+            if (distance > 0.001f)
+            {
+                float headingError = atan2f(dir.GetX() * toTarget.GetZ() - dir.GetZ() * toTarget.GetX(), dir.Dot(toTarget));
+                steerAngle = std::clamp(-atanf(2.0f * m_wheelbase * sinf(headingError) / distance),
+                                        -m_maxSteerAngle, m_maxSteerAngle);
+            }
+
+            // ApplyMotion의 자전거 모델과 동일: angularVelocity = speed*tan(steerAngle)/wheelbase, 부호는
+            // 위 steerAngle 유도와 마찬가지로 atan2(z,x) 각도 기준으로 뒤집힌다(HybridAStar::StepPose의
+            // Left/kappa 부호 규약과 교차검증됨).
+            float currentAngle = atan2f(dir.GetZ(), dir.GetX());
+            float nextAngle = currentAngle - step * tanf(steerAngle) / m_wheelbase;
+            pos = pos + dir * step;
+            dir = Vec3(cosf(nextAngle), 0.0f, sinf(nextAngle));
+
+            remaining -= step;
+        }
+    }
+}
+
 bool Car::TryAvoidObstacle()
 {
     const std::vector<HybridAStar::Obstacle> &obstacles = m_RoadDataManager->GetObstacles();
@@ -840,109 +914,66 @@ bool Car::TryAvoidObstacle()
         return false;
     }
 
-    Vec3 position = m_rigidbody.GetPosition();
-
-    // 종방향(진행방향) 거리는 스플라인 파라미터를 호 길이로 근사 변환해서 잰다 — (obsSplinePos - position)
-    // 의 직선거리를 그대로 쓰면 횡방향으로 붙어있는(진행방향으로는 거의 안 떨어진) 장애물도 "바로 앞"으로
-    // 오판하고, 차 뒤에 있는 장애물도 걸러지지 않는다.
-    float splineLength = m_currentSpline.GetLength();
-    float carDist = m_currentSpline.GetSplinePosition(position) * splineLength;
-
-    // 감지거리 안에서, 내 경로 폭(내 반폭 + 장애물 반폭) 안에 실제로 걸치는 장애물들만 "관련 있음"으로
-    // 본다 — 도로 옆으로 비켜난 장애물 때문에 괜히 급감속/급회피하지 않도록.
-    const HybridAStar::Obstacle *nearestObstacle = nullptr;
-    float nearestGap = 0.0f; // 범퍼 대 범퍼
-    float biasSum = 0.0f;
-    int biasCount = 0;
-    for (const HybridAStar::Obstacle &obstacle : obstacles)
+    // lateralOffset 궤적을 시뮬레이션해서 처음 충돌하는 샘플의 인덱스를 반환(없으면 -1).
+    auto findCollision = [&](float lateralOffset, std::vector<Vec3> &positions, std::vector<Vec3> &directions)
     {
-        float obsParam = m_currentSpline.GetSplinePosition(obstacle.center);
-        Vec3 obsSplinePos = m_currentSpline.GetPositionAt(obsParam);
-        float longitudinal = obsParam * splineLength - carDist; // 진행방향 성분만(횡방향과 분리), +면 앞
-        if (longitudinal + obstacle.halfLength < 0.0f || longitudinal - obstacle.halfLength > AVOID_DETECT_DISTANCE)
-            continue; // 이미 지나쳤거나(뒤) 아직 한참 앞
-        Vec3 obsDir = m_currentSpline.GetDirectionAt(obsParam);
-        Vec3 obsNormal = Vec3(-obsDir.GetZ(), 0.0f, obsDir.GetX()).Normalized();
-        float lateral = (obstacle.center - obsSplinePos).Dot(obsNormal);
-        if (std::fabs(lateral) > shape.halfWidth + obstacle.halfWidth)
-            continue; // 내 경로 폭 밖 -> 무관
-
-        biasSum += lateral;
-        ++biasCount;
-
-        float gap = std::max(0.0f, longitudinal - obstacle.halfLength - shape.halfLength);
-        if (nearestObstacle == nullptr || gap < nearestGap)
+        SimulateCorridorTrajectory(lateralOffset, positions, directions);
+        for (size_t i = 0; i < positions.size(); ++i)
         {
-            nearestObstacle = &obstacle;
-            nearestGap = gap;
+            if (HybridAStar::IsColliding(positions[i], DirectionToAngleRad(directions[i]), obstacles, shape))
+                return static_cast<int>(i);
         }
-    }
+        return -1;
+    };
+    auto sweepClear = [&](float lateralOffset)
+    {
+        std::vector<Vec3> positions, directions;
+        return findCollision(lateralOffset, positions, directions) < 0;
+    };
 
-    if (nearestObstacle == nullptr)
+    std::vector<Vec3> basePositions, baseDirections;
+    int collideIndex = findCollision(0.0f, basePositions, baseDirections);
+    RebuildCorridorDebugRender(basePositions, baseDirections, obstacles, shape); // 디버그: 충돌=빨강/통과=초록 박스
+
+    if (collideIndex < 0)
     {
         m_avoidLateralOffset = 0.0f;
         m_obstacleAheadGap = -1.0f;
-        m_corridorDebugRenders.clear();
-        return false; // 경로 폭 안엔 장애물 없음
+        return false; // 코리도어 궤적 전체가 깨끗함
     }
+    float collisionDistance = collideIndex * AVOID_SAMPLE_STEP;
 
     // 1) 제동거리 기준 "너무 가까움" — 비상 제동(m_maxEmergBrake)으로도 못 설 거리 안이면 감속/옆으로
-    // 피할 여유 없이 바로 재계획. m_maxBrake(편안한 감속, 15초에 100->0)로 재면 저속에서도 제동거리가
-    // AVOID_DETECT_DISTANCE(20m)를 넘어버려 충돌 여부와 무관하게 항상 이 게이트가 걸린다.
+    // 피할 여유 없이 바로 재계획.
     float stoppingDistance = (m_speed * m_speed) / (2.0f * m_maxEmergBrake);
     float closeThreshold = stoppingDistance * AVOID_CLOSE_DISTANCE_MARGIN;
-    if (nearestGap <= closeThreshold)
+    if (collisionDistance <= closeThreshold)
     {
         m_avoidLateralOffset = 0.0f;
         m_obstacleAheadGap = -1.0f;
-        m_corridorDebugRenders.clear();
         BeginAvoidPlan();
         return true;
     }
 
-    // 2) 아직 여유 있음 -- 가장 가까운 장애물을 정지한 가상 선행차량으로 노출, DriveSpeedIDM이 감속.
-    m_obstacleAheadGap = nearestGap;
+    // 2) 아직 여유 있음 -- 충돌 지점까지의 거리를 정지한 가상 선행차량 gap으로 노출, DriveSpeedIDM이 감속.
+    m_obstacleAheadGap = collisionDistance;
 
-    // lateralOffset만큼 옆으로 민 코리도어를 따라 샘플을 찍어 하나라도 장애물과 겹치면 false.
-    // offset != 0인 경우, 조향 한계상 차가 실제로 그 오프셋에 도달할 수 없는 근거리 샘플(d <
-    // minReachDistance)은 건너뛴다 — 어차피 못 갈 지점의 충돌 여부로 오프셋을 기각하면 안 된다.
-    float minReachDistance = 2.0f * m_wheelbase / tanf(m_maxSteerAngle);
-    Vec3 forwardAxis = GetForwardAxis();
-    auto sweepClear = [&](float lateralOffset)
+    // 어느 쪽으로 옆 오프셋을 먼저 시도할지: 충돌 지점 근처(차량 크기 범위 안)에 있는 장애물들이 그
+    // 지점 기준 좌/우 어느 쪽에 몰려 있는지로 정한다 — 충돌과 무관한 먼 장애물은 편향에 안 섞이게, 충돌
+    // 지점의 실제 heading 기준으로 판단한다.
+    Vec3 collidePos = basePositions[collideIndex];
+    Vec3 collideDir = baseDirections[collideIndex];
+    Vec3 collideNormal = Vec3(-collideDir.GetZ(), 0.0f, collideDir.GetX()).Normalized();
+    float biasSum = 0.0f;
+    int biasCount = 0;
+    for (const HybridAStar::Obstacle &obstacle : obstacles)
     {
-        for (float d = 0.0f; d <= AVOID_DETECT_DISTANCE; d += AVOID_SAMPLE_STEP)
-        {
-            if (lateralOffset != 0.0f && d < minReachDistance)
-                continue;
-            Vec3 samplePos, sampleDir;
-            // d=0(바로 지금 이 자리)은 스플라인 접선 방향 대신 차의 실제 heading을 쓴다 -- pure
-            // pursuit로 막 진입해서 아직 라인과 완전히 정렬되지 않았을 때, 스플라인 방향으로 가상
-            // 박스를 그리면 실제 차체와 다른 각도라 차선 옆 장애물을 허위로 충돌 판정하기 쉽다.
-            if (d == 0.0f)
-            {
-                samplePos = position;
-                sampleDir = forwardAxis;
-            }
-            else
-            {
-                GetCorridorPose(position, d, samplePos, sampleDir);
-            }
-            Vec3 sampleNormal = Vec3(-sampleDir.GetZ(), 0.0f, sampleDir.GetX()).Normalized();
-            Vec3 testPos = samplePos + sampleNormal * lateralOffset;
-            if (HybridAStar::IsColliding(testPos, DirectionToAngleRad(sampleDir), obstacles, shape))
-                return false;
-        }
-        return true;
-    };
-
-    // 3) 코리도어 자체가 비어있으면(감속만으로 충분) 더 볼 것 없음.
-    RebuildCorridorDebugRender(position, 0.0f, obstacles, shape); // 디버그: 충돌=빨강/통과=초록 박스
-    if (sweepClear(0.0f))
-    {
-        m_avoidLateralOffset = 0.0f;
-        return false;
+        float proximity = shape.halfLength + obstacle.halfLength + shape.halfWidth + obstacle.halfWidth;
+        if ((obstacle.center - collidePos).Length() > proximity)
+            continue;
+        biasSum += (obstacle.center - collidePos).Dot(collideNormal);
+        ++biasCount;
     }
-
     float preferredSign = (biasCount > 0 && biasSum != 0.0f) ? -std::copysign(1.0f, biasSum) : 1.0f;
 
     constexpr float NUDGE_STEP = 0.5f;
@@ -962,9 +993,9 @@ bool Car::TryAvoidObstacle()
             break;
     }
 
-    // 옆 오프셋이 도달 가능하고 + MOBIL도 차선변경을 승인해야만 회피기동으로 인정한다(쿨다운 무시하고
-    // 즉시 평가). 성공하면 TryLaneChange가 이미 레인/스플라인을 새 것으로 바꿔놨으므로, 옛 스플라인
-    // 기준 오프셋은 더 의미가 없어 0으로 둔다.
+    // 옆 오프셋이 있고 + MOBIL도 차선변경을 승인해야만 회피기동으로 인정한다(쿨다운 무시하고 즉시
+    // 평가). 성공하면 TryLaneChange가 이미 레인/스플라인을 새 것으로 바꿔놨으므로, 옛 스플라인 기준
+    // 오프셋은 더 의미가 없어 0으로 둔다.
     if (offsetFound && TryLaneChange(/*ignoreCooldown=*/true))
     {
         m_avoidLateralOffset = 0.0f;
