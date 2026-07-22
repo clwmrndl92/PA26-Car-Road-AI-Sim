@@ -122,11 +122,16 @@ Car::Mode Car::DecideNextMode(const char **reason) const
         }
 
         constexpr float ARRIVE_DISTANCE = 5.0f;
-        bool arrived = m_destLane != nullptr && (m_destLane->GetEndPoint() - GetPosition()).Length() < ARRIVE_DISTANCE;
+        bool arrived = false;
+        if (m_destLane != nullptr)
+        {
+            Vec3 arrivePoint = m_pendingParkNode != nullptr ? m_pendingParkNode->position : m_destLane->GetEndPoint();
+            arrived = (arrivePoint - GetPosition()).Length() < ARRIVE_DISTANCE;
+        }
 
         if (arrived && GetParkTargetNode() != nullptr)
         {
-            *reason = "arrived at destination with park target";
+            *reason = "arrived at destination";
             return Mode::Park;
         }
         if (m_destLane == nullptr || arrived)
@@ -216,11 +221,7 @@ bool Car::TryFindPathAndSetLane()
 
 void Car::UpdatePark()
 {
-    // TODO(주차 중 장애물 감시): fsm.txt는 상태:주차(출차) 전체에 박스캐스트 감지 -> 5초 대기 ->
-    // 이동 여부 판단 -> 재탐색 로직을 요구하지만, 여긴 각 leg를 계획하는 시점에 정적 장애물만
-    // 반영하고 실행 중(RS pure pursuit로 이동하는 동안)에는 전혀 재검사하지 않는다. 대기시간을
-    // 셀 멤버 변수가 없어(Car.h는 이번엔 안 건드림) 구현하지 않음 — 넣으려면 Car.h에 타이머 값을
-    // 추가하면서 여기 같이 채워야 한다.
+    // TODO(주차 중 장애물 감시): fsm.txt는 상태:주차(출차) 전체에 박스캐스트 감지 -> 5초 대기 -> 이동 여부 판단 -> 재탐색 로직
     if (m_parkPlanPending)
     {
         // 완전히 정지할 때까지는 RS 계획을 세우지 않고 감속만 한다.
@@ -302,6 +303,51 @@ void Car::UpdatePark()
     }
 }
 
+void Car::GetLaneLookaheadPoint(const shared_ptr<Lane> &startLane, const Vec3 &position, float lookaheadDistance,
+                                Vec3 &outPosition, float &outAngleRad) const
+{
+    shared_ptr<Lane> lane = startLane;
+    const Spline *spline = &lane->GetSpline();
+    float t = spline->GetSplinePosition(position);
+    float remaining = lookaheadDistance;
+
+    // successor를 최대 이 정도까지만 타고 넘어간다(사이클/데이터 이상으로 인한 무한루프 방지).
+    constexpr int MAX_LANE_HOPS = 16;
+    for (int hop = 0; hop < MAX_LANE_HOPS; ++hop)
+    {
+        float splineLength = spline->GetLength();
+        float distanceToEnd = splineLength > 0.0f ? (1.0f - t) * splineLength : 0.0f;
+        if (remaining <= distanceToEnd)
+        {
+            float targetT = splineLength > 0.0f ? std::clamp(t + remaining / splineLength, 0.0f, 1.0f) : 1.0f;
+            outPosition = spline->GetPositionAt(targetT);
+            outAngleRad = DirectionToAngleRad(spline->GetDirectionAt(targetT));
+            return;
+        }
+
+        shared_ptr<Lane> next;
+        for (const weak_ptr<Lane> &weakSucc : lane->GetSuccessors())
+        {
+            if ((next = weakSucc.lock()))
+                break;
+        }
+        if (!next)
+        {
+            outPosition = spline->GetPositionAt(1.0f);
+            outAngleRad = DirectionToAngleRad(spline->GetDirectionAt(1.0f));
+            return;
+        }
+
+        remaining -= distanceToEnd;
+        lane = next;
+        spline = &lane->GetSpline();
+        t = 0.0f;
+    }
+
+    outPosition = spline->GetPositionAt(1.0f);
+    outAngleRad = DirectionToAngleRad(spline->GetDirectionAt(1.0f));
+}
+
 void Car::BeginParkPlan()
 {
     int parkNodeId = -1;
@@ -321,16 +367,14 @@ void Car::BeginParkPlan()
                                               });
             if (hasAnyParkSpot)
             {
-                // ParkSpot은 있지만 전부 예약 중 -> 이번엔 포기(다른 차가 자리를 쓰는 중이므로 노드
-                // 위치로 직행하면 충돌한다).
+                // ParkSpot은 있지만 전부 예약 중
                 DebugConsole::Log("Park spot reservation failed for node " + std::to_string(parkNodeId) +
                                   ": all ParkSpot children reserved, abandoning destination");
                 m_parkSequenceActive = false; // 시퀀스 취소 — Park에 갇히지 않도록.
                 m_destLane = nullptr;
                 return;
             }
-            // 주차장이 아닌 노드(ParkSpot 자식이 아예 없음, 예: 길가 목적지) -> 출차와 마찬가지로
-            // ParkSpot 없이도 노드 자체의 위치+방향을 목표 pose로 삼아 RS로 진입한다. 이하 로직은
+            // 주차장이 아닌 노드(ParkSpot 자식이 아예 없음, 예: 길가 목적지)
             // m_parkSpot을 그대로 이 노드로 취급한다(위치/방향만 쓰므로 실제 예약 스팟과 동일하게 동작).
             m_parkSpot = pendingNode;
         }
@@ -382,9 +426,9 @@ void Car::BeginParkPlan()
         // 진행방향을 목표 heading으로 삼는다 — RS로 레인 위에 정렬해서 올라서면 이후 Drive의 일반 주행/
         // MOBIL이 알아서 합류를 이어받는다.
         constexpr float EXIT_LEAD_DISTANCE = 6.0f;
-        Vec3 targetPos = closestLane->GetSpline().GetLookaheadPoint(rigidPosition, EXIT_LEAD_DISTANCE);
-        float targetSplinePos = closestLane->GetSpline().GetSplinePosition(targetPos);
-        float targetAngleRad = DirectionToAngleRad(closestLane->GetSpline().GetDirectionAt(targetSplinePos));
+        Vec3 targetPos;
+        float targetAngleRad;
+        GetLaneLookaheadPoint(closestLane, rigidPosition, EXIT_LEAD_DISTANCE, targetPos, targetAngleRad);
 
         bool foundPath = false;
         ReedsShepp::Path path = HybridAStar::FindPath(rigidPosition, startAngleRad, targetPos, targetAngleRad, obstacles, shape, foundPath);
@@ -565,12 +609,8 @@ void Car::UpdateStop()
 #pragma region Drive
 void Car::UpdateDrive()
 {
-    // 서브상태:회피 — Hybrid A* + RS 경로를 다 추종할 때까지는 일반주행 로직(CheckPath/TryLaneChange/
-    // TryAvoidObstacle)을 건드리지 않는다. 완주하면 일반주행으로 복귀한다.
-    // TODO(정차): 회피 경로 추종 "중"에 재장애물 감지는 없다 — notes/fsm.txt의 "2초 대기 후 이동
-    // 여부 판단, 안 움직였으면 재탐색" 분기는 안 만듦. 장애물이 전부 정적이라(움직이지 않음)
-    // 이미 성공한 RS 경로가 도중에 새로 막힐 일이 없어서(고정 장애물 기준으로 계획했으므로)
-    // 실질적으로 발생 안 하는 케이스로 보고 생략함 — 동적 장애물이 생기면 다시 볼 것.
+    // 서브상태:회피 — Hybrid A* + RS 경로
+    // TODO(정차): 2초 대기 후 이동
     if (m_subMode == SubMode::D_Avoid)
     {
         if (!m_vehicleController.IsFinished())
@@ -613,28 +653,16 @@ void Car::UpdateDrive()
 
     if (!CheckPath())
         return;
-    // TODO(신호대기): 전방 정지신호/정지선 감지 자체가 없다 — RoadNodeType에 신호 타입이 없어서
-    // fsm.txt의 "정지신호 있으면 감속정지 -> 서브상태:신호대기" 분기를 걸 수 없다. 신호 시스템이
-    // 생기면 여기서 검사해 SubState::D_WaitSignal로 전환하고, "초록불이면 Normal로 복귀"하는 분기를
-    // 추가해야 한다 (SubState::D_WaitSignal 값 자체는 이미 선언돼 있음).
     TryLaneChange();
-    if (TryAvoidObstacle())
-        return;
+    // if (TryAvoidObstacle())
+    //     return;
     m_wantSegmentTick = true;
 }
 
 bool Car::TryLaneChange(bool ignoreCooldown)
 {
-    if (m_currentLane == nullptr || (!ignoreCooldown && m_currentTime - m_lastLaneChangeTime < MOBIL_EVAL_INTERVAL))
+    if (m_currentLane == nullptr)
         return false;
-
-    // 다음 경로 스텝이 이미 라우팅상 차선변경이면(목적지 도달을 위해 필요한 변경) MOBIL이 따로
-    // 끼어들어 다투지 않게 건너뛴다.
-    if (m_pathIndex + 1 < m_path.size() && m_path[m_pathIndex + 1].isLaneChange)
-        return false;
-
-    // 평가했다는 사실 자체로 다음 평가까지 쿨다운(성공/실패 무관 — 왕복 진동 방지).
-    m_lastLaneChangeTime = m_currentTime;
 
     Vec3 position = GetPosition();
     // position은 "도로를 따라간 거리"라는 하나의 좌표계로 취급한다 — 좌/우 인접 레인은 같은 도로의
@@ -662,11 +690,12 @@ bool Car::TryLaneChange(bool ignoreCooldown)
         oldFollowerState = &oldFollowerStorage;
     }
 
-    for (const weak_ptr<Lane> &candidateWeak : {m_currentLane->GetLeft(), m_currentLane->GetRight()})
+    // candidate로 실제 전환을 수행. mandatory=true면 유인 기준 없이 안전 기준만 통과하면 되고(라우팅
+    // 강제 변경), false면 기존 MOBIL 안전+유인 기준을 그대로 쓴다(임의 추월성 변경).
+    auto commitTo = [&](const shared_ptr<Lane> &candidate, bool mandatory) -> bool
     {
-        shared_ptr<Lane> candidate = candidateWeak.lock();
         if (candidate == nullptr)
-            continue;
+            return false;
 
         LaneNeighbor newLeaderN, newFollowerN;
         FindLaneNeighbors(candidate, egoPosition, newLeaderN, newFollowerN);
@@ -681,23 +710,48 @@ bool Car::TryLaneChange(bool ignoreCooldown)
             newFollowerState = &newFollowerStorage;
         }
 
-        bool approved = Mobil::EvaluateLaneChange(ego, oldFollowerState, egoLeaderState, newLeaderState,
-                                                  newFollowerState, mobilParams, cfParams);
+        bool approved = mandatory
+                            ? Mobil::IsSafeLaneChange(ego, newFollowerState, mobilParams, cfParams)
+                            : Mobil::EvaluateLaneChange(ego, oldFollowerState, egoLeaderState, newLeaderState,
+                                                        newFollowerState, mobilParams, cfParams);
         if (!approved)
-            continue;
+            return false;
 
         // 목적지 도달 가능성 확인 없이 그냥 옮기면, 이 레인이 목적지로 못 가는 레인일 때 경로를 잃는다.
         vector<LaneStep> newPath = m_RoadDataManager->FindPath(candidate, m_destLane);
         if (newPath.empty())
-            continue; // 이 후보로는 목적지에 못 감 -- 포기하고 다음 후보(오른쪽)로
+            return false; // 이 후보로는 목적지에 못 감
 
         m_path = std::move(newPath);
         m_pathIndex = 0;
         SetCurrentLane(candidate);
         m_currentSpline = candidate->GetSpline();
         RescanRoadSpeedConstraints();
-        DebugConsole::Log("MOBIL lane change: " + GetName() + " -> lane " + std::to_string(candidate->GetId()));
+        m_lastLaneChangeTime = m_currentTime;
+        DebugConsole::Log(std::string(mandatory ? "Mandatory" : "MOBIL") + " lane change: " + GetName() +
+                          " -> lane " + std::to_string(candidate->GetId()));
         return true;
+    };
+
+    // 다음 경로 스텝이 차선변경이면 안전 기준만 확인
+    if (m_pathIndex + 1 < m_path.size() && m_path[m_pathIndex + 1].isLaneChange)
+    {
+        float laneStartDistance = (m_currentLane->GetStartPoint() - position).Length();
+        if (laneStartDistance <= LANE_ENTRY_THRESHOLD)
+            return false;
+        return commitTo(m_path[m_pathIndex + 1].lane, /*mandatory=*/true);
+    }
+
+    if (!ignoreCooldown && m_currentTime - m_lastLaneChangeTime < MOBIL_EVAL_INTERVAL)
+        return false;
+
+    // 평가했다는 사실 자체로 다음 평가까지 쿨다운(성공/실패 무관 — 왕복 진동 방지).
+    m_lastLaneChangeTime = m_currentTime;
+
+    for (const weak_ptr<Lane> &candidateWeak : {m_currentLane->GetLeft(), m_currentLane->GetRight()})
+    {
+        if (commitTo(candidateWeak.lock(), /*mandatory=*/false))
+            return true;
     }
 
     return false;
@@ -713,17 +767,6 @@ bool Car::CheckPath()
 
     // path find
     Vec3 position = GetPosition();
-
-    // 다음 레인이 차선변경이면, 레인 끝까지 기다리지 않고 바로 차선변경을 진행한다.
-    float laneStartDistance = (m_currentLane->GetStartPoint() - position).Length();
-    if (m_pathIndex + 1 < m_path.size() && m_path[m_pathIndex + 1].isLaneChange && laneStartDistance > LANE_ENTRY_THRESHOLD)
-    {
-        ++m_pathIndex;
-        SetCurrentLane(m_path[m_pathIndex].lane);
-        m_currentSpline = m_currentLane->GetSpline();
-        RescanRoadSpeedConstraints();
-        return true;
-    }
 
     // 현재 레인의 끝에 다가가면 경로상 다음 레인으로 넘어간다.
     float laneEndDistance = (m_currentLane->GetEndPoint() - position).Length();
@@ -767,13 +810,14 @@ void Car::DriveControl()
 {
     Vec3 rigidPosition = GetRigidbodyPosition();
     float lookaheadDistance = ComputeLookaheadDistance();
-    auto targetPosition = m_currentSpline.GetLookaheadPoint(rigidPosition, lookaheadDistance);
+    // m_currentSpline 하나만 보고 걸으면(구 GetLookaheadPoint) 레인 끝 근처에서 조준점이 레인 끝점에
+    // 눌러붙어 조향이 깨진다 -- GetLookaheadPose로 경로상 다음 레인까지 넘어가며 찾는다.
+    Vec3 targetPosition, targetDir;
+    GetLookaheadPose(&m_currentSpline, m_currentLane, m_pathIndex, rigidPosition, lookaheadDistance, targetPosition, targetDir);
     // TryAvoidObstacle이 전방 코리도어에서 장애물을 감지하고 옆으로 피할 여지를 찾으면 여기서
     // 조준점 자체를 옆으로 밀어(Reynolds식 측면 회피) 차선 추종을 유지한 채 슬쩍 피해가게 한다.
     if (m_avoidLateralOffset != 0.0f)
     {
-        float targetParam = m_currentSpline.GetSplinePosition(targetPosition);
-        Vec3 targetDir = m_currentSpline.GetDirectionAt(targetParam);
         Vec3 targetNormal = Vec3(-targetDir.GetZ(), 0.0f, targetDir.GetX()).Normalized();
         targetPosition = targetPosition + targetNormal * m_avoidLateralOffset;
     }
@@ -790,7 +834,7 @@ void Car::DriveControl()
     m_targetMarker.GetTransform().SetPosition(targetMarkerPos);
 }
 
-void Car::GetCorridorPose(const Spline *startSpline, const shared_ptr<Lane> &startLane, size_t startPathIndex,
+void Car::GetLookaheadPose(const Spline *startSpline, const shared_ptr<Lane> &startLane, size_t startPathIndex,
                           const Vec3 &fromPosition, float distance, Vec3 &outPosition, Vec3 &outDirection) const
 {
     const Spline *spline = startSpline;
@@ -799,7 +843,7 @@ void Car::GetCorridorPose(const Spline *startSpline, const shared_ptr<Lane> &sta
     Vec3 segmentStart = fromPosition;
     float remainingDistance = distance;
 
-    for (;;)
+    while (true)
     {
         float startT = spline->GetSplinePosition(segmentStart);
         float splineLength = spline->GetLength();
@@ -857,7 +901,7 @@ void Car::SimulateCorridorTrajectory(float lateralOffset, std::vector<Vec3> &out
             float step = std::min(TRAJECTORY_SUBSTEP, remaining);
 
             // pos가 posSpline 끝에 사실상 도달했으면(가장 가까운 점이 마지막 샘플) 경로상 다음 레인으로
-            // 커서를 옮긴다 -- ScanRoadSpeedConstraints/GetCorridorPose와 같은 판정 방식.
+            // 커서를 옮긴다 -- ScanRoadSpeedConstraints/GetLookaheadPose와 같은 판정 방식.
             while (posSpline->GetLength() > 0.0f &&
                    (1.0f - posSpline->GetSplinePosition(pos)) * posSpline->GetLength() < TRAJECTORY_SUBSTEP * 0.5f)
             {
@@ -873,7 +917,7 @@ void Car::SimulateCorridorTrajectory(float lateralOffset, std::vector<Vec3> &out
             // 찾는다. "지금 시뮬레이션 중인" pos 기준으로 매 서브스텝 다시 구하는 건 실제 주행도 매
             // 프레임 그 시점 위치에서 다시 구하는 것과 동일하다.
             Vec3 targetPos, targetDir;
-            GetCorridorPose(posSpline, posLane, posPathIndex, pos, lookaheadDistance, targetPos, targetDir);
+            GetLookaheadPose(posSpline, posLane, posPathIndex, pos, lookaheadDistance, targetPos, targetDir);
             if (lateralOffset != 0.0f)
             {
                 Vec3 targetNormal = Vec3(-targetDir.GetZ(), 0.0f, targetDir.GetX()).Normalized();

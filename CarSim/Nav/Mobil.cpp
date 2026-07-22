@@ -20,6 +20,15 @@ namespace Mobil
         }
     }
 
+    bool IsSafeLaneChange(const VehicleState &ego, const VehicleState *newFollower, const Params &p,
+                          const CarFollowing::Params &cfParams)
+    {
+        if (newFollower == nullptr)
+            return true;
+        float tilde_a_n = Accel(*newFollower, ego, cfParams); // 내가 끼어든 후 새 후방차의 예상 가속도
+        return tilde_a_n >= -p.b_safe;
+    }
+
     bool EvaluateLaneChange(const VehicleState &ego, const VehicleState *oldFollower,
                             const VehicleState &egoLeader, const VehicleState &newLeader,
                             const VehicleState *newFollower, const Params &p,

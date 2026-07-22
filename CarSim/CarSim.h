@@ -30,6 +30,7 @@ private:
     void InitRoadRenderer();
     void InitMarkingRenderer();
     void SpawnCar(CarType type);
+    void RemoveCar(const std::shared_ptr<Car> &car);
     void UpdateSignalMarkers();
 
 private:

@@ -297,6 +297,12 @@ bool Car::IsOffCourse()
     return std::acos(dot) > OFF_COURSE_ANGLE;
 }
 
+void Car::Destroy()
+{
+    SetCurrentLane(nullptr); // 레인 레지스트리에서 자신을 빼둔다.
+    GameObject::Destroy();
+}
+
 void Car::SetCurrentLane(const shared_ptr<Lane> &lane)
 {
     if (m_currentLane == lane)

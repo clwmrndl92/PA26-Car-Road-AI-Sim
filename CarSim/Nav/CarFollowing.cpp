@@ -32,12 +32,12 @@ namespace CarFollowing
         float a_free = p.a * (1.0f - std::pow(speed_ratio, p.delta));
 
         float a_iidm = 0.0f;
-        if (z >= 1.0f)
+        if (z >= 1.0f) // s* >= s 희망 안전거리보다 실제거리가 작음 -> 감속해서 거리 벌려야됨
         {
             // 접근/정체 영역: IDM 제동 공식
             a_iidm = p.a * (1.0f - (z * z));
         }
-        else
+        else // s* < s 희망 안전거리보다 실제거리가 큼 -> 가속해도됨
         {
             // 자유 흐름 영역
             // [예외 처리 2] 내 속도가 목표 속도 v0에 정확히 일치해 a_free가 0에 수렴할 때 NaN 방지

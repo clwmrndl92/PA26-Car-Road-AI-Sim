@@ -21,6 +21,7 @@ public:
     void UpdateAI(float dt) override; // 매프레임
     void UpdateUI(float dt) override; // 매프레임
     void Draw(ID3D11DeviceContext *context, IEffect &effect) override;
+    void Destroy() override;
 
     // Getter / Setter (Accessors)
     Vec3 GetPosition() const override;
@@ -152,7 +153,7 @@ private:
     bool CheckPath();
     bool TryLaneChange(bool ignoreCooldown = false);
     bool TryAvoidObstacle();
-    void GetCorridorPose(const Spline *startSpline, const shared_ptr<Lane> &startLane, size_t startPathIndex,
+    void GetLookaheadPose(const Spline *startSpline, const shared_ptr<Lane> &startLane, size_t startPathIndex,
                          const Vec3 &fromPosition, float distance, Vec3 &outPosition, Vec3 &outDirection) const;
     float ComputeLookaheadDistance() const;
     void SimulateCorridorTrajectory(float lateralOffset, std::vector<Vec3> &outPositions,
@@ -164,6 +165,10 @@ private:
     bool PlanEnterForCurrentSpot();
     bool ReserveNextParkSpot();
     bool BeginParkEnterOrRetry();
+    // startLane 안에서 lookaheadDistance만큼 못 걸으면 successor 레인으로 넘어가 계속 걷는다 -- 짧은 레인
+    // 끝 근처(예: 출차 지점)에서 시작하면 결과가 레인 끝점에 눌러붙는 걸 막기 위함.
+    void GetLaneLookaheadPoint(const shared_ptr<Lane> &startLane, const Vec3 &position, float lookaheadDistance,
+                               Vec3 &outPosition, float &outAngleRad) const;
 
     void BeginAvoidPlan();
     HybridAStar::VehicleShape BuildVehicleShape() const;

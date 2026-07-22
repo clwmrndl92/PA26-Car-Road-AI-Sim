@@ -5,6 +5,7 @@
 #include "Car/Car.h"
 #include "Utill/DebugConsole.h"
 #include "Nav/Spline.h"
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 
@@ -132,6 +133,19 @@ void CarSim::SpawnCar(CarType type)
 
     m_GameObjects.push_back(car);
     m_CarObjects.push_back(car);
+}
+
+void CarSim::RemoveCar(const std::shared_ptr<Car> &car)
+{
+    if (m_pPickedObject.lock() == car)
+    {
+        m_pPickedObject.reset();
+        m_PickedObjectName = "";
+    }
+
+    car->Destroy();
+    m_CarObjects.erase(std::remove(m_CarObjects.begin(), m_CarObjects.end(), car), m_CarObjects.end());
+    m_GameObjects.erase(std::remove(m_GameObjects.begin(), m_GameObjects.end(), car), m_GameObjects.end());
 }
 
 void CarSim::FocusOnObject(const std::shared_ptr<Car> &obj)
@@ -274,12 +288,21 @@ void CarSim::UpdateUI(float dt)
                 SpawnCar(type);
         }
         ImGui::Separator();
+        std::shared_ptr<Car> carToRemove;
         for (auto &obj : m_CarObjects)
         {
+            ImGui::PushID(obj.get());
+            if (ImGui::Button("X"))
+                carToRemove = obj;
+            ImGui::SameLine();
+
             bool isSelected = (obj == m_pPickedObject.lock());
             if (ImGui::Selectable(obj->GetName().c_str(), isSelected))
                 FocusOnObject(obj);
+            ImGui::PopID();
         }
+        if (carToRemove)
+            RemoveCar(carToRemove);
     }
     ImGui::End();
 

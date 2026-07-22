@@ -37,6 +37,12 @@ void GameObject::Init(JPH::Vec3 halfExtents, Rigidbody::Type type, JPH::Vec3 col
     m_colliderOffset = ToXMFLOAT3(colliderOffset);
 }
 
+void GameObject::Destroy()
+{
+    if (m_rigidbody.IsValid())
+        m_rigidbody.Destroy(PhysicsSystem::Get().GetBodyInterface());
+}
+
 void GameObject::Draw(ID3D11DeviceContext *context, IEffect &effect)
 {
     m_render.Draw(context, effect);

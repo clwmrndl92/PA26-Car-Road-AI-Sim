@@ -26,6 +26,10 @@ namespace Mobil
     // follower와 leader 사이의 범퍼 대 범퍼 간격. leader가 없으면(진로가 뚫려있으면) 충분히 큰 값을 반환.
     float GetGap(const VehicleState &follower, const VehicleState *leader);
 
+    // 유인 기준 없이 안전 기준만 판정 -- 라우팅상 강제 차선변경처럼 이득과 무관하게 반드시 옮겨야 하는 경우용.
+    bool IsSafeLaneChange(const VehicleState &ego, const VehicleState *newFollower, const Params &p,
+                         const CarFollowing::Params &cfParams);
+
     // ego가 옆 차선으로 변경해도 되는지 판정한다.
     // egoLeader/newLeader는 항상 존재해야 한다 (실제 앞차가 없으면 호출부가 아주 먼 가상 리더를 넘긴다).
     // oldFollower/newFollower는 없으면 nullptr로 넘긴다 (뒤에 차가 없는 경우).

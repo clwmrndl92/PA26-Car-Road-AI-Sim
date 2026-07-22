@@ -74,10 +74,10 @@ private:
 
 enum class RoadNodeType
 {
-    Unkown,
     Park,
     ParkSpot,
-    TrafficLight
+    TrafficLight,
+    Unkown
 };
 
 inline const unordered_map<string, RoadNodeType> &GetRoadNodeTypeByName()

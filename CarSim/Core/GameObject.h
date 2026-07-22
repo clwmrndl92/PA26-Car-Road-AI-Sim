@@ -17,6 +17,9 @@ public:
     void Init(JPH::Vec3 halfExtents, Rigidbody::Type type = Rigidbody::Type::Dynamic,
               JPH::Vec3 colliderOffset = JPH::Vec3::sZero(), float mass = 1.0f);
 
+    // 오브젝트 리스트에서 제거되기 직전에 호출: 물리 바디를 정리한다.
+    virtual void Destroy();
+
     virtual void UpdateAI(float dt) {}
     virtual void Update(float dt) {}
     virtual void UpdateUI(float dt) {}
