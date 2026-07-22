@@ -183,6 +183,8 @@ private:
     void RescanRoadSpeedConstraints();
     void DriveSpeedIDM(float steerSpeedCap);
     CarFollowing::Params BuildIdmParams(float v0) const;
+    // lane의 신호 때문에 지금 서야 하는지 (CheckPath의 레인 전환 가드와 공유하는 판단).
+    bool ShouldStopForSignal(const shared_ptr<Lane> &lane) const;
 
     // 어떤 레인 위에서 찾은 다른 차 하나 + 그 레인 기준 위치(arclength).
     struct LaneNeighbor
@@ -198,7 +200,7 @@ public:
     // 차선 진입 허용 오차/임계값 (예: 현재 타깃 차선에 안착했는지 확인하는 기준)
     static constexpr float LANE_ENTRY_THRESHOLD = 5.0f;
     // 다음 차선으로 완전히 넘어가는(전환되는) 임계값
-    static constexpr float LANE_TRANSITION_THRESHOLD = 3.0f;
+    static constexpr float LANE_TRANSITION_THRESHOLD = 2.0f;
 
 private:
     // 설정 및 스펙 상수/변수 (Constants & Specifications)
@@ -214,7 +216,7 @@ private:
     float m_mass = 1.0f;
     Vec3 m_halfExtents = Vec3::sZero();              // 충돌판정용 차체 반크기(x=반폭, z=반길이). CarSpec::halfExtents.
     float m_maxSteerAngle = ToRadians(45.0f);        // 최대 조향각 (45도)
-    static constexpr float CURVE_SPEED_COEFF = 0.8f; // 최대 코너링 속도 = CURVE_SPEED_COEFF * sqrt(R)
+    static constexpr float CURVE_SPEED_COEFF = 1.2f; // 최대 코너링 속도 = CURVE_SPEED_COEFF * sqrt(R)
     static constexpr float STEER_RAMP_RATE = 0.4f;
 
     // 컴포넌트 및 AI 상태 (Components & Systems)

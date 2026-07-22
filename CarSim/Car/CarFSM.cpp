@@ -730,6 +730,10 @@ bool Car::CheckPath()
     bool enteredByLaneChange = false;
     while (laneEndDistance < LANE_TRANSITION_THRESHOLD)
     {
+        // 신호로 서야 하면 레인을 안 넘긴다
+        if (ShouldStopForSignal(m_currentLane))
+            break;
+
         if (m_pathIndex + 1 >= m_path.size())
         {
             m_destLane = nullptr;

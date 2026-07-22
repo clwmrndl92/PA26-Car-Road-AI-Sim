@@ -344,35 +344,10 @@ std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistan
             float segmentDistance = splineLength > 0.0f ? (1.0f - startT) * splineLength : 0.0f;
             float walkDistance = std::min(segmentDistance, remainingDistance);
 
-            // 노란불 순간 정지거리 안쪽이면 통과 확정(초록될 때까지 유지) -- 안 그러면 빨간불에서 급정거.
+            // nodeT < startT면 이미 지나온 신호라 건너뛴다 (안 그러면 통과 직후 급제동).
             if (shared_ptr<RoadNode> signalNode = segmentLane->GetSignalNode())
             {
-                TrafficSignal::Color color = m_RoadDataManager->GetSignalColor(signalNode->signalPhaseOffset);
-                bool shouldStop = false;
-
-                if (color == TrafficSignal::Color::Green)
-                {
-                    if (m_committedYellowNodeId == signalNode->id)
-                        m_committedYellowNodeId = -1; // 다음 사이클에 대비해 리셋
-                }
-                else if (color == TrafficSignal::Color::Yellow)
-                {
-                    if (m_committedYellowNodeId != signalNode->id)
-                    {
-                        float gapToNode = (signalNode->position - calPosition).Length();
-                        float comfortableStopDistance = (m_speed * m_speed) / (2.0f * m_maxBrake);
-                        if (gapToNode <= comfortableStopDistance)
-                            m_committedYellowNodeId = signalNode->id; // 이미 정지거리 안쪽 -- 통과 확정
-                    }
-                    shouldStop = (m_committedYellowNodeId != signalNode->id);
-                }
-                else // Red
-                {
-                    shouldStop = (m_committedYellowNodeId != signalNode->id);
-                }
-
-                // nodeT < startT면 이미 지나온 신호라 건너뛴다 (안 그러면 통과 직후 급제동).
-                if (splineLength > 0.0f && shouldStop)
+                if (splineLength > 0.0f && ShouldStopForSignal(segmentLane))
                 {
                     float nodeT = spline->GetSplinePosition(signalNode->position);
                     if (nodeT >= startT)
@@ -388,12 +363,7 @@ std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistan
             {
                 size_t lastIndex = points.size() - 1;
 
-                // 이 스플라인 전체에서 가장 급한 커브(최소 반경) 지점을 한 번만 찾는다.
-                // apexT 이전 구간(0~apexT)은 그 커브의 제한속도를 미리 균일하게 적용해 진입 전에
-                // 이미 감속이 끝나있게 하고, apexT 이후(apexT~1)는 로컬 곡률 그대로 사용한다.
-                float apexT = 0.0f;
-                float minRadius = spline->GetMinRadiusAhead(0.0f, 1.0f, &apexT);
-                float apexSpeed = minRadius < std::numeric_limits<float>::max() ? CURVE_SPEED_COEFF * std::sqrt(minRadius) : m_maxSpeed;
+                float minRadius = spline->GetMinRadiusAhead(0.0f, 1.0f);
 
                 size_t sampleCount = static_cast<size_t>(walkDistance / ROAD_SAMPLE_SPACING) + 1;
                 for (size_t s = 1; s <= sampleCount; ++s)
@@ -402,16 +372,8 @@ std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistan
                     float t = startT + localDistance / splineLength;
                     size_t index = static_cast<size_t>(std::clamp(t, 0.0f, 1.0f) * lastIndex);
 
-                    float maxSpeed;
-                    if (t <= apexT)
-                    {
-                        maxSpeed = apexSpeed;
-                    }
-                    else
-                    {
-                        float radius = spline->GetMinRadiusAhead(std::max(0.0f, t - LOCAL_WINDOW), std::min(1.0f, t + LOCAL_WINDOW));
-                        maxSpeed = radius < std::numeric_limits<float>::max() ? CURVE_SPEED_COEFF * std::sqrt(radius) : m_maxSpeed;
-                    }
+                    float radius = spline->GetMinRadiusAhead(std::max(0.0f, t - LOCAL_WINDOW), std::min(1.0f, t + LOCAL_WINDOW));
+                    float maxSpeed = radius < std::numeric_limits<float>::max() ? CURVE_SPEED_COEFF * std::sqrt(radius) : m_maxSpeed;
                     samples.push_back({points[index], traveledDistance + localDistance, maxSpeed});
                 }
             }
@@ -442,6 +404,27 @@ std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistan
     std::sort(samples.begin(), samples.end(), [](const RoadSpeedSample &a, const RoadSpeedSample &b)
               { return a.distance < b.distance; });
     return samples;
+}
+
+bool Car::ShouldStopForSignal(const shared_ptr<Lane> &lane) const
+{
+    shared_ptr<RoadNode> signalNode = lane->GetSignalNode();
+    if (!signalNode)
+        return false;
+
+    TrafficSignal::Color color = m_RoadDataManager->GetSignalColor(signalNode->signalPhaseOffset);
+    if (color == TrafficSignal::Color::Green)
+    {
+        if (m_committedYellowNodeId == signalNode->id)
+            m_committedYellowNodeId = -1; // 다음 사이클 대비 리셋
+    }
+    else if (color == TrafficSignal::Color::Yellow && m_committedYellowNodeId != signalNode->id)
+    {
+        float gap = (signalNode->position - GetPosition()).Length();
+        if (gap <= (m_speed * m_speed) / (2.0f * m_maxBrake))
+            m_committedYellowNodeId = signalNode->id; // 정지거리 안쪽 -- 통과 확정
+    }
+    return color != TrafficSignal::Color::Green && m_committedYellowNodeId != signalNode->id;
 }
 
 void Car::RescanRoadSpeedConstraints()
