@@ -24,7 +24,6 @@ public:
 
     virtual void Draw(ID3D11DeviceContext *context, IEffect &effect);
 
-    void SetDrawCollider(bool draw) { m_drawCollider = draw; }
     void SetName(std::string name) { m_name = std::move(name); }
     const std::string &GetName() const { return m_name; }
 
@@ -55,9 +54,6 @@ protected:
 
     RenderObject m_render;
     std::vector<RenderObject> m_subRenders;
-    RenderObject m_debugBox;
-    RenderObject m_originMarker;
     Rigidbody m_rigidbody;
     std::string m_name;
-    bool m_drawCollider = false;
 };

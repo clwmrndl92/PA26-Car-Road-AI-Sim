@@ -1,5 +1,6 @@
 #pragma once
 #include "Nav/ReedsShepp.h"
+#include <limits>
 #include <optional>
 #include <vector>
 
@@ -44,6 +45,10 @@ private:
     // 남은 거리 기준 감속 프로파일에 쓰는 가정 감속도 (m/s^2).
     static constexpr float DECEL_ESTIMATE = 0.4f;
     static constexpr float FINISH_DISTANCE = 0.3f; // leg 끝까지 이 거리 이내면 완료로 본다 (m).
+    // FINISH_DISTANCE 안까지 못 들어가고 지나쳐버리는 경우(Pure Pursuit 조준점이 이미 지난
+    // 목표를 다시 앞으로 잡아서 제자리를 빙글빙글 도는 상황)를 잡기 위한 오버슈트 감지 임계값.
+    // remaining이 이 값 이하로 줄어들다가 다시 늘어나면(=목표를 지나쳤다) 그냥 도착으로 본다.
+    static constexpr float OVERSHOOT_CHECK_DISTANCE = 1.0f;
     // Pure Pursuit lookahead 최소값. 주차 매뉴버의 회전반경(대략 휠베이스 크기)과 비슷하거나 더
     // 크면 곡선 구간에서 안쪽으로 크게 잘라 도는 정상상태 오차가 커진다 -- 스냅 대신 이 값을
     // 작게 잡아 추종 정확도를 확보한다(단, 너무 작으면 조향이 떨리므로 과도하게 줄이지 말 것).
@@ -71,6 +76,7 @@ private:
     bool m_isFinalLeg;
     bool m_done = false;
     size_t m_lastIndex = 0;
+    float m_prevRemaining = std::numeric_limits<float>::max();
 };
 
 // Reeds-Shepp 경로의 PathElement 하나를 오차 누적 없이 그대로 실행한다: 완전히 멈춘 채로 정확한

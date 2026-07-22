@@ -56,23 +56,19 @@ void Car::Init(const CarSpec &spec, RoadDataManager *roadDataManager, JPH::Vec3 
 
 void Car::UpdateAI(float dt)
 {
-    // m_deltaTime is also (re)set by Update() below at the fixed physics dt -- safe because
-    // UpdateAI() always runs to completion before Update() starts this frame (see
-    // GameApp::UpdateScene), so nothing here ever observes the physics dt instead of this one.
     m_deltaTime = dt;
     m_currentTime += dt;
     UpdateMode();
-    // 각 UpdateXxx()가 이번 프레임에 세그먼트를 진행시킬지만 정한다 -- 실제 Tick()은 Update()에서.
     m_wantSegmentTick = false;
     switch (m_mode)
     {
-    case State::Stop:
+    case Mode::Stop:
         UpdateStop();
         break;
-    case State::Park:
+    case Mode::Park:
         UpdatePark();
         break;
-    case State::Drive:
+    case Mode::Drive:
         UpdateDrive();
         break;
     }
@@ -81,12 +77,11 @@ void Car::UpdateAI(float dt)
 void Car::Update(float dt)
 {
     m_deltaTime = dt;
-    // 물리 고정 dt에서 실행 -- ApplyMotion()이 이번 스텝에 실제로 적분할 dt와 정확히 같은 dt로
-    // 세그먼트를 진행시키고(Steer/Accelerate 램프), m_traveled를 누적해야 드리프트가 안 생긴다.
     if (m_wantSegmentTick)
         m_vehicleController.Tick(*this);
     UpdateCar();
     ApplyMotion();
+
     UpdateTrail();
 }
 
@@ -99,8 +94,42 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
 {
     GameObject::Draw(context, effect);
 
-    if (m_drawCollider && (m_rearTrailRender.GetModel() || m_frontTrailRender.GetModel() || m_splineRender.GetModel() ||
-                           m_parkPathRender.GetModel() || m_parkTargetLine.GetModel()))
+    using namespace DirectX;
+
+    if (!m_drawCollider)
+        return;
+
+    if (m_debugBox.GetModel())
+    {
+        XMVECTOR colliderOffsetWorld = XMVector3Rotate(XMLoadFloat3(&m_colliderOffset), m_transform.GetRotationQuatXM());
+        XMFLOAT3 colliderPos;
+        XMStoreFloat3(&colliderPos, XMVectorAdd(m_transform.GetPositionXM(), colliderOffsetWorld));
+
+        m_debugBox.GetTransform().SetPosition(colliderPos);
+        m_debugBox.GetTransform().SetRotation(m_transform.GetRotationQuat());
+
+        if (auto *pBasic = dynamic_cast<BasicEffect *>(&effect))
+        {
+            pBasic->SetRenderWireframe();
+            m_debugBox.Draw(context, effect);
+            pBasic->SetRenderDefault();
+        }
+    }
+
+    if (m_originMarker.GetModel())
+    {
+        m_originMarker.GetTransform().SetPosition(m_transform.GetPosition());
+
+        if (auto *pBasic = dynamic_cast<BasicEffect *>(&effect))
+        {
+            pBasic->SetRenderNoDepthTest();
+            m_originMarker.Draw(context, effect);
+            pBasic->SetRenderDefault();
+        }
+    }
+
+    if ((m_rearTrailRender.GetModel() || m_frontTrailRender.GetModel() || m_splineRender.GetModel() ||
+         m_parkPathRender.GetModel() || m_parkTargetLine.GetModel()))
     {
         if (auto *pBasic = dynamic_cast<BasicEffect *>(&effect))
         {
@@ -119,28 +148,26 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
         }
     }
 
-    if (!m_drawCollider || !m_steerLine.GetModel())
-        return;
-
-    using namespace DirectX;
-
-    // Car only ever yaws around world Y, so the steer-angle offset and the car's own
-    // rotation share an axis and can be combined in either order.
-    XMFLOAT4 carRotF = m_transform.GetRotationQuat();
-    XMVECTOR carRot = XMLoadFloat4(&carRotF);
-    XMVECTOR steerYaw = XMQuaternionRotationAxis(g_XMIdentityR1, m_steerAngle);
-    XMVECTOR lineRot = XMQuaternionNormalize(XMQuaternionMultiply(carRot, steerYaw));
-
-    XMFLOAT4 lineRotF;
-    XMStoreFloat4(&lineRotF, lineRot);
-    m_steerLine.GetTransform().SetPosition(ToXMFLOAT3(GetPosition()));
-    m_steerLine.GetTransform().SetRotation(lineRotF);
-
-    if (auto *pBasic = dynamic_cast<BasicEffect *>(&effect))
+    if (m_steerLine.GetModel())
     {
-        pBasic->SetRenderLines();
-        m_steerLine.Draw(context, effect);
-        pBasic->SetRenderDefault();
+        // Car only ever yaws around world Y, so the steer-angle offset and the car's own
+        // rotation share an axis and can be combined in either order.
+        XMFLOAT4 carRotF = m_transform.GetRotationQuat();
+        XMVECTOR carRot = XMLoadFloat4(&carRotF);
+        XMVECTOR steerYaw = XMQuaternionRotationAxis(g_XMIdentityR1, m_steerAngle);
+        XMVECTOR lineRot = XMQuaternionNormalize(XMQuaternionMultiply(carRot, steerYaw));
+
+        XMFLOAT4 lineRotF;
+        XMStoreFloat4(&lineRotF, lineRot);
+        m_steerLine.GetTransform().SetPosition(ToXMFLOAT3(GetPosition()));
+        m_steerLine.GetTransform().SetRotation(lineRotF);
+
+        if (auto *pBasic = dynamic_cast<BasicEffect *>(&effect))
+        {
+            pBasic->SetRenderLines();
+            m_steerLine.Draw(context, effect);
+            pBasic->SetRenderDefault();
+        }
     }
 
     if (m_targetMarker.GetModel())
@@ -605,7 +632,7 @@ void Car::UpdateDebugWindow()
         ImGui::Text("Steer: %.2f / %.2f", m_steerAngle, m_maxSteerAngle);
         ImGui::Text("ActualVel: %.2f", m_rigidbody.GetLinearVelocity().Length());
         ImGui::Text("DesiredVel: %.2f", ComputeDesiredVelocity().Length());
-        if (m_mode == State::Drive)
+        if (m_mode == Mode::Drive)
             ImGui::Text("Mode: %s / %s", StateToString(m_mode), SubStateToString(m_subMode));
         else
             ImGui::Text("Mode: %s", StateToString(m_mode));
@@ -745,6 +772,22 @@ void Car::SetDestination(const shared_ptr<RoadNode> &destNode)
 
 void Car::DebugInit()
 {
+    // Per-object model names: CreateFromGeometry() overwrites any existing
+    // model stored under the same name, so a shared name would make every
+    // car's debug box end up showing whichever car initialized last.
+    float w = m_halfExtents.GetX() * 2.0f;
+    float h = m_halfExtents.GetY() * 2.0f;
+    float d = m_halfExtents.GetZ() * 2.0f;
+    Model *pBox = ModelManager::Get().CreateFromGeometry("__collider__:" + GetName(), Geometry::CreateBox(w, h, d));
+    pBox->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f));
+    pBox->materials[0].Set<float>("$Opacity", 1.0f);
+    m_debugBox.SetModel(pBox);
+
+    Model *pMarker = ModelManager::Get().CreateFromGeometry("__origin__:" + GetName(), Geometry::CreateSphere(0.1f, 8, 8));
+    pMarker->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f));
+    pMarker->materials[0].Set<float>("$Opacity", 1.0f);
+    m_originMarker.SetModel(pMarker);
+
     Model *pLine = ModelManager::Get().CreateFromGeometry("__steer_line__:" + GetName(),
                                                           Geometry::CreateLine(DirectX::XMFLOAT3(0.0f, 0.15f, 0.0f), DirectX::XMFLOAT3(0.0f, 0.15f, 6.0f)));
     pLine->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f));

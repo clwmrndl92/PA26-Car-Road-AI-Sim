@@ -33,7 +33,12 @@ public:
 
     void SetPosition(Vec3 position) override;
     void SetRotation(Vec3 direction);
-    void SetFocused(bool focused) { m_isFocused = focused; }
+    // 포커스된(선택된) 차량만 콜라이더/트레일 등 디버그 표시를 그린다.
+    void SetFocused(bool focused)
+    {
+        m_isFocused = focused;
+        m_drawCollider = focused;
+    }
     void SetDestination(const shared_ptr<RoadNode> &parkNode);
     float GetAcceleration() const { return m_acceleration; }
     float GetLength() const { return m_halfExtents.GetZ() * 2.0f; }
@@ -70,28 +75,28 @@ private:
 
     shared_ptr<RoadNode> GetParkTargetNode() const { return m_parkSpot ? m_parkSpot : m_pendingParkNode; }
 
-    enum class State
+    enum class Mode
     {
         Stop,
         Park,
         Drive
     };
 
-    const char *Car::StateToString(State mode) const
+    const char *Car::StateToString(Mode mode) const
     {
         switch (mode)
         {
-        case State::Stop:
+        case Mode::Stop:
             return "Stop";
-        case State::Park:
+        case Mode::Park:
             return "Park";
-        case State::Drive:
+        case Mode::Drive:
             return "Drive";
         }
         return "?";
     }
 
-    enum class SubState
+    enum class SubMode
     {
         None,
 
@@ -107,33 +112,33 @@ private:
         P_ENTER_LEG2,  // 입차: P -> 스팟
         P_ENTER_ALIGN, // 입차: 최종 정밀 정렬
     };
-    const char *Car::SubStateToString(SubState subMode) const
+    const char *Car::SubStateToString(SubMode subMode) const
     {
         switch (subMode)
         {
-        case SubState::D_Normal:
+        case SubMode::D_Normal:
             return "Normal";
-        case SubState::D_Avoid:
+        case SubMode::D_Avoid:
             return "Avoid";
-        case SubState::D_Stop:
+        case SubMode::D_Stop:
             return "Stop";
-        case SubState::D_WaitSignal:
+        case SubMode::D_WaitSignal:
             return "WaitSignal";
-        case SubState::P_EXIT:
+        case SubMode::P_EXIT:
             return "ParkExit";
-        case SubState::P_ENTER_LEG1:
+        case SubMode::P_ENTER_LEG1:
             return "ParkEnterLeg1";
-        case SubState::P_ENTER_LEG2:
+        case SubMode::P_ENTER_LEG2:
             return "ParkEnterLeg2";
-        case SubState::P_ENTER_ALIGN:
+        case SubMode::P_ENTER_ALIGN:
             return "ParkEnterAlign";
         }
         return "?";
     }
     void UpdateMode();
-    State DecideNextMode(const char **reason) const;
-    void OnModeEnter(State prev);
-    void OnModeExit(State next); // next: 이번에 새로 전환될 상태(m_mode는 아직 지금 나가는 상태 그대로)
+    Mode DecideNextMode(const char **reason) const;
+    void OnModeEnter(Mode prev);
+    void OnModeExit(Mode next); // next: 이번에 새로 전환될 상태(m_mode는 아직 지금 나가는 상태 그대로)
 
     void UpdateStop();
     void UpdatePark();
@@ -204,9 +209,9 @@ private:
     // 컴포넌트 및 AI 상태 (Components & Systems)
     RoadDataManager *m_RoadDataManager = nullptr;
     bool m_isFocused = false; // 포커스 여부 (입력 처리용)
-    State m_mode = State::Stop;
-    SubState m_subMode = SubState::D_Normal; // DriveMode::Drive 안에서만 의미 있음
-    VehicleController m_vehicleController;   // DriveMode가 세운 계획(세그먼트)을 실제로 실행
+    Mode m_mode = Mode::Stop;
+    SubMode m_subMode = SubMode::D_Normal; // DriveMode::Drive 안에서만 의미 있음
+    VehicleController m_vehicleController; // DriveMode가 세운 계획(세그먼트)을 실제로 실행
     shared_ptr<Lane> m_destLane;
     shared_ptr<Lane> m_currentLane;
 
@@ -218,7 +223,7 @@ private:
     bool m_parkPlanPending = false;
 
     float m_avoidReplanCooldown = 0.0f;
-    float m_avoidLateralOffset = 0.0f; // TryAvoidObstacle이 계산한 회피용 좌우 오프셋(+우/-좌, m). DriveControl이 조준점에 더한다.
+    float m_avoidLateralOffset = 0.0f;                    // TryAvoidObstacle이 계산한 회피용 좌우 오프셋(+우/-좌, m). DriveControl이 조준점에 더한다.
     static constexpr float AVOID_DETECT_DISTANCE = 20.0f; // 박스캐스트 코리도어 길이 (전방 감지 거리)
     static constexpr float AVOID_SAMPLE_STEP = 2.0f;      // 코리도어를 따라 박스를 검사하는 간격
     vector<LaneStep> m_path;
@@ -271,6 +276,9 @@ private:
     std::deque<DirectX::XMFLOAT3> m_frontTrail;
     RenderObject m_rearTrailRender;
     RenderObject m_frontTrailRender;
+    RenderObject m_debugBox;
+    RenderObject m_originMarker;
+    bool m_drawCollider = false;
     RenderObject m_steerLine;
     RenderObject m_targetMarker;
     RenderObject m_splineRender;

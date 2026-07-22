@@ -56,12 +56,12 @@ void Car::UpdateMode()
 {
     const char *reason = "";
     UpdateFindPath();
-    State next = DecideNextMode(&reason);
+    Mode next = DecideNextMode(&reason);
     if (next != m_mode)
     {
         DebugConsole::Log(std::string(StateToString(m_mode)) + " -> " + StateToString(next) + " (" + reason + ")");
         OnModeExit(next);
-        State prev = m_mode;
+        Mode prev = m_mode;
         m_mode = next;
         OnModeEnter(prev);
     }
@@ -84,41 +84,41 @@ void Car::UpdateFindPath()
     TryFindPathAndSetLane();
 }
 
-Car::State Car::DecideNextMode(const char **reason) const
+Car::Mode Car::DecideNextMode(const char **reason) const
 {
 
-    if (m_mode == State::Stop)
+    if (m_mode == Mode::Stop)
     {
         if (m_destLane == nullptr)
         {
-            return State::Stop;
+            return Mode::Stop;
         }
         *reason = "go to Dest";
-        return State::Park;
+        return Mode::Park;
     }
-    else if (m_mode == State::Park)
+    else if (m_mode == Mode::Park)
     {
         if (m_parkPlanPending || m_parkSequenceActive || !m_vehicleController.IsFinished())
         {
             *reason = "parking in progress";
-            return State::Park;
+            return Mode::Park;
         }
-        if (m_subMode == SubState::P_EXIT)
+        if (m_subMode == SubMode::P_EXIT)
         {
             // 출차 끝났으면 Drive로 전환
             *reason = "normal driving";
-            return State::Drive;
+            return Mode::Drive;
         }
         // 그 외(P_ENTER_LEG1/LEG2/ALIGN 등 입차 계열)가 여기 왔다는 건 이미 다 끝났다는 뜻 -> Stop
         *reason = "done parking";
-        return State::Stop;
+        return Mode::Stop;
     }
-    else if (m_mode == State::Drive)
+    else if (m_mode == Mode::Drive)
     {
-        if (m_subMode == SubState::D_Avoid && !m_vehicleController.IsFinished())
+        if (m_subMode == SubMode::D_Avoid && !m_vehicleController.IsFinished())
         {
             *reason = "avoid maneuver in progress";
-            return State::Drive;
+            return Mode::Drive;
         }
 
         constexpr float ARRIVE_DISTANCE = 5.0f;
@@ -127,50 +127,50 @@ Car::State Car::DecideNextMode(const char **reason) const
         if (arrived && GetParkTargetNode() != nullptr)
         {
             *reason = "arrived at destination with park target";
-            return State::Park;
+            return Mode::Park;
         }
         if (m_destLane == nullptr || arrived)
         {
             *reason = m_destLane == nullptr ? "no destination lane" : "arrived at destination";
-            return State::Stop;
+            return Mode::Stop;
         }
-        return State::Drive;
+        return Mode::Drive;
     }
 
     *reason = "unreachable";
     return m_mode;
 }
 
-void Car::OnModeEnter(State prev)
+void Car::OnModeEnter(Mode prev)
 {
-    if (m_mode == State::Drive)
+    if (m_mode == Mode::Drive)
     {
-        m_subMode = SubState::D_Normal;
+        m_subMode = SubMode::D_Normal;
         std::vector<std::unique_ptr<VehicleSegment>> segments;
         segments.push_back(std::make_unique<SplineFollowSegment>());
         m_vehicleController.BeginPlan(std::move(segments));
     }
-    else if (m_mode == State::Park)
+    else if (m_mode == Mode::Park)
     {
-        m_subMode = prev == State::Stop ? SubState::P_EXIT : SubState::P_ENTER_LEG1;
+        m_subMode = prev == Mode::Stop ? SubMode::P_EXIT : SubMode::P_ENTER_LEG1;
         m_parkPlanPending = true;    // 도착 즉시 RS를 계산하지 않고, 완전히 멈출 때까지 기다린다 (UpdatePark에서 처리).
         m_parkSequenceActive = true; // 주차 시퀀스 시작 — 완료(UpdatePark)까지 Park 유지.
         DebugConsole::Log("Park plan pending: waiting for full stop before planning");
     }
-    else if (m_mode == State::Stop)
+    else if (m_mode == Mode::Stop)
     {
         // 입차 완료 후 Stop으로 오는 경우도 RS 매뉴버로 꺾여있던 조향을 중앙으로 되돌린다.
-        if (prev == State::Park && m_subMode == SubState::P_ENTER_ALIGN)
+        if (prev == Mode::Park && m_subMode == SubMode::P_ENTER_ALIGN)
         {
             std::vector<std::unique_ptr<VehicleSegment>> segments;
             segments.push_back(std::make_unique<CenterSteerSegment>());
             m_vehicleController.BeginPlan(std::move(segments));
         }
-        m_subMode = SubState::None;
+        m_subMode = SubMode::None;
     }
 }
 
-void Car::OnModeExit(State next)
+void Car::OnModeExit(Mode next)
 {
     if (!m_vehicleController.IsFinished())
         m_vehicleController.Abort();
@@ -232,25 +232,25 @@ void Car::UpdatePark()
         return;
     }
 
-    // m_parkSpot이 있어야 뜻이 있는 분기들만 여기 묶는다. BeginParkPlan이 예약 실패로 조기 리턴하면
-    // m_parkSpot이 계속 null일 수 있는데, 그 경우는 여기 아무 분기도 안 타고 아래 m_currentLane
-    // 체크(시퀀스 정리용 안전장치)로 내려가야 하므로, 그 폴백은 이 블록 밖에 둔다.
-    if (m_parkSpot != nullptr)
+    if (m_subMode == SubMode::P_EXIT)
     {
-        if (m_subMode == SubState::P_EXIT)
+        // 출차 완료: 이제 레인 위. 더 이상 이 주차칸에 있는 게 아니므로 예약을 풀고 비운다.
+        m_parkSequenceActive = false; // 시퀀스 종료 — 다음 프레임 Drive로 전환 허용.
+        if (m_parkSpot != nullptr)
         {
-            // 출차 완료: 이제 레인 위. 더 이상 이 주차칸에 있는 게 아니므로 예약을 풀고 비운다.
-            m_parkSequenceActive = false; // 시퀀스 종료 — 다음 프레임 Drive로 전환 허용.
             m_RoadDataManager->ReleaseParkSpot(m_parkSpot->id);
             m_parkSpot = nullptr;
-            // m_currentLane은 BeginParkPlan에서 이미 정해둔 상태 — 거기서부터 경로/스플라인을 채운다.
-            TryFindPathAndSetLane();
-            return;
         }
+        if (!TryFindPathAndSetLane())
+            m_subMode = SubMode::None;
+        return;
+    }
 
+    if (m_parkSpot != nullptr)
+    {
         // 입차 leg 1(-> 스플라인점 P)이 끝났으면, 이제 P에서 스팟까지 leg 2를 이어 계획한다. (주차레인
         // 없이 바로 스팟으로 간 경우엔 PlanEnterForCurrentSpot에서 이미 leg2로 세팅해서 건너뛴다.)
-        if (m_subMode == SubState::P_ENTER_LEG1)
+        if (m_subMode == SubMode::P_ENTER_LEG1)
         {
             // leg 1처럼 완전히 멈춘 뒤 그 pose에서 leg 2를 계획한다(open-loop RS는 시작 pose 기준). 대기 중
             // 컨트롤러가 finished여도 m_parkSequenceActive가 Park를 유지하므로 Drive로 새지 않는다.
@@ -259,7 +259,7 @@ void Car::UpdatePark()
                 Accelerate(0.0f);
                 return;
             }
-            m_subMode = SubState::P_ENTER_LEG2;
+            m_subMode = SubMode::P_ENTER_LEG2;
             BeginParkSpotLeg();
             return;
         }
@@ -270,14 +270,14 @@ void Car::UpdatePark()
         // 남지 않는다. subMode를 먼저 ALIGN으로 세워 재귀적으로 반복되지 않게 한다 -- 이미 목표에
         // 정확히 있으면(혹은 장애물 등으로 경로를 못 찾으면) PlanParkLegTo가 false를 반환하고 그냥
         // 완료 처리로 넘어간다.
-        if (m_subMode == SubState::P_ENTER_LEG2)
+        if (m_subMode == SubMode::P_ENTER_LEG2)
         {
             if (m_speed > 0.0f)
             {
                 Accelerate(0.0f);
                 return;
             }
-            m_subMode = SubState::P_ENTER_ALIGN;
+            m_subMode = SubMode::P_ENTER_ALIGN;
             Vec3 spotTarget = m_parkSpot->position - m_parkSpot->direction.Normalized() * m_wheelbase;
             float spotAngleRad = DirectionToAngleRad(m_parkSpot->direction);
             if (PlanParkLegTo(spotTarget, spotAngleRad, /*exact=*/true))
@@ -285,12 +285,7 @@ void Car::UpdatePark()
         }
     }
 
-    // 입차 완료 (또는 m_parkSpot 자체가 없어 더 할 게 없는 경우 시퀀스 정리): m_parkSpot은 "지금
-    // 여기 주차 중"을 나타내도록 남겨두고 destLane/currentLane만
-    // 비운다. 다음 프레임 DecideNextMode가 destLane==nullptr을 보고 Stop으로 전환한다. 이후 새
-    // 목적지가 생기면 DecideNextMode의 일반 로직(parkSpot!=nullptr && currentLane==nullptr)이
-    // 다시 Park로 복귀시키며 OnModeEnter가 BeginParkPlan을 호출한다.
-    if (m_currentLane != nullptr)
+    if (m_subMode == SubMode::None || m_subMode == SubMode::P_ENTER_ALIGN)
     {
         m_parkSequenceActive = false; // 입차 시퀀스 종료 — 다음 프레임 Stop으로 전환 허용.
         m_destLane = nullptr;
@@ -329,7 +324,7 @@ void Car::BeginParkPlan()
     const std::vector<HybridAStar::Obstacle> &obstacles = m_RoadDataManager->GetObstacles();
 
     // 출차
-    if (m_subMode == SubState::P_EXIT)
+    if (m_subMode == SubMode::P_EXIT)
     {
         // 이 Park에 전용 주차레인망이 있으면(주차장) 그 레인 위로, 없으면(길가 주차 등 일반 출차)
         // 메인 레인 위로 나간다. 둘 다 차의 실제 현재 위치(startPos) 기준으로 가장 가까운 레인을 쓴다
@@ -337,13 +332,13 @@ void Car::BeginParkPlan()
         const std::vector<shared_ptr<Lane>> *parkingLanes =
             (m_parkNodeId >= 0) ? m_RoadDataManager->GetParkingLanes(m_parkNodeId) : nullptr;
         shared_ptr<Lane> closestLane = (parkingLanes != nullptr && !parkingLanes->empty())
-                                            ? m_RoadDataManager->GetClosestParkLane(startPos, m_parkNodeId)
-                                            : m_RoadDataManager->GetClosestLane(startPos);
+                                           ? m_RoadDataManager->GetClosestParkLane(startPos, m_parkNodeId)
+                                           : m_RoadDataManager->GetClosestLane(startPos);
         if (closestLane == nullptr)
         {
             DebugConsole::Log("BeginParkPlan: no lane found to exit onto, abandoning this park attempt");
             m_destLane = nullptr;
-            m_subMode = SubState::None;
+            m_subMode = SubMode::None;
             return;
         }
 
@@ -375,7 +370,7 @@ void Car::BeginParkPlan()
             // 출차 실패는 이미 차가 그 자리를 점유 중이므로 예약을 풀지 않는다.
             DebugConsole::Log("BeginParkPlan: HybridA* failed to find an exit path, abandoning this park attempt");
             m_destLane = nullptr;
-            m_subMode = SubState::None;
+            m_subMode = SubMode::None;
             return;
         }
         m_vehicleController.BeginPlan(BuildParkSegments(path, startPos, startAngleRad, turningRadius));
@@ -383,7 +378,7 @@ void Car::BeginParkPlan()
         return;
     }
     // 주차 (BeginParkPlan은 Park 진입시 딱 한 번만 불리므로 여기 오는 시점의 subMode는 항상 leg1)
-    else if (m_subMode == SubState::P_ENTER_LEG1)
+    else if (m_subMode == SubMode::P_ENTER_LEG1)
     {
         if (!BeginParkEnterOrRetry())
         {
@@ -429,7 +424,7 @@ bool Car::PlanEnterForCurrentSpot()
 
         if (PlanParkLegTo(pPos, pAngleRad))
         {
-            m_subMode = SubState::P_ENTER_LEG1; // leg 1 진행 중 — P 도착 후 UpdatePark가 leg 2를 잇는다.
+            m_subMode = SubMode::P_ENTER_LEG1; // leg 1 진행 중 — P 도착 후 UpdatePark가 leg 2를 잇는다.
             return true;
         }
         return false; // 이 스팟의 P까지 못 감 -> 다음 스팟
@@ -440,7 +435,7 @@ bool Car::PlanEnterForCurrentSpot()
     float spotAngleRad = DirectionToAngleRad(m_parkSpot->direction);
     if (PlanParkLegTo(spotTarget, spotAngleRad))
     {
-        m_subMode = SubState::P_ENTER_LEG2; // leg 1 없이 바로 leg 2
+        m_subMode = SubMode::P_ENTER_LEG2; // leg 1 없이 바로 leg 2
         return true;
     }
     return false;
@@ -558,7 +553,7 @@ void Car::UpdateDrive()
     // 여부 판단, 안 움직였으면 재탐색" 분기는 안 만듦. 장애물이 전부 정적이라(움직이지 않음)
     // 이미 성공한 RS 경로가 도중에 새로 막힐 일이 없어서(고정 장애물 기준으로 계획했으므로)
     // 실질적으로 발생 안 하는 케이스로 보고 생략함 — 동적 장애물이 생기면 다시 볼 것.
-    if (m_subMode == SubState::D_Avoid)
+    if (m_subMode == SubMode::D_Avoid)
     {
         if (!m_vehicleController.IsFinished())
         {
@@ -567,12 +562,12 @@ void Car::UpdateDrive()
         }
         // 회피 RS 경로 완주 — m_mode가 계속 Drive라 OnModeEnter(Drive)가 다시 안 불리므로, 예전에
         // 거기서 하던 일반주행용 SplineFollowSegment 재구성을 여기서 직접 해준다.
-        m_subMode = SubState::D_Normal;
+        m_subMode = SubMode::D_Normal;
         std::vector<std::unique_ptr<VehicleSegment>> segments;
         segments.push_back(std::make_unique<SplineFollowSegment>());
         m_vehicleController.BeginPlan(std::move(segments));
     }
-    else if (m_subMode == SubState::D_Stop)
+    else if (m_subMode == SubMode::D_Stop)
     {
         // 서브상태:정차 — BeginAvoidPlan이 경로를 못 찾아 여기로 왔다. fsm.txt는 "2초 대기 -> 이동
         // 여부 판단 -> 안 움직였으면 재탐색"이지만, 장애물이 전부 정적이라 "움직였는지" 판단 자체가
@@ -692,6 +687,12 @@ bool Car::TryLaneChange()
 
 bool Car::CheckPath()
 {
+    if (m_currentLane == nullptr)
+    {
+        m_destLane = nullptr;
+        return false;
+    }
+
     // path find
     Vec3 position = GetPosition();
 
@@ -868,12 +869,12 @@ void Car::BeginAvoidPlan()
     if (!foundPath)
     {
         DebugConsole::Log("BeginAvoidPlan: HybridA* failed to find an avoid path, staying in Stop substate");
-        m_subMode = SubState::D_Stop;
+        m_subMode = SubMode::D_Stop;
         return;
     }
 
     float turningRadius = m_wheelbase / tanf(m_maxSteerAngle);
-    m_subMode = SubState::D_Avoid;
+    m_subMode = SubMode::D_Avoid;
     m_vehicleController.BeginPlan(BuildParkSegments(path, startPos, startAngleRad, turningRadius));
     RebuildParkDebugRender(path, startPos, startAngleRad, turningRadius, goalPos, goalAngleRad);
 }
