@@ -32,7 +32,7 @@ TEST_CASE(FindPath_DetoursAroundWall_Succeeds)
 
     HybridAStar::Obstacle wall;
     wall.center = Vec3(5.0f, 0.0f, 0.0f);
-    wall.headingDeg = 90.0f; // 길이(halfLength) 축이 Z를 향하게 돌려서 진행 방향을 가로막는 벽으로 사용
+    wall.headingRad = 90.0f; // 길이(halfLength) 축이 Z를 향하게 돌려서 진행 방향을 가로막는 벽으로 사용
     wall.halfLength = 3.0f;  // z in [-3, 3]
     wall.halfWidth = 0.5f;   // x in [4.5, 5.5]
     std::vector<HybridAStar::Obstacle> obstacles{wall};
@@ -82,7 +82,7 @@ TEST_CASE(FindPath_StartEngulfed_AlwaysExhaustsOpenSet)
     giant.center = Vec3(0.0f, 0.0f, 0.0f);
     giant.halfLength = 10.0f; // stepSize(0.5)로는 절대 못 벗어나는 크기
     giant.halfWidth = 10.0f;
-    giant.headingDeg = 0.0f;
+    giant.headingRad = 0.0f;
     std::vector<HybridAStar::Obstacle> obstacles{giant};
 
     bool foundPath = true; // 일부러 반대값으로 초기화해서 FindPath가 실제로 false를 채우는지 확인
@@ -103,7 +103,7 @@ TEST_CASE(FindPath_TinyBudget_ExceedsMaxExpansions)
 
     HybridAStar::Obstacle wall;
     wall.center = Vec3(5.0f, 0.0f, 0.0f);
-    wall.headingDeg = 90.0f;
+    wall.headingRad = 90.0f;
     wall.halfLength = 3.0f;
     wall.halfWidth = 0.5f;
     std::vector<HybridAStar::Obstacle> obstacles{wall};
@@ -125,7 +125,7 @@ TEST_CASE(IsColliding_Basic)
     obstacle.center = Vec3(0.0f, 0.0f, 0.0f);
     obstacle.halfLength = 2.0f;
     obstacle.halfWidth = 2.0f;
-    obstacle.headingDeg = 0.0f;
+    obstacle.headingRad = 0.0f;
     std::vector<HybridAStar::Obstacle> obstacles{obstacle};
 
     CHECK(HybridAStar::IsColliding(Vec3(0.0f, 0.0f, 0.0f), 0.0f, obstacles, shape));

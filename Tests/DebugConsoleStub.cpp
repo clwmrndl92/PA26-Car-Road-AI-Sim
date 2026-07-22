@@ -15,3 +15,6 @@ void DebugConsole::LogImpl(const std::string &line)
     if (m_lines.size() > MAX_LINES)
         m_lines.pop_front();
 }
+DebugConsole::~DebugConsole()
+{
+}

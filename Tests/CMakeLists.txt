@@ -12,11 +12,13 @@ add_executable(Tests
     HybridAStarTests.cpp
     CarFollowingTests.cpp
     MobilTests.cpp
+    TrafficSignalTests.cpp
     DebugConsoleStub.cpp
     ${CMAKE_SOURCE_DIR}/CarSim/Nav/HybridAStar.cpp
     ${CMAKE_SOURCE_DIR}/CarSim/Nav/ReedsShepp.cpp
     ${CMAKE_SOURCE_DIR}/CarSim/Nav/CarFollowing.cpp
     ${CMAKE_SOURCE_DIR}/CarSim/Nav/Mobil.cpp
+    ${CMAKE_SOURCE_DIR}/CarSim/Nav/TrafficSignal.cpp
 )
 target_include_directories(Tests PRIVATE ${CMAKE_SOURCE_DIR}/CarSim)
 
