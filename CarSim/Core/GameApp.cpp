@@ -57,13 +57,14 @@ void GameApp::OnResize()
 void GameApp::UpdateScene(float dt)
 {
     dt = std::min(dt, kMaxFrameDeltaTime);
+    float simDt = dt * m_TimeScale;
 
     // Step 1. AI/decision logic
     for (auto &obj : m_GameObjects)
-        obj->UpdateAI(dt);
+        obj->UpdateAI(simDt);
 
     // Step 2. Physics-coupled update + physics step
-    m_PhysicsAccumulator += dt;
+    m_PhysicsAccumulator += simDt;
     int physicsSteps = 0;
     while (m_PhysicsAccumulator >= kFixedPhysicsStep && physicsSteps < kMaxPhysicsStepsPerFrame)
     {

@@ -28,6 +28,9 @@ public:
     virtual void UpdateUI(float dt);
     void DrawScene();
 
+    float GetTimeScale() const { return m_TimeScale; }
+    void SetTimeScale(float scale) { m_TimeScale = scale; }
+
 protected:
     BasicEffect m_BasicEffect;
     TextureManager m_TextureManager;
@@ -44,6 +47,9 @@ protected:
     float m_PhysicsAccumulator = 0.0f;
     static constexpr float kFixedPhysicsStep = 1.0f / 60.0f;
     static constexpr int kMaxPhysicsStepsPerFrame = 8;
+
+    // 시뮬레이션 배속 (카메라/UI에는 적용 안 됨, AI/물리/신호 타이밍에만 적용).
+    float m_TimeScale = 1.0f;
 
     std::shared_ptr<Camera> m_pCamera;
 

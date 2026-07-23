@@ -36,7 +36,7 @@ bool CarSim::Init()
 
 void CarSim::UpdateScene(float dt)
 {
-    m_RoadDataManager.Tick(dt);
+    m_RoadDataManager.Tick(dt * GetTimeScale());
     UpdateSignalMarkers();
     GameApp::UpdateScene(dt);
 }
@@ -271,6 +271,23 @@ void CarSim::UpdateUI(float dt)
     if (ImGui::Begin("Objects"))
     {
         ImGui::Text("Mode : %s", m_CameraMode == CameraMode::Free ? "Free Camera" : "Focus Camera");
+
+        ImGui::Separator();
+        ImGui::Text("Simulation Speed");
+        float timeScale = GetTimeScale();
+        const float kSpeedOptions[] = {0.5f, 1.0f, 2.0f, 3.0f};
+        for (int i = 0; i < IM_ARRAYSIZE(kSpeedOptions); ++i)
+        {
+            if (i > 0)
+                ImGui::SameLine();
+            bool isActive = std::fabs(timeScale - kSpeedOptions[i]) < 0.01f;
+            if (isActive)
+                ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+            if (ImGui::Button((std::to_string(kSpeedOptions[i]).substr(0, 3) + "x").c_str()))
+                SetTimeScale(kSpeedOptions[i]);
+            if (isActive)
+                ImGui::PopStyleColor();
+        }
 
         if (m_PickedObjectName.empty())
             ImGui::Text("Picked: (none)");

@@ -692,7 +692,7 @@ bool Car::TryLaneChange(bool ignoreCooldown)
 
     // candidate로 실제 전환을 수행. mandatory=true면 유인 기준 없이 안전 기준만 통과하면 되고(라우팅
     // 강제 변경), false면 기존 MOBIL 안전+유인 기준을 그대로 쓴다(임의 추월성 변경).
-    auto commitTo = [&](const shared_ptr<Lane> &candidate, bool mandatory) -> bool
+    auto commitTo = [&](const shared_ptr<Lane> candidate, bool mandatory) -> bool
     {
         if (candidate == nullptr)
             return false;
@@ -769,7 +769,8 @@ bool Car::CheckPath()
     Vec3 position = GetPosition();
 
     // 현재 레인의 끝에 다가가면 경로상 다음 레인으로 넘어간다.
-    float laneEndDistance = (m_currentLane->GetEndPoint() - position).Length();
+    Vec3 projectedPosition = m_currentSpline.GetLookaheadPoint(position, 0.0f);
+    float laneEndDistance = (m_currentLane->GetEndPoint() - projectedPosition).Length();
     bool enteredByLaneChange = false;
     while (laneEndDistance < LANE_TRANSITION_THRESHOLD)
     {
@@ -787,7 +788,8 @@ bool Car::CheckPath()
         SetCurrentLane(m_path[m_pathIndex].lane);
         enteredByLaneChange = m_path[m_pathIndex].isLaneChange;
         m_currentSpline = m_currentLane->GetSpline();
-        laneEndDistance = (m_currentLane->GetEndPoint() - position).Length();
+        projectedPosition = m_currentSpline.GetLookaheadPoint(position, 0.0f);
+        laneEndDistance = (m_currentLane->GetEndPoint() - projectedPosition).Length();
         RebuildSplineRender();
     }
     // 차선변경으로 진입한 레인이면(레인/스플라인은 위 while에서 이미 세팅됨) 도로 제약(IDM용)만
@@ -810,12 +812,9 @@ void Car::DriveControl()
 {
     Vec3 rigidPosition = GetRigidbodyPosition();
     float lookaheadDistance = ComputeLookaheadDistance();
-    // m_currentSpline 하나만 보고 걸으면(구 GetLookaheadPoint) 레인 끝 근처에서 조준점이 레인 끝점에
-    // 눌러붙어 조향이 깨진다 -- GetLookaheadPose로 경로상 다음 레인까지 넘어가며 찾는다.
     Vec3 targetPosition, targetDir;
     GetLookaheadPose(&m_currentSpline, m_currentLane, m_pathIndex, rigidPosition, lookaheadDistance, targetPosition, targetDir);
-    // TryAvoidObstacle이 전방 코리도어에서 장애물을 감지하고 옆으로 피할 여지를 찾으면 여기서
-    // 조준점 자체를 옆으로 밀어(Reynolds식 측면 회피) 차선 추종을 유지한 채 슬쩍 피해가게 한다.
+    // Reynolds식 측면 회피
     if (m_avoidLateralOffset != 0.0f)
     {
         Vec3 targetNormal = Vec3(-targetDir.GetZ(), 0.0f, targetDir.GetX()).Normalized();
@@ -825,7 +824,7 @@ void Car::DriveControl()
     Steer(targetSteer);
 
     // speed control
-    float steerSpeedCap = CalcMaxSpeed(targetSteer) * 0.8f;
+    float steerSpeedCap = CalcMaxSpeed(targetSteer);
     DriveSpeedIDM(steerSpeedCap);
 
     // Debug
@@ -835,7 +834,7 @@ void Car::DriveControl()
 }
 
 void Car::GetLookaheadPose(const Spline *startSpline, const shared_ptr<Lane> &startLane, size_t startPathIndex,
-                          const Vec3 &fromPosition, float distance, Vec3 &outPosition, Vec3 &outDirection) const
+                           const Vec3 &fromPosition, float distance, Vec3 &outPosition, Vec3 &outDirection) const
 {
     const Spline *spline = startSpline;
     shared_ptr<Lane> segmentLane = startLane;
@@ -859,7 +858,9 @@ void Car::GetLookaheadPose(const Spline *startSpline, const shared_ptr<Lane> &st
         remainingDistance -= segmentDistance;
 
         shared_ptr<Lane> nextLane = (pathIndex + 1 < m_path.size()) ? m_path[pathIndex + 1].lane : nullptr;
-        if (!nextLane)
+        bool isNextLaneCurved = nextLane->GetSpline().GetMinRadiusAhead(0.0f, 1.0f) < std::numeric_limits<float>::max();
+        float nextLaneRamain = (fromPosition - segmentLane->GetEndPoint()).Length();
+        if (!nextLane || (isNextLaneCurved && nextLaneRamain >= LANE_TRANSITION_THRESHOLD * 1.5f))
         {
             // 경로가 여기서 끝남 -- 기존 스플라인 클램프와 동일하게 마지막 레인 끝점에 멈춘다.
             outPosition = segmentLane->GetEndPoint();
@@ -880,7 +881,7 @@ void Car::SimulateCorridorTrajectory(float lateralOffset, std::vector<Vec3> &out
     outPositions.clear();
     outDirections.clear();
 
-    Vec3 pos = m_rigidbody.GetPosition();
+    Vec3 rigidPos = m_rigidbody.GetPosition();
     Vec3 dir = GetForwardAxis();
     float lookaheadDistance = ComputeLookaheadDistance();
 
@@ -892,7 +893,7 @@ void Car::SimulateCorridorTrajectory(float lateralOffset, std::vector<Vec3> &out
 
     for (float traveled = 0.0f; traveled <= AVOID_DETECT_DISTANCE; traveled += AVOID_SAMPLE_STEP)
     {
-        outPositions.push_back(pos);
+        outPositions.push_back(rigidPos);
         outDirections.push_back(dir);
 
         float remaining = AVOID_SAMPLE_STEP;
@@ -903,7 +904,7 @@ void Car::SimulateCorridorTrajectory(float lateralOffset, std::vector<Vec3> &out
             // pos가 posSpline 끝에 사실상 도달했으면(가장 가까운 점이 마지막 샘플) 경로상 다음 레인으로
             // 커서를 옮긴다 -- ScanRoadSpeedConstraints/GetLookaheadPose와 같은 판정 방식.
             while (posSpline->GetLength() > 0.0f &&
-                   (1.0f - posSpline->GetSplinePosition(pos)) * posSpline->GetLength() < TRAJECTORY_SUBSTEP * 0.5f)
+                   (1.0f - posSpline->GetSplinePosition(rigidPos)) * posSpline->GetLength() < TRAJECTORY_SUBSTEP * 0.5f)
             {
                 shared_ptr<Lane> nextLane = (posPathIndex + 1 < m_path.size()) ? m_path[posPathIndex + 1].lane : nullptr;
                 if (!nextLane)
@@ -917,7 +918,7 @@ void Car::SimulateCorridorTrajectory(float lateralOffset, std::vector<Vec3> &out
             // 찾는다. "지금 시뮬레이션 중인" pos 기준으로 매 서브스텝 다시 구하는 건 실제 주행도 매
             // 프레임 그 시점 위치에서 다시 구하는 것과 동일하다.
             Vec3 targetPos, targetDir;
-            GetLookaheadPose(posSpline, posLane, posPathIndex, pos, lookaheadDistance, targetPos, targetDir);
+            GetLookaheadPose(posSpline, posLane, posPathIndex, rigidPos, lookaheadDistance, targetPos, targetDir);
             if (lateralOffset != 0.0f)
             {
                 Vec3 targetNormal = Vec3(-targetDir.GetZ(), 0.0f, targetDir.GetX()).Normalized();
@@ -926,7 +927,7 @@ void Car::SimulateCorridorTrajectory(float lateralOffset, std::vector<Vec3> &out
 
             // Car::PurePursuit와 동일한 조향각 공식을, atan2(z,x) 부호 규약의 signed heading error로
             // 다시 쓴 것 -- 결과는 같지만 carRight 없이 dir/toTarget만으로 부호까지 바로 나온다.
-            Vec3 toTarget = targetPos - pos;
+            Vec3 toTarget = targetPos - rigidPos;
             float distance = toTarget.Length();
             float steerAngle = 0.0f;
             if (distance > 0.001f)
@@ -941,7 +942,7 @@ void Car::SimulateCorridorTrajectory(float lateralOffset, std::vector<Vec3> &out
             // Left/kappa 부호 규약과 교차검증됨).
             float currentAngle = atan2f(dir.GetZ(), dir.GetX());
             float nextAngle = currentAngle - step * tanf(steerAngle) / m_wheelbase;
-            pos = pos + dir * step;
+            rigidPos = rigidPos + dir * step;
             dir = Vec3(cosf(nextAngle), 0.0f, sinf(nextAngle));
 
             remaining -= step;

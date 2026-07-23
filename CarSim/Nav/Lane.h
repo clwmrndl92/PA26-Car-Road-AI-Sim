@@ -13,12 +13,6 @@ struct RoadNode;
 class Lane
 {
 public:
-    enum class LaneType
-    {
-        Straight,
-        Curve
-    };
-
     Lane(int id, const Spline &spline, const shared_ptr<Road> &road);
     ~Lane();
 
@@ -71,5 +65,5 @@ private:
     weak_ptr<Lane> m_left;               // 같은 진행방향 좌측 인접 레인 (차선변경)
     weak_ptr<Lane> m_right;              // 같은 진행방향 우측 인접 레인 (차선변경)
     vector<Car *> m_cars;                // 지금 이 레인 위에 있는 차들 (RegisterCar/UnregisterCar가 관리)
-    weak_ptr<RoadNode> m_signalNode;      // 소유는 RoadDataManager(m_nodes)가 하므로 weak_ptr로만 참조
+    weak_ptr<RoadNode> m_signalNode;     // 소유는 RoadDataManager(m_nodes)가 하므로 weak_ptr로만 참조
 };

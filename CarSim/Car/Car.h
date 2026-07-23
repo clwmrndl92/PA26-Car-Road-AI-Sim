@@ -154,7 +154,7 @@ private:
     bool TryLaneChange(bool ignoreCooldown = false);
     bool TryAvoidObstacle();
     void GetLookaheadPose(const Spline *startSpline, const shared_ptr<Lane> &startLane, size_t startPathIndex,
-                         const Vec3 &fromPosition, float distance, Vec3 &outPosition, Vec3 &outDirection) const;
+                          const Vec3 &fromPosition, float distance, Vec3 &outPosition, Vec3 &outDirection) const;
     float ComputeLookaheadDistance() const;
     void SimulateCorridorTrajectory(float lateralOffset, std::vector<Vec3> &outPositions,
                                     std::vector<Vec3> &outDirections) const;
@@ -221,7 +221,7 @@ private:
     float m_mass = 1.0f;
     Vec3 m_halfExtents = Vec3::sZero();              // 충돌판정용 차체 반크기(x=반폭, z=반길이). CarSpec::halfExtents.
     float m_maxSteerAngle = ToRadians(45.0f);        // 최대 조향각 (45도)
-    static constexpr float CURVE_SPEED_COEFF = 1.2f; // 최대 코너링 속도 = CURVE_SPEED_COEFF * sqrt(R)
+    static constexpr float CURVE_SPEED_COEFF = 1.5f; // 최대 코너링 속도 = CURVE_SPEED_COEFF * sqrt(R)
     static constexpr float STEER_RAMP_RATE = 0.4f;
 
     // 컴포넌트 및 AI 상태 (Components & Systems)
@@ -293,7 +293,7 @@ private:
 
     // 트레일 및 디버그 렌더링 리소스 (Render Resources & Trail Data)
     static constexpr float TRAIL_SAMPLE_DISTANCE = 0.5f;
-    static constexpr size_t TRAIL_MAX_POINTS = 200;
+    static constexpr size_t TRAIL_MAX_POINTS = 100;
 
     std::deque<DirectX::XMFLOAT3> m_rearTrail;
     std::deque<DirectX::XMFLOAT3> m_frontTrail;

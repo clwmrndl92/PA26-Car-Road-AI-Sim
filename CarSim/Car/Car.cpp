@@ -319,7 +319,7 @@ void Car::SetCurrentLane(const shared_ptr<Lane> &lane)
 std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistance) const
 {
     constexpr float ROAD_SAMPLE_SPACING = 5.0f; // 도로 스캔 샘플 간격 (m)
-    constexpr float LOCAL_WINDOW = 0.01f;       // 로컬 곡률 추정용 t-window
+    constexpr float LOCAL_WINDOW = 0.1f;        // 로컬 곡률 추정용 t-window
 
     Vec3 calPosition = GetPosition();
 
@@ -379,7 +379,12 @@ std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistan
                     size_t index = static_cast<size_t>(std::clamp(t, 0.0f, 1.0f) * lastIndex);
 
                     float radius = spline->GetMinRadiusAhead(std::max(0.0f, t - LOCAL_WINDOW), std::min(1.0f, t + LOCAL_WINDOW));
-                    float maxSpeed = radius < std::numeric_limits<float>::max() ? CURVE_SPEED_COEFF * std::sqrt(radius) : m_maxSpeed;
+
+                    float maxSpeed = m_maxSpeed;
+                    if (s < sampleCount / 1.8 && radius < std::numeric_limits<float>::max())
+                    {
+                        maxSpeed = CURVE_SPEED_COEFF * std::sqrt(radius);
+                    }
                     samples.push_back({points[index], traveledDistance + localDistance, maxSpeed});
                 }
             }
