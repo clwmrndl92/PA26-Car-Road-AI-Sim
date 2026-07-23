@@ -974,6 +974,32 @@ void Car::RebuildBBDebugRender(const std::vector<Vec3> &positions, const std::ve
     }
 }
 
+// IsParkObstacleAhead의 부채꼴 레이 하나하나를 선으로 그린다 -- 맞은 레이는 히트 지점까지만(빨강),
+// 안 맞은 레이는 최대 거리까지 전부(초록) 그려서 어디서 걸렸는지 한눈에 보이게 한다.
+void Car::RebuildParkRayDebugRender(const std::vector<Vec3> &rayStarts, const std::vector<Vec3> &rayEnds,
+                                    const std::vector<bool> &hits)
+{
+    constexpr float DEBUG_LINE_HEIGHT = 0.15f;
+
+    m_bboxDebugRenders.clear();
+    for (size_t i = 0; i < rayStarts.size(); ++i)
+    {
+        DirectX::XMFLOAT3 lineStart = ToXMFLOAT3(rayStarts[i]);
+        DirectX::XMFLOAT3 lineEnd = ToXMFLOAT3(rayEnds[i]);
+        lineStart.y += DEBUG_LINE_HEIGHT;
+        lineEnd.y += DEBUG_LINE_HEIGHT;
+
+        Model *pModel = ModelManager::Get().CreateFromGeometry(
+            "__park_ray__:" + GetName() + ":" + std::to_string(i), Geometry::CreateLine(lineStart, lineEnd));
+        DirectX::XMFLOAT4 color = hits[i] ? DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f) : DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f);
+        pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", color);
+        pModel->materials[0].Set<float>("$Opacity", 1.0f);
+
+        RenderObject &render = m_bboxDebugRenders.emplace_back();
+        render.SetModel(pModel);
+    }
+}
+
 void Car::SetDestination(const shared_ptr<RoadNode> &destNode)
 {
     m_destLane = m_RoadDataManager->GetClosestLaneEnd(destNode->position);

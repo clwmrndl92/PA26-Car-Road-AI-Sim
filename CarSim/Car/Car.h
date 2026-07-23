@@ -75,6 +75,9 @@ private:
     void RebuildBBDebugRender(const std::vector<Vec3> &positions, const std::vector<Vec3> &directions,
                               const std::vector<VehicleCollision::Obstacle> &obstacles,
                               const VehicleCollision::VehicleShape &shape);
+    // IsParkObstacleAhead의 부채꼴 레이 하나하나를 선으로 그린다(맞은 레이=빨강, 안 맞은 레이=초록).
+    void RebuildParkRayDebugRender(const std::vector<Vec3> &rayStarts, const std::vector<Vec3> &rayEnds,
+                                   const std::vector<bool> &hits);
 
     bool IsOffCourse();
 
@@ -160,6 +163,11 @@ private:
     void BeginParkPlan();
     void BeginParkSpotLeg();
     bool PlanParkLegTo(const Vec3 &targetPos, float targetAngleRad, bool exact = false);
+    // RS 매뉴버(주차) 실행 중 매 틱 확인하는 짧은 부채꼴 레이캐스트 감지 -- ScanBBoxObstacleGap과 달리
+    // 레인 스플라인을 따라가지 않고 지금 진행 방향(전진/후진)을 중심으로 좌우로 펼친 레이 여러 개를
+    // 짧게 쏜다. 정적 장애물은 RS 플래닝이 이미 피해서 무시하고, 동적(주변 차량)만 감지 대상이다.
+    // RebuildParkRayDebugRender로 디버그 렌더링도 갱신하므로 const가 아니다.
+    bool IsParkObstacleAhead();
     bool PlanEnterForCurrentSpot();
     bool ReserveNextParkSpot();
     bool BeginParkEnterOrRetry();
@@ -253,6 +261,9 @@ private:
     std::string m_lastBrakeCause;                                     // DriveSpeedIDM 제동 로그 중복 방지용(비어있으면 비제동 상태).
     static constexpr float AVOID_DETECT_DISTANCE = 20.0f;             // 박스캐스트 바운딩박스 스윕 길이 (전방 감지 거리)
     static constexpr float AVOID_SAMPLE_STEP = 2.0f;                  // 바운딩박스 스윕을 따라 박스를 검사하는 간격
+    static constexpr float PARK_OBSTACLE_DETECT_DISTANCE = 5.0f;      // IsParkObstacleAhead 레이 길이 -- RS 저속 매뉴버라 짧게만 봐도 충분
+    static constexpr float PARK_OBSTACLE_FAN_HALF_ANGLE = ToRadians(35.0f); // IsParkObstacleAhead 부채꼴의 좌우 반각(중앙 기준)
+    static constexpr int PARK_OBSTACLE_FAN_RAY_COUNT = 5;             // IsParkObstacleAhead 부채꼴 레이 개수(홀수면 정중앙 레이 포함)
     static constexpr float AVOID_OBSTACLE_STANDSTILL_DISTANCE = 0.5f; // 장애물 가상 리더용 s0 -- 일반 차량 추종(IDM_STANDSTILL_DISTANCE=2m)보다 더 붙어도 되게 별도로 둔다.
     vector<LaneStep> m_path;
     size_t m_pathIndex = 0;
@@ -323,7 +334,7 @@ private:
     RenderObject m_parkPathRender;                // Park 계획(RS 경로) 폴리라인
     RenderObject m_parkTargetMarker;              // Park 목표 위치
     RenderObject m_parkTargetLine;                // Park 목표 방향
-    std::vector<RenderObject> m_bboxDebugRenders; // ScanBBoxObstacleGap 바운딩박스 샘플 박스(충돌=빨강/통과=초록)
+    std::vector<RenderObject> m_bboxDebugRenders; // ScanBBoxObstacleGap/IsParkObstacleAhead 바운딩박스 샘플 박스(충돌=빨강/통과=초록) -- 둘이 공유하므로 나중에 호출된 쪽 것으로 매번 덮어써진다
 };
 
 static float CalcMaxSteerAngle(float speed)

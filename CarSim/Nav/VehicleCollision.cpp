@@ -1,10 +1,47 @@
 #include "VehicleCollision.h"
+#include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace VehicleCollision
 {
     namespace
     {
+        // ray(origin, dir)를 obstacle 로컬 좌표계(forward=x, right=z)의 슬랩([-halfLength,halfLength]
+        // x [-halfWidth,halfWidth])과 교차시킨다. 맞으면 [0, maxDistance] 범위의 진입 거리를 반환.
+        std::pair<bool, float> RaySlabIntersect(const Vec3 &origin, const Vec3 &dir, float maxDistance,
+                                                const Obstacle &obstacle)
+        {
+            Vec3 fwd(std::cos(obstacle.headingRad), 0.0f, std::sin(obstacle.headingRad));
+            Vec3 right(-fwd.GetZ(), 0.0f, fwd.GetX());
+            Vec3 toOrigin = origin - obstacle.center;
+
+            float lo[2] = {toOrigin.Dot(fwd), toOrigin.Dot(right)};
+            float ld[2] = {dir.Dot(fwd), dir.Dot(right)};
+            float half[2] = {obstacle.halfLength, obstacle.halfWidth};
+
+            float tmin = 0.0f;
+            float tmax = maxDistance;
+            for (int axis = 0; axis < 2; ++axis)
+            {
+                if (std::fabs(ld[axis]) < 1e-9f)
+                {
+                    if (lo[axis] < -half[axis] || lo[axis] > half[axis])
+                        return {false, 0.0f};
+                    continue;
+                }
+                float t1 = (-half[axis] - lo[axis]) / ld[axis];
+                float t2 = (half[axis] - lo[axis]) / ld[axis];
+                if (t1 > t2)
+                    std::swap(t1, t2);
+                tmin = std::max(tmin, t1);
+                tmax = std::min(tmax, t2);
+                if (tmin > tmax)
+                    return {false, 0.0f};
+            }
+            return {true, tmin};
+        }
+
         // 2D SAT: 두 회전된 사각형(중심+heading+반길이/반폭)이 겹치는지.
         bool ObbOverlap(const Vec3 &centerA, float halfLengthA, float halfWidthA, float headingRadA,
                         const Vec3 &centerB, float halfLengthB, float halfWidthB, float headingRadB)
@@ -41,5 +78,21 @@ namespace VehicleCollision
                 return true;
         }
         return false;
+    }
+
+    float RaycastObstacles(const Vec3 &origin, float directionRad, float maxDistance,
+                           const std::vector<Obstacle> &obstacles)
+    {
+        Vec3 dir(std::cos(directionRad), 0.0f, std::sin(directionRad));
+        float best = -1.0f;
+
+        for (const Obstacle &obstacle : obstacles)
+        {
+            auto [hit, distance] = RaySlabIntersect(origin, dir, maxDistance, obstacle);
+            if (hit && (best < 0.0f || distance < best))
+                best = distance;
+        }
+
+        return best;
     }
 }

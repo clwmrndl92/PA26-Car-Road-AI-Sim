@@ -216,7 +216,9 @@ bool Car::TryFindPathAndSetLane()
 
 void Car::UpdatePark()
 {
-    // TODO(주차 중 장애물 감시): fsm.txt는 상태:주차(출차) 전체에 박스캐스트 감지 -> 5초 대기 -> 이동 여부 판단 -> 재탐색 로직
+    // TODO(주차 중 장애물 감시): fsm.txt는 상태:주차(출차) 전체에 박스캐스트 감지 -> 5초 대기 -> 이동 여부 판단 -> 재탐색
+    // 로직인데, 아래 IsParkObstacleAhead로 "감지되면 정지"까지만 구현했다. 5초 대기/이동판단/재탐색 단계는 아직 없어서
+    // 장애물이 안 사라지면 계속 정지만 유지한다.
     if (m_parkPlanPending)
     {
         // 완전히 정지할 때까지는 RS 계획을 세우지 않고 감속만 한다.
@@ -232,6 +234,13 @@ void Car::UpdatePark()
 
     if (!m_vehicleController.IsFinished())
     {
+        if (IsParkObstacleAhead())
+        {
+            // RS 진행 방향 바로 앞에 장애물 -- 플랜은 그대로 둔 채 이번 틱만 정지, 장애물이
+            // 사라지면 다음 틱에 자동으로 이어서 진행한다.
+            Accelerate(0.0f);
+            return;
+        }
         m_wantSegmentTick = true;
         return;
     }
@@ -591,6 +600,60 @@ void Car::BeginParkSpotLeg()
     DebugConsole::Log(GetName() + ": BeginParkSpotLeg: no reachable ParkSpot left, stopping");
     m_destLane = nullptr;
     m_vehicleController.BeginPlan({});
+}
+
+bool Car::IsParkObstacleAhead()
+{
+    Vec3 pos = GetPosition();
+    Vec3 dir = GetForwardAxis() * (m_isReverse ? -1.0f : 1.0f); // RS는 후진 leg도 흔하므로 실제 진행 방향 기준
+    float centerAngleRad = DirectionToAngleRad(dir);
+
+    // 정적 장애물(레벨 데이터)은 이미 RS 플래닝(GetOptimalPath의 isCollisionFree)이 피해서 짠 경로이므로
+    // 여기서는 아예 무시한다 -- 동적 장애물(주변 차량)만 플래닝 때 전혀 감안되지 않았으므로 감지 대상.
+    std::vector<VehicleCollision::Obstacle> dynamicObstacles;
+    if (m_currentLane != nullptr)
+    {
+        float egoLanePos = m_currentLane->GetSpline().GetSplinePosition(GetPosition()) * m_currentLane->GetLength();
+        for (Car *other : CollectNearbyCars(m_currentLane, egoLanePos))
+        {
+            VehicleCollision::VehicleShape otherShape = other->BuildVehicleShape();
+            Vec3 otherPivot = other->GetRigidbodyPosition();
+            Vec3 otherFwd = other->GetForwardAxis();
+            VehicleCollision::Obstacle obstacle;
+            obstacle.center = otherPivot + otherFwd * otherShape.pivotToCenter;
+            obstacle.halfLength = otherShape.halfLength;
+            obstacle.halfWidth = otherShape.halfWidth;
+            obstacle.headingRad = DirectionToAngleRad(otherFwd);
+            dynamicObstacles.push_back(obstacle);
+        }
+    }
+
+    if (dynamicObstacles.empty())
+    {
+        m_bboxDebugRenders.clear();
+        return false;
+    }
+
+    // 진행 방향을 중심으로 좌우로 펼친 레이 여러 개(부채꼴)를 쏜다.
+    bool hitAny = false;
+    std::vector<Vec3> rayStarts, rayEnds;
+    std::vector<bool> hits;
+    for (int i = 0; i < PARK_OBSTACLE_FAN_RAY_COUNT; ++i)
+    {
+        float t = (PARK_OBSTACLE_FAN_RAY_COUNT == 1) ? 0.5f : static_cast<float>(i) / (PARK_OBSTACLE_FAN_RAY_COUNT - 1);
+        float rayAngleRad = centerAngleRad - PARK_OBSTACLE_FAN_HALF_ANGLE + 2.0f * PARK_OBSTACLE_FAN_HALF_ANGLE * t;
+        float hitDistance = VehicleCollision::RaycastObstacles(pos, rayAngleRad, PARK_OBSTACLE_DETECT_DISTANCE, dynamicObstacles);
+        bool hit = hitDistance >= 0.0f;
+        float rayLength = hit ? hitDistance : PARK_OBSTACLE_DETECT_DISTANCE;
+
+        rayStarts.push_back(pos);
+        rayEnds.push_back(pos + Vec3(cosf(rayAngleRad), 0.0f, sinf(rayAngleRad)) * rayLength);
+        hits.push_back(hit);
+        hitAny |= hit;
+    }
+    RebuildParkRayDebugRender(rayStarts, rayEnds, hits); // 디버그: 맞은 레이=빨강/안 맞은 레이=초록 (이전 프레임의 주행용 박스는 여기서 덮어써서 지워진다)
+
+    return hitAny;
 }
 
 #pragma endregion
