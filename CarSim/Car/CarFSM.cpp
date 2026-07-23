@@ -659,6 +659,7 @@ void Car::UpdateDrive()
     TryLaneChange();
     // if (TryAvoidObstacle())
     //     return;
+    m_obstacleAheadGap = ScanBBoxObstacleGap();
     m_wantSegmentTick = true;
 }
 
@@ -672,8 +673,10 @@ bool Car::TryLaneChange(bool ignoreCooldown)
     // 평행한 차선이라 서로 같은 좌표계를 공유한다고 근사한다 (레인마다 다시 투영하지 않음).
     float egoPosition = m_currentLane->GetSpline().GetSplinePosition(position) * m_currentLane->GetLength();
 
+    // 연결된 차선까지 넓혀 찾는다(FindGraphNeighbors) -- 결과 position은 egoPosition 기준 상대 거리(u)로
+    // 나오므로, 아래 ego/virtualLeader도 전부 그 좌표계(ego=0)로 맞춘다.
     LaneNeighbor egoLeaderN, oldFollowerN;
-    FindLaneNeighbors(m_currentLane, egoPosition, egoLeaderN, oldFollowerN);
+    FindGraphNeighbors(m_currentLane, egoPosition, egoLeaderN, oldFollowerN);
 
     float v0 = std::min(m_maxSpeed, m_currentLane->GetLimitSpeed());
     CarFollowing::Params cfParams = BuildIdmParams(v0);
@@ -681,9 +684,9 @@ bool Car::TryLaneChange(bool ignoreCooldown)
 
     constexpr float VIRTUAL_LEADER_GAP = 100000.0f; // 실제 리더가 없을 때(뚫린 도로) 쓰는 가상 리더 거리
     auto virtualLeader = [&](float laneLimitSpeed)
-    { return Mobil::VehicleState{laneLimitSpeed, 0.0f, egoPosition + VIRTUAL_LEADER_GAP, 0.0f}; };
+    { return Mobil::VehicleState{laneLimitSpeed, 0.0f, VIRTUAL_LEADER_GAP, 0.0f}; };
 
-    Mobil::VehicleState ego{m_speed, m_acceleration, egoPosition, GetLength()};
+    Mobil::VehicleState ego{m_speed, m_acceleration, 0.0f, GetLength()};
     Mobil::VehicleState egoLeaderState = (egoLeaderN.car != nullptr) ? ToVehicleState(egoLeaderN) : virtualLeader(v0);
     Mobil::VehicleState oldFollowerStorage;
     const Mobil::VehicleState *oldFollowerState = nullptr;
@@ -701,7 +704,7 @@ bool Car::TryLaneChange(bool ignoreCooldown)
             return false;
 
         LaneNeighbor newLeaderN, newFollowerN;
-        FindLaneNeighbors(candidate, egoPosition, newLeaderN, newFollowerN);
+        FindGraphNeighbors(candidate, egoPosition, newLeaderN, newFollowerN);
 
         float candidateV0 = std::min(m_maxSpeed, candidate->GetLimitSpeed());
         Mobil::VehicleState newLeaderState = (newLeaderN.car != nullptr) ? ToVehicleState(newLeaderN) : virtualLeader(candidateV0);
@@ -861,7 +864,7 @@ void Car::GetLookaheadPose(const Spline *startSpline, const shared_ptr<Lane> &st
         remainingDistance -= segmentDistance;
 
         shared_ptr<Lane> nextLane = (pathIndex + 1 < m_path.size()) ? m_path[pathIndex + 1].lane : nullptr;
-        bool isNextLaneCurved = nextLane->GetSpline().GetMinRadiusAhead(0.0f, 1.0f) < std::numeric_limits<float>::max();
+        bool isNextLaneCurved = nextLane && nextLane->GetSpline().GetMinRadiusAhead(0.0f, 1.0f) < std::numeric_limits<float>::max();
         float nextLaneRamain = (fromPosition - segmentLane->GetEndPoint()).Length();
         if (!nextLane || (isNextLaneCurved && nextLaneRamain >= LANE_TRANSITION_THRESHOLD * 1.5f))
         {
@@ -878,8 +881,8 @@ void Car::GetLookaheadPose(const Spline *startSpline, const shared_ptr<Lane> &st
     }
 }
 
-void Car::SimulateCorridorTrajectory(float lateralOffset, std::vector<Vec3> &outPositions,
-                                     std::vector<Vec3> &outDirections) const
+void Car::SimulateBBoxTrajectory(float lateralOffset, std::vector<Vec3> &outPositions,
+                                 std::vector<Vec3> &outDirections) const
 {
     outPositions.clear();
     outDirections.clear();
@@ -961,14 +964,14 @@ bool Car::TryAvoidObstacle()
     {
         m_avoidLateralOffset = 0.0f;
         m_obstacleAheadGap = -1.0f;
-        m_corridorDebugRenders.clear();
+        m_bboxDebugRenders.clear();
         return false;
     }
 
     // lateralOffset 궤적을 시뮬레이션해서 처음 충돌하는 샘플의 인덱스를 반환(없으면 -1).
     auto findCollision = [&](float lateralOffset, std::vector<Vec3> &positions, std::vector<Vec3> &directions)
     {
-        SimulateCorridorTrajectory(lateralOffset, positions, directions);
+        SimulateBBoxTrajectory(lateralOffset, positions, directions);
         for (size_t i = 0; i < positions.size(); ++i)
         {
             if (HybridAStar::IsColliding(positions[i], DirectionToAngleRad(directions[i]), obstacles, shape))
@@ -984,7 +987,7 @@ bool Car::TryAvoidObstacle()
 
     std::vector<Vec3> basePositions, baseDirections;
     int collideIndex = findCollision(0.0f, basePositions, baseDirections);
-    RebuildCorridorDebugRender(basePositions, baseDirections, obstacles, shape); // 디버그: 충돌=빨강/통과=초록 박스
+    RebuildBBDebugRender(basePositions, baseDirections, obstacles, shape); // 디버그: 충돌=빨강/통과=초록 박스
 
     if (collideIndex < 0)
     {
@@ -1058,6 +1061,56 @@ bool Car::TryAvoidObstacle()
     m_obstacleAheadGap = -1.0f;
     BeginAvoidPlan();
     return true;
+}
+
+// TryAvoidObstacle과 달리 회피 기동(옆 오프셋 탐색, BeginAvoidPlan)은 전혀 건드리지 않고 SimulateBBoxTrajectory
+// 전방 sweep으로 정적+동적(주변 차량) 장애물까지의 최근접 거리만 반환한다(없으면 -1). DriveSpeedIDM이
+// 이 값을 정지한 가상 리더의 gap으로 사용.
+float Car::ScanBBoxObstacleGap()
+{
+    if (m_currentLane == nullptr)
+    {
+        m_bboxDebugRenders.clear();
+        return -1.0f;
+    }
+
+    std::vector<HybridAStar::Obstacle> obstacles = m_RoadDataManager->GetObstacles();
+
+    Vec3 position = GetPosition();
+    float egoLanePos = m_currentLane->GetSpline().GetSplinePosition(position) * m_currentLane->GetLength();
+
+    for (Car *other : CollectNearbyCars(m_currentLane, egoLanePos))
+    {
+        // BuildVehicleShape의 pivotToCenter 컨벤션과 동일하게, "pivot"(rigidbody 위치)에서 전방으로
+        // pivotToCenter만큼 떨어진 지점을 실제 충돌판정 박스 중심으로 쓴다.
+        HybridAStar::VehicleShape otherShape = other->BuildVehicleShape();
+        Vec3 otherPivot = other->GetRigidbodyPosition();
+        Vec3 otherFwd = other->GetForwardAxis();
+        HybridAStar::Obstacle obstacle;
+        obstacle.center = otherPivot + otherFwd * otherShape.pivotToCenter;
+        obstacle.halfLength = otherShape.halfLength;
+        obstacle.halfWidth = otherShape.halfWidth;
+        obstacle.headingRad = DirectionToAngleRad(otherFwd);
+        obstacles.push_back(obstacle);
+    }
+
+    if (obstacles.empty())
+    {
+        m_bboxDebugRenders.clear();
+        return -1.0f;
+    }
+
+    HybridAStar::VehicleShape shape = BuildVehicleShape();
+    std::vector<Vec3> positions, directions;
+    SimulateBBoxTrajectory(0.0f, positions, directions);
+    RebuildBBDebugRender(positions, directions, obstacles, shape); // 디버그: 충돌=빨강/통과=초록 박스 (TryAvoidObstacle과 동일)
+
+    for (size_t i = 0; i < positions.size(); ++i)
+    {
+        if (HybridAStar::IsColliding(positions[i], DirectionToAngleRad(directions[i]), obstacles, shape))
+            return static_cast<float>(i) * AVOID_SAMPLE_STEP;
+    }
+    return -1.0f;
 }
 
 // 현재 pose에서, 현재 차선을 따라 장애물을 지나칠 만큼 앞선 지점까지 Hybrid A*로 회피 경로를 짜서

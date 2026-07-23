@@ -5,6 +5,8 @@
 #include <ModelManager.h>
 #include <algorithm>
 #include <cmath>
+#include <functional>
+#include <unordered_set>
 #include <imgui.h>
 #include "Utill/DebugConsole.h"
 #include "Utill/Assert.h"
@@ -129,7 +131,7 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
     }
 
     if ((m_rearTrailRender.GetModel() || m_frontTrailRender.GetModel() || m_splineRender.GetModel() ||
-         m_parkPathRender.GetModel() || m_parkTargetLine.GetModel() || !m_corridorDebugRenders.empty()))
+         m_parkPathRender.GetModel() || m_parkTargetLine.GetModel() || !m_bboxDebugRenders.empty()))
     {
         if (auto *pBasic = dynamic_cast<BasicEffect *>(&effect))
         {
@@ -144,9 +146,9 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
                 m_parkPathRender.Draw(context, effect);
             if (m_parkTargetLine.GetModel())
                 m_parkTargetLine.Draw(context, effect);
-            for (RenderObject &corridorRender : m_corridorDebugRenders)
-                if (corridorRender.GetModel())
-                    corridorRender.Draw(context, effect);
+            for (RenderObject &bboxRender : m_bboxDebugRenders)
+                if (bboxRender.GetModel())
+                    bboxRender.Draw(context, effect);
             pBasic->SetRenderDefault();
         }
     }
@@ -463,31 +465,120 @@ CarFollowing::Params Car::BuildIdmParams(float v0) const
     return idmParams;
 }
 
-void Car::FindLaneNeighbors(const shared_ptr<Lane> &lane, float myPosition,
-                            LaneNeighbor &outLeader, LaneNeighbor &outFollower) const
+void Car::WalkConnectedLanes(const shared_ptr<Lane> &rootLane, float rootPosition,
+                             const std::function<void(Car *, float)> &visitor) const
+{
+    // 어떤 레인 위의 차들을 스캔해서 u(root 기준 통일 거리)와 함께 visitor에 넘긴다.
+    // backward=false: entryOffset은 lane 시작점의 u (u = entryOffset + p).
+    // backward=true : entryOffset은 lane 끝점의 u (u = entryOffset - length + p).
+    auto scanLaneCars = [&](const shared_ptr<Lane> &lane, float entryOffset, bool backward)
+    {
+        const Spline &spline = lane->GetSpline();
+        float length = lane->GetLength();
+        for (Car *other : lane->GetCars())
+        {
+            if (other == this)
+                continue;
+
+            Vec3 otherPos = other->GetPosition();
+            float t = spline.GetSplinePosition(otherPos);
+            if ((otherPos - spline.GetPositionAt(t)).Length() > LANE_ENTRY_THRESHOLD)
+                continue;
+
+            float p = t * length;
+            float u = backward ? (entryOffset - length + p) : (entryOffset + p);
+            visitor(other, u);
+        }
+    };
+
+    std::unordered_set<Lane *> visited;
+    visited.insert(rootLane.get());
+    scanLaneCars(rootLane, -rootPosition, /*backward=*/false); // rootLane 자신: u = p - rootPosition
+
+    // 정방향(successor)/역방향(predecessor) 예산 기반 그래프 탐색. 스택 기반이라 사이클/깊은 체인에도
+    // 안전(재귀 깊이 제한 없음).
+    struct WorkItem
+    {
+        shared_ptr<Lane> lane;
+        float entryOffset;
+        float remainingBudget;
+        bool backward;
+        Lane *excludeBranch; // backward 탐색 시 방금 거쳐온(되돌아가지 않을) 레인
+    };
+    std::vector<WorkItem> stack;
+
+    float rootRemaining = rootLane->GetLength() - rootPosition;
+    stack.push_back({rootLane, rootRemaining, MOBIL_SEARCH_FORWARD - rootRemaining, false, nullptr});
+    stack.push_back({rootLane, rootPosition, MOBIL_SEARCH_BACKWARD, true, nullptr});
+
+    while (!stack.empty())
+    {
+        WorkItem item = std::move(stack.back());
+        stack.pop_back();
+        if (item.remainingBudget <= 0.0f)
+            continue;
+
+        if (!item.backward)
+        {
+            for (const weak_ptr<Lane> &succWeak : item.lane->GetSuccessors())
+            {
+                shared_ptr<Lane> succ = succWeak.lock();
+                if (!succ || visited.count(succ.get()))
+                    continue;
+                visited.insert(succ.get());
+                scanLaneCars(succ, item.entryOffset, false);
+
+                // 3-(b): succ로 들어오는 다른 predecessor(방금 온 item.lane 제외) -- 이 분기점에서 남은
+                // forward 예산과 같은 값으로 역방향 탐색(합류 지점 차량을 내 진행경로 연장으로 취급).
+                stack.push_back({succ, item.entryOffset, item.remainingBudget, true, item.lane.get()});
+
+                float childRemaining = item.remainingBudget - succ->GetLength();
+                stack.push_back({succ, item.entryOffset + succ->GetLength(), childRemaining, false, nullptr});
+            }
+        }
+        else
+        {
+            for (const weak_ptr<Lane> &predWeak : item.lane->GetPredecessors())
+            {
+                shared_ptr<Lane> pred = predWeak.lock();
+                if (!pred || pred.get() == item.excludeBranch || visited.count(pred.get()))
+                    continue;
+                visited.insert(pred.get());
+                scanLaneCars(pred, item.entryOffset, true);
+
+                float childRemaining = item.remainingBudget - pred->GetLength();
+                stack.push_back({pred, item.entryOffset - pred->GetLength(), childRemaining, true, nullptr});
+            }
+        }
+    }
+}
+
+void Car::FindGraphNeighbors(const shared_ptr<Lane> &rootLane, float rootPosition,
+                             LaneNeighbor &outLeader, LaneNeighbor &outFollower) const
 {
     outLeader = LaneNeighbor{};
     outFollower = LaneNeighbor{};
 
-    const Spline &spline = lane->GetSpline();
-    float length = lane->GetLength();
-    for (Car *other : lane->GetCars())
-    {
-        if (other == this)
-            continue;
-
-        float otherPosition = spline.GetSplinePosition(other->GetPosition()) * length;
-        if (otherPosition >= myPosition)
+    WalkConnectedLanes(rootLane, rootPosition, [&](Car *car, float u)
+                       {
+        if (u >= 0.0f)
         {
-            if (outLeader.car == nullptr || otherPosition < outLeader.position)
-                outLeader = {other, otherPosition};
+            if (outLeader.car == nullptr || u < outLeader.position)
+                outLeader = {car, u};
         }
         else
         {
-            if (outFollower.car == nullptr || otherPosition > outFollower.position)
-                outFollower = {other, otherPosition};
-        }
-    }
+            if (outFollower.car == nullptr || u > outFollower.position)
+                outFollower = {car, u};
+        } });
+}
+
+std::vector<Car *> Car::CollectNearbyCars(const shared_ptr<Lane> &rootLane, float rootPosition) const
+{
+    std::vector<Car *> cars;
+    WalkConnectedLanes(rootLane, rootPosition, [&](Car *car, float /*u*/)
+                       { cars.push_back(car); });
+    return cars;
 }
 
 Mobil::VehicleState Car::ToVehicleState(const LaneNeighbor &n) const
@@ -521,29 +612,30 @@ void Car::DriveSpeedIDM(float steerSpeedCap)
         accel = std::min(accel, constrainedAccel);
     }
 
-    // 같은 레인의 실제 앞차: MOBIL이 이 차를 근거로 차선변경을 판단하는 것과 일관되게, 실제로도
-    // 이 차를 향해 감속해야 뚫고 지나가지 않는다.
+    // 연결된 차선까지 넓혀 찾은 실제 앞차(합류 지점 등 다른 레인 위의 차 포함): MOBIL이 이 차를 근거로
+    // 차선변경을 판단하는 것과 일관되게, 실제로도 이 차를 향해 감속해야 뚫고 지나가지 않는다.
     float egoLanePos = m_currentLane->GetSpline().GetSplinePosition(position) * m_currentLane->GetLength();
     LaneNeighbor leader, follower;
-    FindLaneNeighbors(m_currentLane, egoLanePos, leader, follower);
+    FindGraphNeighbors(m_currentLane, egoLanePos, leader, follower);
     if (leader.car != nullptr)
     {
-        float gap = leader.position - egoLanePos - leader.car->GetLength();
+        // leader.position은 이미 egoLanePos 기준 상대 거리(u)라 다시 뺄 필요 없음.
+        float gap = leader.position - leader.car->GetLength();
         float leaderAccel = CarFollowing::CalculateAcceleration(m_speed, m_acceleration, leader.car->GetSpeed(),
                                                                 leader.car->GetAcceleration(), gap, idmParams);
         accel = std::min(accel, leaderAccel);
     }
 
-    // TryAvoidObstacle이 경로 폭 안에서 찾아둔 최근접 장애물: 정지한 가상 선행차량으로 취급해 감속한다.
-    // s0는 일반 차량 추종용(IDM_STANDSTILL_DISTANCE)보다 작게 따로 둔다 -- 정적 장애물은 다른 차만큼
-    // 넉넉한 여유를 안 두고 더 붙어도 된다.
-    // if (m_obstacleAheadGap >= 0.0f)
-    // {
-    //     CarFollowing::Params obstacleParams = idmParams;
-    //     obstacleParams.s0 = AVOID_OBSTACLE_STANDSTILL_DISTANCE;
-    //     float obstacleAccel = CarFollowing::CalculateAcceleration(m_speed, m_acceleration, 0.0f, 0.0f, m_obstacleAheadGap, obstacleParams);
-    //     accel = std::min(accel, obstacleAccel);
-    // }
+    // ScanBBoxObstacleGap이 경로 폭 안에서 찾아둔 최근접 정적/동적 장애물: 정지한 가상 선행차량으로
+    // 취급해 감속한다. s0는 일반 차량 추종용(IDM_STANDSTILL_DISTANCE)보다 작게 따로 둔다 -- 정적
+    // 장애물은 다른 차만큼 넉넉한 여유를 안 두고 더 붙어도 된다.
+    if (m_obstacleAheadGap >= 0.0f)
+    {
+        CarFollowing::Params obstacleParams = idmParams;
+        obstacleParams.s0 = AVOID_OBSTACLE_STANDSTILL_DISTANCE;
+        float obstacleAccel = CarFollowing::CalculateAcceleration(m_speed, m_acceleration, 0.0f, 0.0f, m_obstacleAheadGap, obstacleParams);
+        accel = std::min(accel, obstacleAccel);
+    }
 
     m_acceleration = accel;
 }
@@ -808,15 +900,15 @@ void Car::RebuildRSDebugRender(const ReedsShepp::Path &path, const Vec3 &startPo
     m_parkTargetLine.SetModel(pTargetLineModel);
 }
 
-// TryAvoidObstacle이 SimulateCorridorTrajectory로 예측한 궤적을 그대로 훑어 전부 박스 윤곽선으로
+// TryAvoidObstacle이 SimulateBBTrajectory로 예측한 궤적을 그대로 훑어 전부 박스 윤곽선으로
 // 그린다(첫 충돌에서 멈추지 않음) — 충돌한 샘플은 빨강, 통과한 샘플은 초록.
-void Car::RebuildCorridorDebugRender(const std::vector<Vec3> &positions, const std::vector<Vec3> &directions,
-                                     const std::vector<HybridAStar::Obstacle> &obstacles,
-                                     const HybridAStar::VehicleShape &shape)
+void Car::RebuildBBDebugRender(const std::vector<Vec3> &positions, const std::vector<Vec3> &directions,
+                               const std::vector<HybridAStar::Obstacle> &obstacles,
+                               const HybridAStar::VehicleShape &shape)
 {
     constexpr float DEBUG_LINE_HEIGHT = 0.15f;
 
-    m_corridorDebugRenders.clear();
+    m_bboxDebugRenders.clear();
     for (size_t sampleIndex = 0; sampleIndex < positions.size(); ++sampleIndex)
     {
         const Vec3 &samplePos = positions[sampleIndex];
@@ -840,12 +932,12 @@ void Car::RebuildCorridorDebugRender(const std::vector<Vec3> &positions, const s
             corner(1.0f, 1.0f), corner(1.0f, -1.0f), corner(-1.0f, -1.0f), corner(-1.0f, 1.0f), corner(1.0f, 1.0f)};
 
         Model *pModel = ModelManager::Get().CreateFromGeometry(
-            "__corridor_box__:" + GetName() + ":" + std::to_string(sampleIndex), Geometry::CreatePolyline(corners));
+            "__bbox_bbox__:" + GetName() + ":" + std::to_string(sampleIndex), Geometry::CreatePolyline(corners));
         DirectX::XMFLOAT4 color = colliding ? DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f) : DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f);
         pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", color);
         pModel->materials[0].Set<float>("$Opacity", 1.0f);
 
-        RenderObject &render = m_corridorDebugRenders.emplace_back();
+        RenderObject &render = m_bboxDebugRenders.emplace_back();
         render.SetModel(pModel);
     }
 }
@@ -854,7 +946,7 @@ void Car::SetDestination(const shared_ptr<RoadNode> &destNode)
 {
     m_destLane = m_RoadDataManager->GetClosestLaneEnd(destNode->position);
     DebugConsole::Log(GetName() + ": SetDestination -> node " + std::to_string(destNode->id) +
-                       " (lane " + std::to_string(m_destLane ? m_destLane->GetId() : -1) + ")");
+                      " (lane " + std::to_string(m_destLane ? m_destLane->GetId() : -1) + ")");
     if (destNode->nodeType == RoadNodeType::Park)
     {
         m_pendingParkNode = destNode;
@@ -865,7 +957,7 @@ void Car::DebugInit()
 {
     // Per-object model names: CreateFromGeometry() overwrites any existing
     // model stored under the same name, so a shared name would make every
-    // car's debug box end up showing whichever car initialized last.
+    // car's debug bbox end up showing whichever car initialized last.
     float w = m_halfExtents.GetX() * 2.0f;
     float h = m_halfExtents.GetY() * 2.0f;
     float d = m_halfExtents.GetZ() * 2.0f;

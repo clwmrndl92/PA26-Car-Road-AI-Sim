@@ -4,6 +4,7 @@
 #include "VehicleController.h"
 #include <cmath>
 #include <deque>
+#include <functional>
 #include <string>
 #include <vector>
 #include <Nav/RoadDataManager.h>
@@ -71,9 +72,9 @@ private:
     void RebuildSplineRender();
     void RebuildRSDebugRender(const ReedsShepp::Path &path, const Vec3 &startPos, float startAngleRad,
                               float turningRadius, const Vec3 &targetPos, float targetAngleRad);
-    void RebuildCorridorDebugRender(const std::vector<Vec3> &positions, const std::vector<Vec3> &directions,
-                                    const std::vector<HybridAStar::Obstacle> &obstacles,
-                                    const HybridAStar::VehicleShape &shape);
+    void RebuildBBDebugRender(const std::vector<Vec3> &positions, const std::vector<Vec3> &directions,
+                              const std::vector<HybridAStar::Obstacle> &obstacles,
+                              const HybridAStar::VehicleShape &shape);
 
     bool IsOffCourse();
 
@@ -153,11 +154,16 @@ private:
     bool CheckPath();
     bool TryLaneChange(bool ignoreCooldown = false);
     bool TryAvoidObstacle();
+    // SimulateBBoxTrajectory 전방 sweep으로 정적+동적(주변 차량) 장애물을 검사해 최근접 충돌까지의 거리를
+    // 반환한다(없으면 -1). TryAvoidObstacle과 달리 회피 기동(BeginAvoidPlan)은 전혀 건드리지 않고 gap
+    // 계산만 한다 -- DriveSpeedIDM이 이 값을 정지한 가상 리더로 취급. RebuildBBDebugRender로 디버그
+    // 렌더링도 갱신하므로(TryAvoidObstacle과 동일) const가 아니다.
+    float ScanBBoxObstacleGap();
     void GetLookaheadPose(const Spline *startSpline, const shared_ptr<Lane> &startLane, size_t startPathIndex,
                           const Vec3 &fromPosition, float distance, Vec3 &outPosition, Vec3 &outDirection) const;
     float ComputeLookaheadDistance() const;
-    void SimulateCorridorTrajectory(float lateralOffset, std::vector<Vec3> &outPositions,
-                                    std::vector<Vec3> &outDirections) const;
+    void SimulateBBoxTrajectory(float lateralOffset, std::vector<Vec3> &outPositions,
+                                std::vector<Vec3> &outDirections) const;
 
     void BeginParkPlan();
     void BeginParkSpotLeg();
@@ -191,19 +197,30 @@ private:
     // lane의 신호 때문에 지금 서야 하는지 (CheckPath의 레인 전환 가드와 공유하는 판단).
     bool ShouldStopForSignal(const shared_ptr<Lane> &lane) const;
 
-    // 어떤 레인 위에서 찾은 다른 차 하나 + 그 레인 기준 위치(arclength).
+    // 어떤 레인 위에서 찾은 다른 차 하나 + root 레인 기준 통일 거리(root 위치로부터의 부호 있는 거리, m).
     struct LaneNeighbor
     {
         Car *car = nullptr;
         float position = 0.0f;
     };
-    void FindLaneNeighbors(const shared_ptr<Lane> &lane, float myPosition,
-                           LaneNeighbor &outLeader, LaneNeighbor &outFollower) const;
+    // rootLane과 successor/predecessor로 연결된 차선(최대 MOBIL_SEARCH_FORWARD/BACKWARD 거리, 합류 지점의
+    // 곁가지 predecessor 포함)을 훑으며, 그 위의 모든 차에 대해 visitor(car, u)를 호출한다. u는 root
+    // 기준 통일 거리(부호 있음, +면 앞) -- rootLane 자신 위의 차는 u = 그 차의 레인 arclength - rootPosition.
+    void WalkConnectedLanes(const shared_ptr<Lane> &rootLane, float rootPosition,
+                            const std::function<void(Car *, float)> &visitor) const;
+    // rootLane 하나만 보는 게 아니라, WalkConnectedLanes로 연결된 차선까지 넓혀서 실제 앞차/뒷차를 찾는다.
+    // outLeader/outFollower.position은 rootPosition 기준 상대 거리(u)로 채워진다(레인 로컬 arclength 아님).
+    // 합류 지점에서 다른 레인 위의 차가 root 레인의 진행경로를 막는 경우까지 잡기 위함.
+    void FindGraphNeighbors(const shared_ptr<Lane> &rootLane, float rootPosition,
+                            LaneNeighbor &outLeader, LaneNeighbor &outFollower) const;
     Mobil::VehicleState ToVehicleState(const LaneNeighbor &n) const;
+    // WalkConnectedLanes가 훑는 것과 같은 연결된 차선 집합에서 차량 목록만 모아 반환한다
+    // (ScanBBoxObstacleGap이 바운딩박스 동적 장애물 후보 풀로 재사용).
+    std::vector<Car *> CollectNearbyCars(const shared_ptr<Lane> &rootLane, float rootPosition) const;
 
 public:
     // 차선 진입 허용 오차/임계값 (예: 현재 타깃 차선에 안착했는지 확인하는 기준)
-    static constexpr float LANE_ENTRY_THRESHOLD = 5.0f;
+    static constexpr float LANE_ENTRY_THRESHOLD = 3.0f;
     // 다음 차선으로 완전히 넘어가는(전환되는) 임계값
     static constexpr float LANE_TRANSITION_THRESHOLD = 2.0f;
 
@@ -271,6 +288,10 @@ private:
     static constexpr float MOBIL_EVAL_INTERVAL = 2.0f; // MOBIL 재평가 주기
     float m_lastLaneChangeTime = 0.0f;
 
+    // FindGraphNeighbors가 successor/predecessor를 타고 넘어가는 탐색 예산(레인 그래프 누적 거리, m).
+    static constexpr float MOBIL_SEARCH_FORWARD = 100.0f; // 정방향(successor) 탐색 예산
+    static constexpr float MOBIL_SEARCH_BACKWARD = 30.0f; // root 레인 자신의 역방향(predecessor) 예산
+
     // 차량 주행 상태 변수 (Vehicle States)
     float m_speed = 0.0f;
     float m_acceleration = 0.0f;
@@ -305,10 +326,10 @@ private:
     RenderObject m_steerLine;
     RenderObject m_targetMarker;
     RenderObject m_splineRender;
-    RenderObject m_parkPathRender;                    // Park 계획(RS 경로) 폴리라인
-    RenderObject m_parkTargetMarker;                  // Park 목표 위치
-    RenderObject m_parkTargetLine;                    // Park 목표 방향
-    std::vector<RenderObject> m_corridorDebugRenders; // TryAvoidObstacle 코리도어 샘플 박스(충돌=빨강/통과=초록)
+    RenderObject m_parkPathRender;                // Park 계획(RS 경로) 폴리라인
+    RenderObject m_parkTargetMarker;              // Park 목표 위치
+    RenderObject m_parkTargetLine;                // Park 목표 방향
+    std::vector<RenderObject> m_bboxDebugRenders; // TryAvoidObstacle 코리도어 샘플 박스(충돌=빨강/통과=초록)
 };
 
 static float CalcMaxSteerAngle(float speed)

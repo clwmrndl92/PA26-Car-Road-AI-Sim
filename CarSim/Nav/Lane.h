@@ -27,15 +27,20 @@ public:
 
     // 레인 그래프 위상: 소유는 RoadDataManager가 하므로 여기선 weak_ptr로만 참조해 순환참조 누수를 막는다.
     const vector<weak_ptr<Lane>> &GetSuccessors() const { return m_successors; }
+    // 이 레인으로 들어오는 이전 레인들(합류 지점 등에서 여러 개일 수 있음). AddSuccessor와 대칭으로
+    // RoadDataManager::BuildSuccessors가 채운다.
+    const vector<weak_ptr<Lane>> &GetPredecessors() const { return m_predecessors; }
     weak_ptr<Lane> GetLeft() const { return m_left; }
     weak_ptr<Lane> GetRight() const { return m_right; }
 
     void AddSuccessor(const shared_ptr<Lane> &lane) { m_successors.push_back(lane); }
+    void AddPredecessor(const shared_ptr<Lane> &lane) { m_predecessors.push_back(lane); }
     void SetLeft(const shared_ptr<Lane> &lane) { m_left = lane; }
     void SetRight(const shared_ptr<Lane> &lane) { m_right = lane; }
     void ClearConnections()
     {
         m_successors.clear();
+        m_predecessors.clear();
         m_left.reset();
         m_right.reset();
     }
@@ -61,7 +66,8 @@ private:
     shared_ptr<Road> m_road;
 
     float length = 0.0f;
-    vector<weak_ptr<Lane>> m_successors; // 진행 방향으로 이어지는 다음 레인들
+    vector<weak_ptr<Lane>> m_successors;   // 진행 방향으로 이어지는 다음 레인들
+    vector<weak_ptr<Lane>> m_predecessors; // 이 레인으로 이어지는 이전 레인들 (m_successors와 대칭)
     weak_ptr<Lane> m_left;               // 같은 진행방향 좌측 인접 레인 (차선변경)
     weak_ptr<Lane> m_right;              // 같은 진행방향 우측 인접 레인 (차선변경)
     vector<Car *> m_cars;                // 지금 이 레인 위에 있는 차들 (RegisterCar/UnregisterCar가 관리)

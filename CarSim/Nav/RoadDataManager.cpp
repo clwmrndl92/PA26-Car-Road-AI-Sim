@@ -222,6 +222,7 @@ void RoadDataManager::BuildSuccessors(const vector<shared_ptr<Lane>> &lanes)
                 continue;
 
             from->AddSuccessor(to);
+            to->AddPredecessor(from);
         }
     }
 }
