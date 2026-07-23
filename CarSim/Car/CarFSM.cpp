@@ -59,7 +59,7 @@ void Car::UpdateMode()
     Mode next = DecideNextMode(&reason);
     if (next != m_mode)
     {
-        DebugConsole::Log(std::string(StateToString(m_mode)) + " -> " + StateToString(next) + " (" + reason + ")");
+        DebugConsole::Log(GetName() + ": " + StateToString(m_mode) + " -> " + StateToString(next) + " (" + reason + ")");
         OnModeExit(next);
         Mode prev = m_mode;
         m_mode = next;
@@ -125,8 +125,11 @@ Car::Mode Car::DecideNextMode(const char **reason) const
         bool arrived = false;
         if (m_destLane != nullptr)
         {
-            Vec3 arrivePoint = m_pendingParkNode != nullptr ? m_pendingParkNode->position : m_destLane->GetEndPoint();
-            arrived = (arrivePoint - GetPosition()).Length() < ARRIVE_DISTANCE;
+            arrived = (m_destLane->GetEndPoint() - GetPosition()).Length() < ARRIVE_DISTANCE;
+            if (m_pendingParkNode != nullptr)
+            {
+                arrived |= (m_pendingParkNode->position - GetPosition()).Length() < ARRIVE_DISTANCE;
+            }
         }
 
         if (arrived && GetParkTargetNode() != nullptr)
@@ -160,7 +163,7 @@ void Car::OnModeEnter(Mode prev)
         SetSubMode(prev == Mode::Stop ? SubMode::P_EXIT : SubMode::P_ENTER_LEG1);
         m_parkPlanPending = true;    // 도착 즉시 RS를 계산하지 않고, 완전히 멈출 때까지 기다린다 (UpdatePark에서 처리).
         m_parkSequenceActive = true; // 주차 시퀀스 시작 — 완료(UpdatePark)까지 Park 유지.
-        DebugConsole::Log("Park plan pending: waiting for full stop before planning");
+        DebugConsole::Log(GetName() + ": Park plan pending: waiting for full stop before planning");
     }
     else if (m_mode == Mode::Stop)
     {
@@ -185,7 +188,7 @@ void Car::SetSubMode(SubMode next)
 {
     if (next == m_subMode)
         return;
-    DebugConsole::Log(std::string(SubStateToString(m_subMode)) + " -> " + SubStateToString(next));
+    DebugConsole::Log(GetName() + ": " + SubStateToString(m_subMode) + " -> " + SubStateToString(next));
     m_subMode = next;
 }
 
@@ -231,7 +234,7 @@ void Car::UpdatePark()
             return;
         }
         m_parkPlanPending = false;
-        DebugConsole::Log("Park plan pending resolved: fully stopped, beginning RS plan");
+        DebugConsole::Log(GetName() + ": Park plan pending resolved: fully stopped, beginning RS plan");
         BeginParkPlan();
     }
 
@@ -368,7 +371,7 @@ void Car::BeginParkPlan()
             if (hasAnyParkSpot)
             {
                 // ParkSpot은 있지만 전부 예약 중
-                DebugConsole::Log("Park spot reservation failed for node " + std::to_string(parkNodeId) +
+                DebugConsole::Log(GetName() + ": Park spot reservation failed for node " + std::to_string(parkNodeId) +
                                   ": all ParkSpot children reserved, abandoning destination");
                 m_parkSequenceActive = false; // 시퀀스 취소 — Park에 갇히지 않도록.
                 m_destLane = nullptr;
@@ -403,7 +406,7 @@ void Car::BeginParkPlan()
                                            : m_RoadDataManager->GetClosestLane(frontPos);
         if (closestLane == nullptr)
         {
-            DebugConsole::Log("BeginParkPlan: no lane found to exit onto, abandoning this park attempt");
+            DebugConsole::Log(GetName() + ": BeginParkPlan: no lane found to exit onto, abandoning this park attempt");
             m_destLane = nullptr;
             SetSubMode(SubMode::None);
             return;
@@ -435,7 +438,7 @@ void Car::BeginParkPlan()
         if (!foundPath)
         {
             // 출차 실패는 이미 차가 그 자리를 점유 중이므로 예약을 풀지 않는다.
-            DebugConsole::Log("BeginParkPlan: HybridA* failed to find an exit path, abandoning this park attempt");
+            DebugConsole::Log(GetName() + ": BeginParkPlan: HybridA* failed to find an exit path, abandoning this park attempt");
             m_destLane = nullptr;
             SetSubMode(SubMode::None);
             return;
@@ -449,7 +452,7 @@ void Car::BeginParkPlan()
     {
         if (!BeginParkEnterOrRetry())
         {
-            DebugConsole::Log("BeginParkPlan: no reachable ParkSpot for node " + std::to_string(parkNodeId) +
+            DebugConsole::Log(GetName() + ": BeginParkPlan: no reachable ParkSpot for node " + std::to_string(parkNodeId) +
                               ", abandoning destination");
             m_destLane = nullptr;
             m_parkSequenceActive = false;
@@ -567,7 +570,7 @@ void Car::BeginParkSpotLeg()
     if (PlanParkLegTo(spotTarget, spotAngleRad))
         return; // leg 2 성공
 
-    DebugConsole::Log("BeginParkSpotLeg: can't tuck into ParkSpot " + std::to_string(m_parkSpot->id) +
+    DebugConsole::Log(GetName() + ": BeginParkSpotLeg: can't tuck into ParkSpot " + std::to_string(m_parkSpot->id) +
                       " from P, trying next spot");
     // 이 자리 실패 -> 다음 빈 자리부터 leg 1부터 다시. PlanEnterForCurrentSpot이 새 자리에 맞는
     // subMode(leg1 또는 주차레인 없으면 leg2)를 알아서 세팅한다.
@@ -575,7 +578,7 @@ void Car::BeginParkSpotLeg()
         return;
 
     // 남은 자리 없음 -> 입차 종료(빈 플랜 -> 다음 프레임 UpdatePark 완료 처리, 현재 자리에 멈춤).
-    DebugConsole::Log("BeginParkSpotLeg: no reachable ParkSpot left, stopping");
+    DebugConsole::Log(GetName() + ": BeginParkSpotLeg: no reachable ParkSpot left, stopping");
     m_destLane = nullptr;
     m_vehicleController.BeginPlan({});
 }
@@ -728,8 +731,8 @@ bool Car::TryLaneChange(bool ignoreCooldown)
         m_currentSpline = candidate->GetSpline();
         RescanRoadSpeedConstraints();
         m_lastLaneChangeTime = m_currentTime;
-        DebugConsole::Log(std::string(mandatory ? "Mandatory" : "MOBIL") + " lane change: " + GetName() +
-                          " -> lane " + std::to_string(candidate->GetId()));
+        DebugConsole::Log(GetName() + ": " + (mandatory ? "Mandatory" : "MOBIL") + " lane change -> lane " +
+                          std::to_string(candidate->GetId()));
         return true;
     };
 
@@ -1078,7 +1081,7 @@ void Car::BeginAvoidPlan()
         HybridAStar::FindPath(rigidPosition, startAngleRad, goalPos, goalAngleRad, obstacles, shape, foundPath);
     if (!foundPath)
     {
-        DebugConsole::Log("BeginAvoidPlan: HybridA* failed to find an avoid path, staying in Stop substate");
+        DebugConsole::Log(GetName() + ": BeginAvoidPlan: HybridA* failed to find an avoid path, staying in Stop substate");
         SetSubMode(SubMode::D_Stop);
         return;
     }

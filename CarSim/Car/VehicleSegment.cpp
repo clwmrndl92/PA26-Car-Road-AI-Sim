@@ -48,14 +48,15 @@ void RSFollowSegment::Tick(Car &car)
     // 더 있을 수 있지만(ReedsShepp::SampleLegs), 완료/제동 판정은 그 연장분을 무시하고 실제
     // 목표 지점 기준으로 한다.
     float remaining = 0.0f;
-    if (closest < m_endIndex)
+    if (closest <= m_endIndex)
     {
         for (size_t i = closest; i < m_endIndex; ++i)
             remaining += (m_points[i + 1] - m_points[i]).Length();
     }
     else
     {
-        remaining = (m_points[m_endIndex] - rigidPosition).Length();
+        for (size_t i = m_endIndex; i < closest; ++i)
+            remaining -= (m_points[i + 1] - m_points[i]).Length();
     }
 
     if (remaining < FINISH_DISTANCE)

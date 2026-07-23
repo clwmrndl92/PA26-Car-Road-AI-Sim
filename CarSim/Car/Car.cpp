@@ -853,6 +853,8 @@ void Car::RebuildCorridorDebugRender(const std::vector<Vec3> &positions, const s
 void Car::SetDestination(const shared_ptr<RoadNode> &destNode)
 {
     m_destLane = m_RoadDataManager->GetClosestLaneEnd(destNode->position);
+    DebugConsole::Log(GetName() + ": SetDestination -> node " + std::to_string(destNode->id) +
+                       " (lane " + std::to_string(m_destLane ? m_destLane->GetId() : -1) + ")");
     if (destNode->nodeType == RoadNodeType::Park)
     {
         m_pendingParkNode = destNode;
