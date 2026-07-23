@@ -150,9 +150,24 @@ private:
     void UpdateDrive();
     bool CheckPath();
     bool TryLaneChange(bool ignoreCooldown = false);
+
+    // 다른 차와 진행경로가 겹쳤을 때 누가 양보할지 정하는 우선순위: 직진 > 차선변경 > 회전(급커브).
+    // 값이 작을수록 우선순위가 높다(= 낮은 값이 이긴다). ScanBBoxObstacleGap이 상대 차의 우선순위가
+    // 자신보다 낮으면(값이 크면) 그 차를 장애물 취급에서 제외해 진행시킨다.
+    enum class ManeuverPriority
+    {
+        Straight = 0,   // 직진 -- 최우선
+        LaneChange = 1, // 차선변경 직후 일정 시간 -- 차선변경 중으로 간주
+        Turning = 2,    // 급커브(교차로 회전 등) 진행 중 -- 최하위
+    };
+    // 지금 이 차가 어떤 상태로 취급되는지: 최근 차선변경 직후면 LaneChange, 진행경로 앞쪽 곡률이
+    // TURN_RADIUS_THRESHOLD보다 작으면 Turning, 그 외에는 Straight.
+    ManeuverPriority GetManeuverPriority() const;
+
     // SimulateBBoxTrajectory 전방 sweep으로 정적+동적(주변 차량) 장애물을 검사해 최근접 충돌까지의 거리를
     // 반환한다(없으면 -1). DriveSpeedIDM이 이 값을 정지한 가상 리더로 취급. RebuildBBDebugRender로 디버그
-    // 렌더링도 갱신하므로 const가 아니다.
+    // 렌더링도 갱신하므로 const가 아니다. 우선순위가 자신보다 낮은 상대 차는 애초에 장애물 목록에서
+    // 제외한다(양보 관계가 한쪽으로만 성립하게 해 맞물림 데드락을 줄임).
     float ScanBBoxObstacleGap();
     void GetLookaheadPose(const Spline *startSpline, const shared_ptr<Lane> &startLane, size_t startPathIndex,
                           const Vec3 &fromPosition, float distance, Vec3 &outPosition, Vec3 &outDirection) const;
@@ -265,6 +280,21 @@ private:
     static constexpr float PARK_OBSTACLE_FAN_HALF_ANGLE = ToRadians(35.0f); // IsParkObstacleAhead 부채꼴의 좌우 반각(중앙 기준)
     static constexpr int PARK_OBSTACLE_FAN_RAY_COUNT = 5;             // IsParkObstacleAhead 부채꼴 레이 개수(홀수면 정중앙 레이 포함)
     static constexpr float AVOID_OBSTACLE_STANDSTILL_DISTANCE = 0.5f; // 장애물 가상 리더용 s0 -- 일반 차량 추종(IDM_STANDSTILL_DISTANCE=2m)보다 더 붙어도 되게 별도로 둔다.
+
+    // GetManeuverPriority 판정용
+    static constexpr float LANE_CHANGE_PRIORITY_WINDOW = 3.0f; // 차선변경 직후 이 시간(초) 동안은 LaneChange로 간주
+    static constexpr float TURN_RADIUS_THRESHOLD = 25.0f;      // 진행경로 곡률 반경(m)이 이보다 작으면 Turning으로 간주
+    static constexpr float TURN_LOOKAHEAD_WINDOW = 0.15f;      // GetMinRadiusAhead 조회용 t-window(현재 위치 기준 전후)
+
+    // bbox 장애물로 인한 데드락 강제 탈출용: 정지 상태(m_speed < STALL_SPEED_THRESHOLD)로
+    // OBSTACLE_STALL_TIMEOUT초 이상 묶여 있으면, FORCED_ESCAPE_DURATION초 동안 bbox 장애물 감지를
+    // 무시하고 진행해 우선순위가 같아 서로 양보만 하는 맞물림 상태를 풀어준다.
+    static constexpr float STALL_SPEED_THRESHOLD = 0.3f;
+    static constexpr float OBSTACLE_STALL_TIMEOUT = 5.0f;
+    static constexpr float FORCED_ESCAPE_DURATION = 3.0f;
+    float m_obstacleStallTime = 0.0f;  // bbox 장애물에 막혀 정지 상태로 있은 누적 시간
+    float m_forcedEscapeTimer = 0.0f;  // > 0이면 강제 탈출 중(bbox 장애물 무시), 매 틱 감소
+
     vector<LaneStep> m_path;
     size_t m_pathIndex = 0;
     static constexpr float LOOK_PROFILE_TIME = 5.0f;

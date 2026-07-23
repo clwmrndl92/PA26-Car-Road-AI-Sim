@@ -6,6 +6,7 @@
 #include "Nav/Mobil.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <utility>
@@ -688,8 +689,54 @@ void Car::UpdateDrive()
     if (!CheckPath())
         return;
     TryLaneChange();
-    m_obstacleAheadGap = ScanBBoxObstacleGap();
+
+    float obstacleGap = ScanBBoxObstacleGap();
+
+    // 데드락 강제 탈출: 우선순위가 같아(혹은 판정이 애매해) 서로 계속 양보만 하는 상황이 실제로
+    // 생길 수 있으므로, 정지 상태로 너무 오래 묶여 있으면 한동안 bbox 장애물을 무시하고 밀고 나간다.
+    if (m_forcedEscapeTimer > 0.0f)
+    {
+        m_forcedEscapeTimer -= m_deltaTime;
+        obstacleGap = -1.0f;
+    }
+    else if (obstacleGap >= 0.0f && m_speed < STALL_SPEED_THRESHOLD)
+    {
+        m_obstacleStallTime += m_deltaTime;
+        if (m_obstacleStallTime >= OBSTACLE_STALL_TIMEOUT)
+        {
+            DebugConsole::Log(GetName() + ": stalled on bbox obstacle for " + std::to_string(m_obstacleStallTime) +
+                              "s, forcing escape");
+            m_forcedEscapeTimer = FORCED_ESCAPE_DURATION;
+            m_obstacleStallTime = 0.0f;
+            obstacleGap = -1.0f;
+        }
+    }
+    else
+    {
+        m_obstacleStallTime = 0.0f;
+    }
+
+    m_obstacleAheadGap = obstacleGap;
     m_wantSegmentTick = true;
+}
+
+// 지금 이 차가 직진/차선변경/회전 중 어디에 해당하는지: 최근 차선변경 직후면 LaneChange, 진행경로
+// 앞쪽 곡률이 충분히 작으면(급커브) Turning, 그 외에는 Straight.
+Car::ManeuverPriority Car::GetManeuverPriority() const
+{
+    if (m_currentTime - m_lastLaneChangeTime < LANE_CHANGE_PRIORITY_WINDOW)
+        return ManeuverPriority::LaneChange;
+
+    if (m_currentLane != nullptr)
+    {
+        float t = m_currentSpline.GetSplinePosition(GetPosition());
+        float radius = m_currentSpline.GetMinRadiusAhead(std::max(0.0f, t - TURN_LOOKAHEAD_WINDOW),
+                                                          std::min(1.0f, t + TURN_LOOKAHEAD_WINDOW));
+        if (radius < TURN_RADIUS_THRESHOLD)
+            return ManeuverPriority::Turning;
+    }
+
+    return ManeuverPriority::Straight;
 }
 
 bool Car::TryLaneChange(bool ignoreCooldown)
@@ -1017,9 +1064,24 @@ float Car::ScanBBoxObstacleGap()
 
     Vec3 position = GetPosition();
     float egoLanePos = m_currentLane->GetSpline().GetSplinePosition(position) * m_currentLane->GetLength();
+    ManeuverPriority egoPriority = GetManeuverPriority();
 
     for (Car *other : CollectNearbyCars(m_currentLane, egoLanePos))
     {
+        // 상대가 나보다 우선순위가 낮으면(값이 크면) 상대가 나에게 양보해야 하는 관계이므로, 여기서는
+        // 아예 장애물 취급하지 않고 지나간다 -- 그래야 양쪽 다 서로에게 양보하며 멈추는 맞물림이
+        // 안 생긴다(직진 > 차선변경 > 회전). 우선순위가 같으면(예: 직진 대 직진) Car에 별도 id 필드가
+        // 없으므로 인스턴스 주소를 대신 차량 식별자로 써서 비교한다 -- 주소가 더 작은 쪽이 이기게
+        // 고정해두면 두 차가 서로를 보는 두 번의 판정에서 정확히 한쪽만 양보하게 되어(항상 같은
+        // 순서쌍이 같은 결과), 동점으로 인해 둘 다 정지해버리는 경우 자체가 줄어든다. 그래도 남는
+        // 애매한 경우(예: 셋 이상이 얽힌 순환 대기)는 아래 강제 탈출 타이머가 마지막 안전장치로 푼다.
+        int otherRank = static_cast<int>(other->GetManeuverPriority());
+        int egoRank = static_cast<int>(egoPriority);
+        bool otherYieldsToEgo = otherRank > egoRank ||
+                                (otherRank == egoRank && reinterpret_cast<uintptr_t>(this) < reinterpret_cast<uintptr_t>(other));
+        if (otherYieldsToEgo)
+            continue;
+
         // BuildVehicleShape의 pivotToCenter 컨벤션과 동일하게, "pivot"(rigidbody 위치)에서 전방으로
         // pivotToCenter만큼 떨어진 지점을 실제 충돌판정 박스 중심으로 쓴다.
         VehicleCollision::VehicleShape otherShape = other->BuildVehicleShape();
