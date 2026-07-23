@@ -910,6 +910,7 @@ void Car::GetLookaheadPose(const Spline *startSpline, const shared_ptr<Lane> &st
     }
 }
 
+
 void Car::SimulateBBoxTrajectory(float lateralOffset, std::vector<Vec3> &outPositions,
                                  std::vector<Vec3> &outDirections) const
 {
@@ -924,9 +925,21 @@ void Car::SimulateBBoxTrajectory(float lateralOffset, std::vector<Vec3> &outPosi
     shared_ptr<Lane> posLane = m_currentLane;
     size_t posPathIndex = m_pathIndex;
 
+    // posSpline 위에서 pos부터 레인 끝까지 남은 거리. 루프/근접 레인에서 GetSplinePosition(전역
+    // 최근접점 탐색)이 엉뚱한 지점을 골라 커서가 어긋나던(=궤적 발산) 문제를 피하기 위해, 매
+    // 서브스텝 다시 추측하지 않고 여기서 step만큼 직접 깎아나간다. 최초 1회만 실제 위치 기준으로
+    // 앵커링한다(이 시점의 rigidPos는 시뮬레이션으로 흘러가기 전이라 신뢰 가능).
+    float posSplineRemaining = posSpline->GetLength() > 0.0f
+        ? (1.0f - posSpline->GetSplinePosition(rigidPos)) * posSpline->GetLength()
+        : 0.0f;
+
     constexpr float TRAJECTORY_SUBSTEP = 0.25f; // 오버슈트 방지용 적분 스텝
 
-    for (float traveled = 0.0f; traveled <= AVOID_DETECT_DISTANCE; traveled += AVOID_SAMPLE_STEP)
+    bool reachedPathEnd = false; // 경로 끝(다음 레인 없음)까지 소진되면 스윕을 여기서 접는다 -- 더 갈 곳이
+                                  // 없는데도 계속 적분하면 GetLookaheadPose가 고정된 레인 끝점을 계속
+                                  // 목표로 돌려주고, 자전거 모델이 그 고정점 주위를 빙글빙글 돌며 궤적이
+                                  // 발산한다(목적지 근처에서 바운딩박스 궤적이 원형으로 말리는 원인).
+    for (float traveled = 0.0f; traveled <= AVOID_DETECT_DISTANCE && !reachedPathEnd; traveled += AVOID_SAMPLE_STEP)
     {
         outPositions.push_back(rigidPos);
         outDirections.push_back(dir);
@@ -936,18 +949,22 @@ void Car::SimulateBBoxTrajectory(float lateralOffset, std::vector<Vec3> &outPosi
         {
             float step = std::min(TRAJECTORY_SUBSTEP, remaining);
 
-            // pos가 posSpline 끝에 사실상 도달했으면(가장 가까운 점이 마지막 샘플) 경로상 다음 레인으로
-            // 커서를 옮긴다 -- ScanRoadSpeedConstraints/GetLookaheadPose와 같은 판정 방식.
-            while (posSpline->GetLength() > 0.0f &&
-                   (1.0f - posSpline->GetSplinePosition(rigidPos)) * posSpline->GetLength() < TRAJECTORY_SUBSTEP * 0.5f)
+            // pos가 posSpline 끝에 사실상 도달했으면 경로상 다음 레인으로 커서를 옮긴다.
+            while (posSpline->GetLength() > 0.0f && posSplineRemaining < TRAJECTORY_SUBSTEP * 0.5f)
             {
                 shared_ptr<Lane> nextLane = (posPathIndex + 1 < m_path.size()) ? m_path[posPathIndex + 1].lane : nullptr;
                 if (!nextLane)
-                    break; // 경로 끝 -- 이 레인 기준으로 계속(기존 클램프 동작과 동일)
+                {
+                    reachedPathEnd = true;
+                    break;
+                }
                 posLane = nextLane;
                 posSpline = &nextLane->GetSpline();
+                posSplineRemaining = posSpline->GetLength(); // 새 레인 시작점이므로 남은 거리 = 전체 길이
                 ++posPathIndex;
             }
+            if (reachedPathEnd)
+                break;
 
             // DriveControl과 동일한 조준점(+lateralOffset) -- pos가 속한 레인(posSpline 등)부터 걸어서
             // 찾는다. "지금 시뮬레이션 중인" pos 기준으로 매 서브스텝 다시 구하는 건 실제 주행도 매
@@ -978,11 +995,13 @@ void Car::SimulateBBoxTrajectory(float lateralOffset, std::vector<Vec3> &outPosi
             float nextAngle = currentAngle - step * tanf(steerAngle) / m_wheelbase;
             rigidPos = rigidPos + dir * step;
             dir = Vec3(cosf(nextAngle), 0.0f, sinf(nextAngle));
+            posSplineRemaining -= step;
 
             remaining -= step;
         }
     }
 }
+
 
 // SimulateBBoxTrajectory 전방 sweep으로 정적+동적(주변 차량) 장애물까지의 최근접 거리만 반환한다
 // (없으면 -1). DriveSpeedIDM이 이 값을 정지한 가상 리더의 gap으로 사용.
