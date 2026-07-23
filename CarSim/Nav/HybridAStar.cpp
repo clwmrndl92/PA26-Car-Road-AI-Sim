@@ -204,11 +204,6 @@ namespace HybridAStar
         foundPath = false;
 
         auto startTime = std::chrono::steady_clock::now();
-        auto LogElapsed = [startTime](const char *label)
-        {
-            double elapsedMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - startTime).count();
-            DebugConsole::Log("HybridAStar::FindPath " + std::string(label) + " in " + std::to_string(elapsedMs) + " ms");
-        };
 
         float turningRadius = shape.wheelbase / std::tan(shape.maxSteerAngleRad);
         if (turningRadius <= 0.0f)
@@ -243,6 +238,12 @@ namespace HybridAStar
         constexpr ReedsShepp::Gear GEARS[2] = {ReedsShepp::Gear::Forward, ReedsShepp::Gear::Backward};
 
         int expansions = 0;
+        auto LogElapsed = [startTime, expansions](const char *label)
+        {
+            double elapsedMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - startTime).count();
+            DebugConsole::Log("HybridAStar::FindPath " + std::string(label) + " in " + std::to_string(elapsedMs) + " ms Expansion(" +
+                              std::to_string(expansions) + ")");
+        };
         while (!openSet.empty())
         {
             if (++expansions > params.maxExpansions)
@@ -251,6 +252,8 @@ namespace HybridAStar
                                   std::to_string(params.maxExpansions) + ")");
                 LogElapsed("failed (maxExpansions)");
                 // PERF_LOG_MEMORY("Hybrid A* FindPath maxExpansions " + std::to_string(params.maxExpansions));
+                if (params.onSearchFailed)
+                    params.onSearchFailed(expansions);
                 return {}; // Failure: 탐색 한도 초과
             }
 
@@ -269,7 +272,7 @@ namespace HybridAStar
                 foundPath = true;
                 LogElapsed("succeeded");
 
-                // PERF_LOG_MEMORY("Hybrid A* FindPath Succeeded " + std::to_string(expansions));
+                PERF_LOG_MEMORY("Hybrid A* FindPath Succeeded " + std::to_string(expansions));
                 return result;
             }
 
@@ -316,6 +319,8 @@ namespace HybridAStar
         LogElapsed("failed (open set exhausted)");
 
         // PERF_LOG_MEMORY("Hybrid A* FindPath exhausted");
+        if (params.onSearchFailed)
+            params.onSearchFailed(expansions);
         return {}; // Failure: 경로 없음
     }
 

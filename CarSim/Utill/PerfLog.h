@@ -51,6 +51,15 @@ namespace PerfLog
         std::chrono::steady_clock::time_point m_begin;
     };
 
+    // 로그 없이 값만 필요할 때(예: 구간 전후 델타 계산)를 위한 버전.
+    inline double GetWorkingSetMB()
+    {
+        PROCESS_MEMORY_COUNTERS counters{};
+        if (GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters)))
+            return static_cast<double>(counters.WorkingSetSize) / (1024.0 * 1024.0);
+        return 0.0;
+    }
+
     inline void LogMemory(const std::string &label)
     {
         PROCESS_MEMORY_COUNTERS counters{};

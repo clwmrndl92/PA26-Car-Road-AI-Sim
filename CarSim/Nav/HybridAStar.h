@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 #include <vector>
 #include "Utill/MathUtil.h"
 #include "ReedsShepp.h"
@@ -33,8 +34,12 @@ namespace HybridAStar
         float reverseCostMul = 1.2f;                   // 후진 스텝 비용 배율
         float gearChangeCost = 2.0f;                   // 이전 스텝과 기어(전/후진)가 바뀔 때 추가 비용
         float steerChangeCost = 0.5f;                  // 이전 스텝과 조향이 바뀔 때 추가 비용
-        int maxExpansions = 500;                       // 격자가 촘촘해진 만큼 예산도 늘림 — 이 횟수만큼 노드를
-                                                       // 확장해도 못 찾으면 실패 처리
+        int maxExpansions = 50;                        // 격자가 촘촘해진 만큼 예산도 늘림
+
+        // 벤치마크 전용 훅: 실패로 확정되어 내부 컨테이너(nodes/openSet/closedSet)가 아직 살아있는
+        // 시점에, 그때까지 소비한 확장 횟수와 함께 호출된다. 비어있으면 아무 영향 없음.
+        // expansions == maxExpansions+1이면 예산 초과, 그보다 작으면 open set 소진.
+        std::function<void(int expansions)> onSearchFailed;
     };
 
     ReedsShepp::Path FindPath(const Vec3 &start, float startHeadingRad,

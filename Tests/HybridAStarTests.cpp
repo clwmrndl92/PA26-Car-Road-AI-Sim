@@ -117,6 +117,149 @@ TEST_CASE(FindPath_TinyBudget_ExceedsMaxExpansions)
     CHECK(!foundPath);
 }
 
+// Checks whether a complex (chicane-style) road is passable: two obstacles are staggered on
+// opposite sides of the z-axis, so avoiding one forces the car into the other unless it weaves
+// in an S-curve. The straight-line Reeds-Shepp shortcut from the start pose always hits one of
+// the two obstacles, so an actual grid search is required. Unlike the first version of this
+// obstacle layout, this one only needs a ~2m lateral shift across a 4m longitudinal gap
+// (turning radius is 3m), which is kinematically achievable, so it tests whether the search
+// budget is enough rather than testing a geometrically impossible course. maxExpansions=50 is
+// meant purely to observe whether the search still succeeds at that budget, so the result is
+// printed rather than enforced with CHECK.
+TEST_CASE(FindPath_ComplexChicane_Budget50)
+{
+    HybridAStar::VehicleShape shape;
+    Vec3 start(0.0f, 0.0f, 0.0f);
+    Vec3 goal(28.0f, 0.0f, 0.0f);
+
+    std::vector<HybridAStar::Obstacle> obstacles{
+        {Vec3(8.0f, 0.0f, 1.5f), 3.0f, 1.5f, 0.0f},   // x:[5,11]  z:[0,3]   -> must detour below (z<0)
+        {Vec3(18.0f, 0.0f, -1.5f), 3.0f, 1.5f, 0.0f}, // x:[15,21] z:[-3,0]  -> must detour above (z>0)
+    };
+
+    HybridAStar::Params params;
+    params.maxExpansions = 5000;
+
+    int expansionsUsed = -1;
+    params.onSearchFailed = [&expansionsUsed](int expansions)
+    { expansionsUsed = expansions; };
+
+    bool foundPath = false;
+    auto begin = std::chrono::steady_clock::now();
+    ReedsShepp::Path path = HybridAStar::FindPath(start, 0.0f, goal, 0.0f, obstacles, shape, foundPath, params);
+    auto end = std::chrono::steady_clock::now();
+    double ms = std::chrono::duration<double, std::milli>(end - begin).count();
+
+    if (foundPath)
+        std::printf("         FindPath_ComplexChicane_Budget50: succeeded, path length %.2f, %.3f ms\n",
+                    ReedsShepp::GetPathLength(path), ms);
+    else if (expansionsUsed > params.maxExpansions)
+        std::printf("         FindPath_ComplexChicane_Budget50: failed, exceeded maxExpansions=%d, %.3f ms\n",
+                    params.maxExpansions, ms);
+    else
+        std::printf("         FindPath_ComplexChicane_Budget50: failed, open set exhausted after only %d expansions (budget was %d), %.3f ms\n",
+                    expansionsUsed, params.maxExpansions, ms);
+}
+
+// Simpler comparison case for the S-curve above: a single obstacle sits directly on the straight
+// path, so the car only has to bulge to one side and back (a "C" detour) instead of reversing
+// direction like the chicane. Same maxExpansions=50 budget and diagnostic hook, so the two
+// printed results can be compared directly in the presentation.
+TEST_CASE(FindPath_SingleObstacle_CDetour_Budget50)
+{
+    HybridAStar::VehicleShape shape;
+    Vec3 start(0.0f, 0.0f, 0.0f);
+    Vec3 goal(20.0f, 0.0f, 0.0f);
+
+    std::vector<HybridAStar::Obstacle> obstacles{
+        {Vec3(10.0f, 0.0f, 0.0f), 2.0f, 1.5f, 0.0f}, // x:[8,12] z:[-1.5,1.5], centered right on the straight path
+    };
+
+    HybridAStar::Params params;
+    params.maxExpansions = 5000;
+
+    int expansionsUsed = -1;
+    params.onSearchFailed = [&expansionsUsed](int expansions)
+    { expansionsUsed = expansions; };
+
+    bool foundPath = false;
+    auto begin = std::chrono::steady_clock::now();
+    ReedsShepp::Path path = HybridAStar::FindPath(start, 0.0f, goal, 0.0f, obstacles, shape, foundPath, params);
+    auto end = std::chrono::steady_clock::now();
+    double ms = std::chrono::duration<double, std::milli>(end - begin).count();
+
+    if (foundPath)
+        std::printf("         FindPath_SingleObstacle_CDetour_Budget50: succeeded, path length %.2f, %.3f ms\n",
+                    ReedsShepp::GetPathLength(path), ms);
+    else if (expansionsUsed > params.maxExpansions)
+        std::printf("         FindPath_SingleObstacle_CDetour_Budget50: failed, exceeded maxExpansions=%d, %.3f ms\n",
+                    params.maxExpansions, ms);
+    else
+        std::printf("         FindPath_SingleObstacle_CDetour_Budget50: failed, open set exhausted after only %d expansions (budget was %d), %.3f ms\n",
+                    expansionsUsed, params.maxExpansions, ms);
+}
+
+// 발표용 벤치마크: 목표를 완전히 둘러싸 항상 실패하게 만들고(FindPath_GoalBoxedIn_FailsGracefully와
+// 동일 배치), maxExpansions를 1/2000/5000으로 바꿔가며 그 확장 횟수까지 도달했을 때의 메모리 증가분
+// (진입 전/후 WorkingSet 델타)과 소요 시간을 여러 번 반복해 평균으로 낸다.
+TEST_CASE(FindPath_Benchmark_ExpansionsMemoryDelta)
+{
+    HybridAStar::VehicleShape shape;
+    Vec3 start(0.0f, 0.0f, 0.0f);
+    Vec3 goal(20.0f, 0.0f, 0.0f);
+
+    std::vector<HybridAStar::Obstacle> obstacles;
+    obstacles.push_back({Vec3(20.0f, 0.0f, 4.0f), 5.0f, 0.5f, 0.0f});
+    obstacles.push_back({Vec3(20.0f, 0.0f, -4.0f), 5.0f, 0.5f, 0.0f});
+    obstacles.push_back({Vec3(24.0f, 0.0f, 0.0f), 4.5f, 0.5f, 90.0f});
+    obstacles.push_back({Vec3(16.0f, 0.0f, 0.0f), 4.5f, 0.5f, 90.0f});
+
+    const int expansionTargets[] = {1, 50, 100, 500, 2000, 5000};
+    const int trialsPerTarget = 5;
+
+    // 워밍업: 첫 호출의 페이지 폴트/할당자 초기화 비용이 첫 측정치를 왜곡하지 않도록 미리 한 번 태운다.
+    {
+        HybridAStar::Params warmupParams;
+        warmupParams.maxExpansions = 50;
+        bool warmupFound = true;
+        HybridAStar::FindPath(start, 0.0f, goal, 0.0f, obstacles, shape, warmupFound, warmupParams);
+    }
+
+    for (int target : expansionTargets)
+    {
+        HybridAStar::Params params;
+        params.maxExpansions = target;
+
+        double totalDeltaMB = 0.0;
+        double totalMs = 0.0;
+
+        for (int trial = 0; trial < trialsPerTarget; ++trial)
+        {
+            double memBefore = PerfLog::GetWorkingSetMB();
+            double memAtFailure = memBefore;
+            // nodes/openSet/closedSet가 return과 함께 소멸돼버리므로, 실패가 확정되는 그 순간
+            // (컨테이너가 아직 살아있을 때) 내부에서 값을 뽑아온다. 호출이 끝난 뒤 밖에서 재면
+            // 이미 정리된 뒤라 델타가 의미 없어진다(때로 음수까지 나옴).
+            params.onSearchFailed = [&memAtFailure](int)
+            { memAtFailure = PerfLog::GetWorkingSetMB(); };
+
+            auto begin = std::chrono::steady_clock::now();
+
+            bool foundPath = true; // GoalBoxedIn 배치는 항상 실패해야 하니 반대값으로 초기화해서 확인
+            HybridAStar::FindPath(start, 0.0f, goal, 0.0f, obstacles, shape, foundPath, params);
+
+            auto end = std::chrono::steady_clock::now();
+
+            CHECK(!foundPath);
+            totalDeltaMB += (memAtFailure - memBefore);
+            totalMs += std::chrono::duration<double, std::milli>(end - begin).count();
+        }
+
+        std::printf("         FindPath_Benchmark_ExpansionsMemoryDelta: maxExpansions=%d -> avg delta %.3f MB / avg %.3f ms (%d trials)\n",
+                    target, totalDeltaMB / trialsPerTarget, totalMs / trialsPerTarget, trialsPerTarget);
+    }
+}
+
 TEST_CASE(IsColliding_Basic)
 {
     HybridAStar::VehicleShape shape; // halfLength 2.2, halfWidth 1.0, pivotToCenter 0

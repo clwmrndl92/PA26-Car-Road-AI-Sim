@@ -88,11 +88,12 @@ bool CarSim::InitResource()
     // Car 1
     {
         auto car = std::make_shared<Car>();
-        car->Init(GetCarSpec(CarType::Car0), &m_RoadDataManager, JPH::Vec3(-20.0f, 0.1f, 8.0f));
+        car->Init(GetCarSpec(CarType::Car0), &m_RoadDataManager, JPH::Vec3(-15.0f, 0.1f, 8.0f));
 
-        std::shared_ptr<RoadNode> dest = m_RoadDataManager.GetRandomDestNode();
-        if (dest)
-            car->SetDestination(dest);
+        car->SetDestination(m_RoadDataManager.GetNode(1));
+        // std::shared_ptr<RoadNode> dest = m_RoadDataManager.GetRandomDestNode();
+        // if (dest)
+        //     car->SetDestination(dest);
         car->SetRotation(Vec3(-1, 0, 0));
 
         m_GameObjects.push_back(car);
