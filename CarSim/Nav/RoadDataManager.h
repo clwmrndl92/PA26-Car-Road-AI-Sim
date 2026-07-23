@@ -5,7 +5,7 @@
 #include "Spline.h"
 #include "Lane.h"
 #include "Road.h"
-#include "HybridAStar.h"
+#include "VehicleCollision.h"
 #include "TrafficSignal.h"
 
 using namespace std;
@@ -37,7 +37,7 @@ public:
     const unordered_map<int, shared_ptr<RoadNode>> &GetNodes() const { return m_nodes; };
     const shared_ptr<RoadNode> GetNode(int nodeId) const;
     shared_ptr<RoadNode> GetRandomDestNode() const;
-    const vector<HybridAStar::Obstacle> &GetObstacles() const { return m_obstacles; }
+    const vector<VehicleCollision::Obstacle> &GetObstacles() const { return m_obstacles; }
 
     const vector<shared_ptr<Lane>> *GetParkingLanes(int parkNodeId) const;
 
@@ -66,7 +66,7 @@ private:
     vector<shared_ptr<Lane>> m_lanes;
     vector<shared_ptr<Road>> m_roads;
     unordered_map<int, shared_ptr<RoadNode>> m_nodes; // node id -> RoadNode
-    vector<HybridAStar::Obstacle> m_obstacles;
+    vector<VehicleCollision::Obstacle> m_obstacles;
     unordered_set<int> m_reservedParkSpotIds; // 예약된(다른 차가 목표로 잡은) ParkSpot 노드 id
     unordered_map<int, vector<shared_ptr<Lane>>> m_parkingLanes;
     float m_simTime = 0.0f; // Tick()으로만 누적되는 전역 시뮬레이션 시계. 신호 색 계산 전용.

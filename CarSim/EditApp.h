@@ -91,7 +91,7 @@ private:
         std::vector<DirectX::XMFLOAT3> points;
     };
 
-    // 회전된 사각형 장애물. RoadDataManager/HybridAStar::Obstacle과 필드를 맞췄다(length=heading
+    // 회전된 사각형 장애물. RoadDataManager/VehicleCollision::Obstacle과 필드를 맞췄다(length=heading
     // 방향 전체 길이, width=수직 방향 전체 폭, rotation=도, atan2(z,x) 규약, ReedsShepp와 동일).
     struct EditObstacle
     {

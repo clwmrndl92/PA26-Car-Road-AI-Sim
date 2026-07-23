@@ -2,7 +2,7 @@
 #include "VehicleSegment.h"
 #include "Utill/DebugConsole.h"
 #include "Nav/ReedsShepp.h"
-#include "Nav/HybridAStar.h"
+#include "Nav/VehicleCollision.h"
 #include "Nav/Mobil.h"
 #include <algorithm>
 #include <cmath>
@@ -115,12 +115,6 @@ Car::Mode Car::DecideNextMode(const char **reason) const
     }
     else if (m_mode == Mode::Drive)
     {
-        if (m_subMode == SubMode::D_Avoid && !m_vehicleController.IsFinished())
-        {
-            *reason = "avoid maneuver in progress";
-            return Mode::Drive;
-        }
-
         constexpr float ARRIVE_DISTANCE = 5.0f;
         bool arrived = false;
         if (m_destLane != nullptr)
@@ -192,11 +186,9 @@ void Car::SetSubMode(SubMode next)
     m_subMode = next;
 }
 
-HybridAStar::VehicleShape Car::BuildVehicleShape() const
+VehicleCollision::VehicleShape Car::BuildVehicleShape() const
 {
-    HybridAStar::VehicleShape shape;
-    shape.wheelbase = m_wheelbase;
-    shape.maxSteerAngleRad = m_maxSteerAngle;
+    VehicleCollision::VehicleShape shape;
     shape.pivotToCenter = m_colliderOffset.z;
     shape.halfWidth = m_halfExtents.GetX();
     shape.halfLength = m_halfExtents.GetZ();
@@ -391,8 +383,6 @@ void Car::BeginParkPlan()
     float turningRadius = m_wheelbase / tanf(m_maxSteerAngle);
     Vec3 rigidPosition = m_rigidbody.GetPosition();
     float startAngleRad = DirectionToAngleRad(GetForwardAxis());
-    HybridAStar::VehicleShape shape = BuildVehicleShape();
-    const std::vector<HybridAStar::Obstacle> &obstacles = m_RoadDataManager->GetObstacles();
 
     // 출차
     if (m_subMode == SubMode::P_EXIT)
@@ -433,12 +423,23 @@ void Car::BeginParkPlan()
         float targetAngleRad;
         GetLaneLookaheadPoint(closestLane, rigidPosition, EXIT_LEAD_DISTANCE, targetPos, targetAngleRad);
 
-        bool foundPath = false;
-        ReedsShepp::Path path = HybridAStar::FindPath(rigidPosition, startAngleRad, targetPos, targetAngleRad, obstacles, shape, foundPath);
-        if (!foundPath)
+        VehicleCollision::VehicleShape shape = BuildVehicleShape();
+        const std::vector<VehicleCollision::Obstacle> &obstacles = m_RoadDataManager->GetObstacles();
+        auto isCollisionFree = [&](const ReedsShepp::Path &candidate)
+        {
+            for (const ReedsShepp::PoseSample &pose : ReedsShepp::SamplePoses(candidate, rigidPosition, startAngleRad, turningRadius))
+            {
+                if (VehicleCollision::IsColliding(pose.position, pose.headingRad, obstacles, shape))
+                    return false;
+            }
+            return true;
+        };
+
+        ReedsShepp::Path path = ReedsShepp::GetOptimalPath(rigidPosition, startAngleRad, targetPos, targetAngleRad, turningRadius, isCollisionFree);
+        if (path.empty())
         {
             // 출차 실패는 이미 차가 그 자리를 점유 중이므로 예약을 풀지 않는다.
-            DebugConsole::Log(GetName() + ": BeginParkPlan: HybridA* failed to find an exit path, abandoning this park attempt");
+            DebugConsole::Log(GetName() + ": BeginParkPlan: Reeds-Shepp failed to find an exit path, abandoning this park attempt");
             m_destLane = nullptr;
             SetSubMode(SubMode::None);
             return;
@@ -537,7 +538,7 @@ bool Car::BeginParkEnterOrRetry()
     return false;
 }
 
-// 현재 pose -> target 까지 Hybrid A*(장애물 회피)로 계획해 실행시킨다. 못 찾으면 false.
+// 현재 pose -> target 까지 Reeds-Shepp으로 계획해 실행시킨다. 못 찾으면 false.
 // exact=true면 Pure Pursuit(BuildParkSegments) 대신 정지-조향-이동-정지 방식의 정밀 실행
 // (BuildExactSegments)을 쓴다 -- 짧은 최종 정렬 보정 등 추종 오차를 남기면 안 되는 경우에만 켠다.
 bool Car::PlanParkLegTo(const Vec3 &targetPos, float targetAngleRad, bool exact)
@@ -545,12 +546,21 @@ bool Car::PlanParkLegTo(const Vec3 &targetPos, float targetAngleRad, bool exact)
     Vec3 rigidPosition = m_rigidbody.GetPosition();
     float startAngleRad = DirectionToAngleRad(GetForwardAxis());
     float turningRadius = m_wheelbase / tanf(m_maxSteerAngle);
-    HybridAStar::VehicleShape shape = BuildVehicleShape();
-    const std::vector<HybridAStar::Obstacle> &obstacles = m_RoadDataManager->GetObstacles();
 
-    bool foundPath = false;
-    ReedsShepp::Path path = HybridAStar::FindPath(rigidPosition, startAngleRad, targetPos, targetAngleRad, obstacles, shape, foundPath);
-    if (!foundPath)
+    VehicleCollision::VehicleShape shape = BuildVehicleShape();
+    const std::vector<VehicleCollision::Obstacle> &obstacles = m_RoadDataManager->GetObstacles();
+    auto isCollisionFree = [&](const ReedsShepp::Path &candidate)
+    {
+        for (const ReedsShepp::PoseSample &pose : ReedsShepp::SamplePoses(candidate, rigidPosition, startAngleRad, turningRadius))
+        {
+            if (VehicleCollision::IsColliding(pose.position, pose.headingRad, obstacles, shape))
+                return false;
+        }
+        return true;
+    };
+
+    ReedsShepp::Path path = ReedsShepp::GetOptimalPath(rigidPosition, startAngleRad, targetPos, targetAngleRad, turningRadius, isCollisionFree);
+    if (path.empty())
         return false;
 
     if (exact)
@@ -561,7 +571,7 @@ bool Car::PlanParkLegTo(const Vec3 &targetPos, float targetAngleRad, bool exact)
     return true;
 }
 
-// 입차 leg 2: 현재 pose(=P)에서 예약된 스팟까지 Hybrid A*. UpdatePark가 leg 1 완료 시 호출한다.
+// 입차 leg 2: 현재 pose(=P)에서 예약된 스팟까지 Reeds-Shepp. UpdatePark가 leg 1 완료 시 호출한다.
 // 못 들어가면 다음 빈 자리로 넘어가 leg 1부터 다시 시도하고, 모든 자리가 안 되면 멈춘다.
 void Car::BeginParkSpotLeg()
 {
@@ -612,53 +622,9 @@ void Car::UpdateStop()
 #pragma region Drive
 void Car::UpdateDrive()
 {
-    // 서브상태:회피 — Hybrid A* + RS 경로
-    // TODO(정차): 2초 대기 후 이동
-    if (m_subMode == SubMode::D_Avoid)
-    {
-        if (!m_vehicleController.IsFinished())
-        {
-            m_wantSegmentTick = true;
-            return;
-        }
-        // 회피 RS 경로 완주 — m_mode가 계속 Drive라 OnModeEnter(Drive)가 다시 안 불리므로, 예전에
-        // 거기서 하던 일반주행용 SplineFollowSegment 재구성을 여기서 직접 해준다.
-        SetSubMode(SubMode::D_Normal);
-        std::vector<std::unique_ptr<VehicleSegment>> segments;
-        segments.push_back(std::make_unique<SplineFollowSegment>());
-        m_vehicleController.BeginPlan(std::move(segments));
-    }
-    else if (m_subMode == SubMode::D_Stop)
-    {
-        // 서브상태:정차 — BeginAvoidPlan이 경로를 못 찾아 여기로 왔다. fsm.txt는 "2초 대기 -> 이동
-        // 여부 판단 -> 안 움직였으면 재탐색"이지만, 장애물이 전부 정적이라 "움직였는지" 판단 자체가
-        // 불가능하다(TODO: 동적 장애물 도입되면 여기 이동 판단을 추가해야 함). 그 대신 쿨다운마다
-        // Hybrid A* 재탐색만 반복한다. 재탐색 성공하면 BeginAvoidPlan이 알아서 D_Avoid로 옮겨두고,
-        // 실패하면 또 D_Stop으로 되돌려놓으므로(BeginAvoidPlan 참고) 여기선 쿨다운만 관리한다.
-        if (m_speed > 0.0f)
-            Accelerate(0.0f);
-
-        if (m_avoidReplanCooldown > 0.0f)
-            m_avoidReplanCooldown = std::max(0.0f, m_avoidReplanCooldown - m_deltaTime);
-
-        if (m_avoidReplanCooldown > 0.0f)
-        {
-            m_wantSegmentTick = true;
-            return;
-        }
-
-        constexpr float STOPPED_REPLAN_COOLDOWN = 2.0f; // fsm.txt 서브상태:정차의 재탐색 대기(2초)
-        m_avoidReplanCooldown = STOPPED_REPLAN_COOLDOWN;
-        BeginAvoidPlan(); // 성공하면 subMode를 D_Avoid로, 실패하면 도로 D_Stop으로 남겨둔다.
-        m_wantSegmentTick = true;
-        return;
-    }
-
     if (!CheckPath())
         return;
     TryLaneChange();
-    // if (TryAvoidObstacle())
-    //     return;
     m_obstacleAheadGap = ScanBBoxObstacleGap();
     m_wantSegmentTick = true;
 }
@@ -944,8 +910,7 @@ void Car::SimulateBBoxTrajectory(float lateralOffset, std::vector<Vec3> &outPosi
             }
 
             // ApplyMotion의 자전거 모델과 동일: angularVelocity = speed*tan(steerAngle)/wheelbase, 부호는
-            // 위 steerAngle 유도와 마찬가지로 atan2(z,x) 각도 기준으로 뒤집힌다(HybridAStar::StepPose의
-            // Left/kappa 부호 규약과 교차검증됨).
+            // 위 steerAngle 유도와 마찬가지로 atan2(z,x) 각도 기준으로 뒤집힌다.
             float currentAngle = atan2f(dir.GetZ(), dir.GetX());
             float nextAngle = currentAngle - step * tanf(steerAngle) / m_wheelbase;
             rigidPos = rigidPos + dir * step;
@@ -956,116 +921,8 @@ void Car::SimulateBBoxTrajectory(float lateralOffset, std::vector<Vec3> &outPosi
     }
 }
 
-bool Car::TryAvoidObstacle()
-{
-    const std::vector<HybridAStar::Obstacle> &obstacles = m_RoadDataManager->GetObstacles();
-    HybridAStar::VehicleShape shape = BuildVehicleShape();
-    if (obstacles.empty())
-    {
-        m_avoidLateralOffset = 0.0f;
-        m_obstacleAheadGap = -1.0f;
-        m_bboxDebugRenders.clear();
-        return false;
-    }
-
-    // lateralOffset 궤적을 시뮬레이션해서 처음 충돌하는 샘플의 인덱스를 반환(없으면 -1).
-    auto findCollision = [&](float lateralOffset, std::vector<Vec3> &positions, std::vector<Vec3> &directions)
-    {
-        SimulateBBoxTrajectory(lateralOffset, positions, directions);
-        for (size_t i = 0; i < positions.size(); ++i)
-        {
-            if (HybridAStar::IsColliding(positions[i], DirectionToAngleRad(directions[i]), obstacles, shape))
-                return static_cast<int>(i);
-        }
-        return -1;
-    };
-    auto sweepClear = [&](float lateralOffset)
-    {
-        std::vector<Vec3> positions, directions;
-        return findCollision(lateralOffset, positions, directions) < 0;
-    };
-
-    std::vector<Vec3> basePositions, baseDirections;
-    int collideIndex = findCollision(0.0f, basePositions, baseDirections);
-    RebuildBBDebugRender(basePositions, baseDirections, obstacles, shape); // 디버그: 충돌=빨강/통과=초록 박스
-
-    if (collideIndex < 0)
-    {
-        m_avoidLateralOffset = 0.0f;
-        m_obstacleAheadGap = -1.0f;
-        return false; // 바운딩박스 궤적 전체가 깨끗함
-    }
-    float collisionDistance = collideIndex * AVOID_SAMPLE_STEP;
-
-    // 1) 제동거리 기준 "너무 가까움" — 비상 제동(m_maxEmergBrake)으로도 못 설 거리 안이면 감속/옆으로
-    // 피할 여유 없이 바로 재계획.
-    float stoppingDistance = (m_speed * m_speed) / (2.0f * m_maxEmergBrake);
-    float closeThreshold = stoppingDistance * AVOID_CLOSE_DISTANCE_MARGIN;
-    if (collisionDistance <= closeThreshold)
-    {
-        m_avoidLateralOffset = 0.0f;
-        m_obstacleAheadGap = -1.0f;
-        BeginAvoidPlan();
-        return true;
-    }
-
-    // 2) 아직 여유 있음 -- 충돌 지점까지의 거리를 정지한 가상 선행차량 gap으로 노출, DriveSpeedIDM이 감속.
-    m_obstacleAheadGap = collisionDistance;
-
-    // 어느 쪽으로 옆 오프셋을 먼저 시도할지: 충돌 지점 근처(차량 크기 범위 안)에 있는 장애물들이 그
-    // 지점 기준 좌/우 어느 쪽에 몰려 있는지로 정한다 — 충돌과 무관한 먼 장애물은 편향에 안 섞이게, 충돌
-    // 지점의 실제 heading 기준으로 판단한다.
-    Vec3 collidePos = basePositions[collideIndex];
-    Vec3 collideDir = baseDirections[collideIndex];
-    Vec3 collideNormal = Vec3(-collideDir.GetZ(), 0.0f, collideDir.GetX()).Normalized();
-    float biasSum = 0.0f;
-    int biasCount = 0;
-    for (const HybridAStar::Obstacle &obstacle : obstacles)
-    {
-        float proximity = shape.halfLength + obstacle.halfLength + shape.halfWidth + obstacle.halfWidth;
-        if ((obstacle.center - collidePos).Length() > proximity)
-            continue;
-        biasSum += (obstacle.center - collidePos).Dot(collideNormal);
-        ++biasCount;
-    }
-    float preferredSign = (biasCount > 0 && biasSum != 0.0f) ? -std::copysign(1.0f, biasSum) : 1.0f;
-
-    constexpr float NUDGE_STEP = 0.5f;
-    constexpr float MAX_NUDGE = 2.5f; // 차선 폭 절반 남짓 -- 옆 차선까지 크게 침범하지 않는 한도
-    bool offsetFound = false;
-    for (float sign : {preferredSign, -preferredSign})
-    {
-        for (float magnitude = NUDGE_STEP; magnitude <= MAX_NUDGE; magnitude += NUDGE_STEP)
-        {
-            if (sweepClear(sign * magnitude))
-            {
-                offsetFound = true;
-                break;
-            }
-        }
-        if (offsetFound)
-            break;
-    }
-
-    // 옆 오프셋이 있고 + MOBIL도 차선변경을 승인해야만 회피기동으로 인정한다(쿨다운 무시하고 즉시
-    // 평가). 성공하면 TryLaneChange가 이미 레인/스플라인을 새 것으로 바꿔놨으므로, 옛 스플라인 기준
-    // 오프셋은 더 의미가 없어 0으로 둔다.
-    if (offsetFound && TryLaneChange(/*ignoreCooldown=*/true))
-    {
-        m_avoidLateralOffset = 0.0f;
-        return false;
-    }
-
-    // 옆으로도 못 피하거나 MOBIL이 승인하지 않음 -> 정지 후 하이브리드 A*+RS 회피 기동으로 전환.
-    m_avoidLateralOffset = 0.0f;
-    m_obstacleAheadGap = -1.0f;
-    BeginAvoidPlan();
-    return true;
-}
-
-// TryAvoidObstacle과 달리 회피 기동(옆 오프셋 탐색, BeginAvoidPlan)은 전혀 건드리지 않고 SimulateBBoxTrajectory
-// 전방 sweep으로 정적+동적(주변 차량) 장애물까지의 최근접 거리만 반환한다(없으면 -1). DriveSpeedIDM이
-// 이 값을 정지한 가상 리더의 gap으로 사용.
+// SimulateBBoxTrajectory 전방 sweep으로 정적+동적(주변 차량) 장애물까지의 최근접 거리만 반환한다
+// (없으면 -1). DriveSpeedIDM이 이 값을 정지한 가상 리더의 gap으로 사용.
 float Car::ScanBBoxObstacleGap()
 {
     if (m_currentLane == nullptr)
@@ -1074,7 +931,7 @@ float Car::ScanBBoxObstacleGap()
         return -1.0f;
     }
 
-    std::vector<HybridAStar::Obstacle> obstacles = m_RoadDataManager->GetObstacles();
+    std::vector<VehicleCollision::Obstacle> obstacles = m_RoadDataManager->GetObstacles();
 
     Vec3 position = GetPosition();
     float egoLanePos = m_currentLane->GetSpline().GetSplinePosition(position) * m_currentLane->GetLength();
@@ -1083,10 +940,10 @@ float Car::ScanBBoxObstacleGap()
     {
         // BuildVehicleShape의 pivotToCenter 컨벤션과 동일하게, "pivot"(rigidbody 위치)에서 전방으로
         // pivotToCenter만큼 떨어진 지점을 실제 충돌판정 박스 중심으로 쓴다.
-        HybridAStar::VehicleShape otherShape = other->BuildVehicleShape();
+        VehicleCollision::VehicleShape otherShape = other->BuildVehicleShape();
         Vec3 otherPivot = other->GetRigidbodyPosition();
         Vec3 otherFwd = other->GetForwardAxis();
-        HybridAStar::Obstacle obstacle;
+        VehicleCollision::Obstacle obstacle;
         obstacle.center = otherPivot + otherFwd * otherShape.pivotToCenter;
         obstacle.halfLength = otherShape.halfLength;
         obstacle.halfWidth = otherShape.halfWidth;
@@ -1100,49 +957,17 @@ float Car::ScanBBoxObstacleGap()
         return -1.0f;
     }
 
-    HybridAStar::VehicleShape shape = BuildVehicleShape();
+    VehicleCollision::VehicleShape shape = BuildVehicleShape();
     std::vector<Vec3> positions, directions;
     SimulateBBoxTrajectory(0.0f, positions, directions);
-    RebuildBBDebugRender(positions, directions, obstacles, shape); // 디버그: 충돌=빨강/통과=초록 박스 (TryAvoidObstacle과 동일)
+    RebuildBBDebugRender(positions, directions, obstacles, shape); // 디버그: 충돌=빨강/통과=초록 박스
 
     for (size_t i = 0; i < positions.size(); ++i)
     {
-        if (HybridAStar::IsColliding(positions[i], DirectionToAngleRad(directions[i]), obstacles, shape))
+        if (VehicleCollision::IsColliding(positions[i], DirectionToAngleRad(directions[i]), obstacles, shape))
             return static_cast<float>(i) * AVOID_SAMPLE_STEP;
     }
     return -1.0f;
-}
-
-// 현재 pose에서, 현재 차선을 따라 장애물을 지나칠 만큼 앞선 지점까지 Hybrid A*로 회피 경로를 짜서
-// 실행시킨다(RS pure pursuit로 천천히 주행 — BuildParkSegments 재사용). 성공하면 subMode를 D_Avoid로
-// 세팅, 실패하면 D_Stop으로 세팅해 UpdateDrive의 쿨다운 재탐색 루프가 이어받게 한다.
-void Car::BeginAvoidPlan()
-{
-    EmergBrake(); // 회피 재계획에 들어왔다는 것 자체가 이미 위험 신호 -- 경로 탐색/실행 전에 즉시 감속부터 시작.
-
-    Vec3 rigidPosition = m_rigidbody.GetPosition();
-    float startAngleRad = DirectionToAngleRad(GetForwardAxis());
-    HybridAStar::VehicleShape shape = BuildVehicleShape();
-    const std::vector<HybridAStar::Obstacle> &obstacles = m_RoadDataManager->GetObstacles();
-
-    Vec3 goalPos = m_currentSpline.GetLookaheadPoint(rigidPosition, AVOID_DETECT_DISTANCE);
-    float goalParam = m_currentSpline.GetSplinePosition(goalPos);
-    float goalAngleRad = DirectionToAngleRad(m_currentSpline.GetDirectionAt(goalParam));
-
-    bool foundPath = false;
-    ReedsShepp::Path path =
-        HybridAStar::FindPath(rigidPosition, startAngleRad, goalPos, goalAngleRad, obstacles, shape, foundPath);
-    if (!foundPath)
-    {
-        DebugConsole::Log(GetName() + ": BeginAvoidPlan: HybridA* failed to find an avoid path, staying in Stop substate");
-        SetSubMode(SubMode::D_Stop);
-        return;
-    }
-
-    float turningRadius = m_wheelbase / tanf(m_maxSteerAngle);
-    SetSubMode(SubMode::D_Avoid);
-    m_vehicleController.BeginPlan(BuildReedSheppSegments(path, rigidPosition, startAngleRad, turningRadius));
-    RebuildRSDebugRender(path, rigidPosition, startAngleRad, turningRadius, goalPos, goalAngleRad);
 }
 
 #pragma endregion

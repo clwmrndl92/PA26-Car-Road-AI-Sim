@@ -465,7 +465,7 @@ void CarSim::InitRoadRenderer()
     // 장애물(data.json의 obstacles)을 위치/크기/회전각 그대로 파란 평면으로 시각화.
     m_ObstacleRenders.clear();
     int obstacleIndex = 0;
-    for (const HybridAStar::Obstacle &obstacle : m_RoadDataManager.GetObstacles())
+    for (const VehicleCollision::Obstacle &obstacle : m_RoadDataManager.GetObstacles())
     {
         float headingRad = obstacle.headingRad;
         Vec3 forward(cosf(headingRad), 0.0f, sinf(headingRad));

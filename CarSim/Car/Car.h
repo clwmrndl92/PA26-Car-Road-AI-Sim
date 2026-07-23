@@ -9,7 +9,7 @@
 #include <vector>
 #include <Nav/RoadDataManager.h>
 #include "Nav/ReedsShepp.h"
-#include "Nav/HybridAStar.h"
+#include "Nav/VehicleCollision.h"
 #include "Nav/CarFollowing.h"
 #include "Nav/Mobil.h"
 
@@ -73,8 +73,8 @@ private:
     void RebuildRSDebugRender(const ReedsShepp::Path &path, const Vec3 &startPos, float startAngleRad,
                               float turningRadius, const Vec3 &targetPos, float targetAngleRad);
     void RebuildBBDebugRender(const std::vector<Vec3> &positions, const std::vector<Vec3> &directions,
-                              const std::vector<HybridAStar::Obstacle> &obstacles,
-                              const HybridAStar::VehicleShape &shape);
+                              const std::vector<VehicleCollision::Obstacle> &obstacles,
+                              const VehicleCollision::VehicleShape &shape);
 
     bool IsOffCourse();
 
@@ -107,8 +107,6 @@ private:
 
         // Drive
         D_Normal,     // 일반 주행
-        D_Avoid,      // 회피 하이브리드 A*
-        D_Stop,       // 정차
         D_WaitSignal, // 신호대기
 
         // Park
@@ -125,10 +123,6 @@ private:
             return "None";
         case SubMode::D_Normal:
             return "Normal";
-        case SubMode::D_Avoid:
-            return "Avoid";
-        case SubMode::D_Stop:
-            return "Stop";
         case SubMode::D_WaitSignal:
             return "WaitSignal";
         case SubMode::P_EXIT:
@@ -153,11 +147,9 @@ private:
     void UpdateDrive();
     bool CheckPath();
     bool TryLaneChange(bool ignoreCooldown = false);
-    bool TryAvoidObstacle();
     // SimulateBBoxTrajectory 전방 sweep으로 정적+동적(주변 차량) 장애물을 검사해 최근접 충돌까지의 거리를
-    // 반환한다(없으면 -1). TryAvoidObstacle과 달리 회피 기동(BeginAvoidPlan)은 전혀 건드리지 않고 gap
-    // 계산만 한다 -- DriveSpeedIDM이 이 값을 정지한 가상 리더로 취급. RebuildBBDebugRender로 디버그
-    // 렌더링도 갱신하므로(TryAvoidObstacle과 동일) const가 아니다.
+    // 반환한다(없으면 -1). DriveSpeedIDM이 이 값을 정지한 가상 리더로 취급. RebuildBBDebugRender로 디버그
+    // 렌더링도 갱신하므로 const가 아니다.
     float ScanBBoxObstacleGap();
     void GetLookaheadPose(const Spline *startSpline, const shared_ptr<Lane> &startLane, size_t startPathIndex,
                           const Vec3 &fromPosition, float distance, Vec3 &outPosition, Vec3 &outDirection) const;
@@ -176,8 +168,7 @@ private:
     void GetLaneLookaheadPoint(const shared_ptr<Lane> &startLane, const Vec3 &position, float lookaheadDistance,
                                Vec3 &outPosition, float &outAngleRad) const;
 
-    void BeginAvoidPlan();
-    HybridAStar::VehicleShape BuildVehicleShape() const;
+    VehicleCollision::VehicleShape BuildVehicleShape() const;
 
     void UpdateFindPath();
     bool TryFindPathAndSetLane();
@@ -257,13 +248,11 @@ private:
     unordered_set<int> m_triedParkSpotIds; // 이번 입차에서 경로탐색이 실패해 이미 시도해본 ParkSpot id들
     bool m_parkPlanPending = false;
 
-    float m_avoidReplanCooldown = 0.0f;
-    float m_avoidLateralOffset = 0.0f;                                // TryAvoidObstacle이 계산한 회피용 좌우 오프셋(+우/-좌, m). DriveControl이 조준점에 더한다.
-    float m_obstacleAheadGap = -1.0f;                                 // TryAvoidObstacle이 찾은, 경로 폭 안 최근접 장애물까지의 범퍼 대 범퍼 거리(m). 없으면 -1. DriveSpeedIDM이 가상 정지 리더로 사용.
+    float m_avoidLateralOffset = 0.0f;                                // 회피용 좌우 오프셋(+우/-좌, m). DriveControl이 조준점에 더한다. (예정된 Reynolds 회피가 채울 자리 -- 현재는 항상 0)
+    float m_obstacleAheadGap = -1.0f;                                 // ScanBBoxObstacleGap이 찾은, 경로 폭 안 최근접 장애물까지의 범퍼 대 범퍼 거리(m). 없으면 -1. DriveSpeedIDM이 가상 정지 리더로 사용.
     std::string m_lastBrakeCause;                                     // DriveSpeedIDM 제동 로그 중복 방지용(비어있으면 비제동 상태).
     static constexpr float AVOID_DETECT_DISTANCE = 20.0f;             // 박스캐스트 바운딩박스 스윕 길이 (전방 감지 거리)
     static constexpr float AVOID_SAMPLE_STEP = 2.0f;                  // 바운딩박스 스윕을 따라 박스를 검사하는 간격
-    static constexpr float AVOID_CLOSE_DISTANCE_MARGIN = 1.5f;        // 제동거리 기반 "너무 가까움" 임계값의 여유 배수
     static constexpr float AVOID_OBSTACLE_STANDSTILL_DISTANCE = 0.5f; // 장애물 가상 리더용 s0 -- 일반 차량 추종(IDM_STANDSTILL_DISTANCE=2m)보다 더 붙어도 되게 별도로 둔다.
     vector<LaneStep> m_path;
     size_t m_pathIndex = 0;
@@ -334,7 +323,7 @@ private:
     RenderObject m_parkPathRender;                // Park 계획(RS 경로) 폴리라인
     RenderObject m_parkTargetMarker;              // Park 목표 위치
     RenderObject m_parkTargetLine;                // Park 목표 방향
-    std::vector<RenderObject> m_bboxDebugRenders; // TryAvoidObstacle 바운딩박스 샘플 박스(충돌=빨강/통과=초록)
+    std::vector<RenderObject> m_bboxDebugRenders; // ScanBBoxObstacleGap 바운딩박스 샘플 박스(충돌=빨강/통과=초록)
 };
 
 static float CalcMaxSteerAngle(float speed)

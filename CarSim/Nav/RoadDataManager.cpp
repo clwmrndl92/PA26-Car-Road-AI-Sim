@@ -185,7 +185,7 @@ void RoadDataManager::BuildRoadData(const string &filePath)
         if (posJson.size() < 3 || sizeJson.size() < 2)
             continue;
 
-        HybridAStar::Obstacle obstacle;
+        VehicleCollision::Obstacle obstacle;
         obstacle.center = Vec3(posJson[0].get<float>(), posJson[1].get<float>(), posJson[2].get<float>());
         obstacle.halfLength = sizeJson[0].get<float>() * 0.5f;
         obstacle.halfWidth = sizeJson[1].get<float>() * 0.5f;

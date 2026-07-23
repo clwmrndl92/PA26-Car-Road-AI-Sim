@@ -935,8 +935,8 @@ void Car::RebuildRSDebugRender(const ReedsShepp::Path &path, const Vec3 &startPo
 // TryAvoidObstacle이 SimulateBBTrajectory로 예측한 궤적을 그대로 훑어 전부 박스 윤곽선으로
 // 그린다(첫 충돌에서 멈추지 않음) — 충돌한 샘플은 빨강, 통과한 샘플은 초록.
 void Car::RebuildBBDebugRender(const std::vector<Vec3> &positions, const std::vector<Vec3> &directions,
-                               const std::vector<HybridAStar::Obstacle> &obstacles,
-                               const HybridAStar::VehicleShape &shape)
+                               const std::vector<VehicleCollision::Obstacle> &obstacles,
+                               const VehicleCollision::VehicleShape &shape)
 {
     constexpr float DEBUG_LINE_HEIGHT = 0.15f;
 
@@ -946,10 +946,10 @@ void Car::RebuildBBDebugRender(const std::vector<Vec3> &positions, const std::ve
         const Vec3 &samplePos = positions[sampleIndex];
         const Vec3 &sampleDir = directions[sampleIndex];
         float headingRad = atan2f(sampleDir.GetZ(), sampleDir.GetX());
-        bool colliding = HybridAStar::IsColliding(samplePos, headingRad, obstacles, shape);
+        bool colliding = VehicleCollision::IsColliding(samplePos, headingRad, obstacles, shape);
 
         // IsColliding과 동일하게, 실제 충돌판정 박스 중심은 pivot(samplePos)에서 heading 방향으로
-        // pivotToCenter만큼 떨어진 지점이다 (HybridAStar.cpp IsPoseCollision 참고).
+        // pivotToCenter만큼 떨어진 지점이다.
         Vec3 forward(cosf(headingRad), 0.0f, sinf(headingRad));
         Vec3 right(-forward.GetZ(), 0.0f, forward.GetX());
         Vec3 bodyCenter = samplePos + forward * shape.pivotToCenter;

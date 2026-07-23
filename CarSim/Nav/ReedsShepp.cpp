@@ -390,9 +390,11 @@ namespace ReedsShepp
         }
 
         // 세그먼트 하나를 적분해 월드좌표 폴리라인 점들을 points에 append하고, (x,z,theta)를
-        // 그 세그먼트 끝의 pose로 갱신한다. SamplePath/SampleLegs가 공유하는 핵심 적분 로직.
+        // 그 세그먼트 끝의 pose로 갱신한다. SamplePath/SampleLegs/SamplePoses가 공유하는 핵심 적분
+        // 로직. outHeadings가 주어지면 각 점을 push한 시점의 heading도 같이 기록한다(SamplePoses용).
         void AppendElementSamples(const PathElement &element, double &x, double y, double &z, double &theta,
-                                  float turningRadius, float sampleSpacing, std::vector<Vec3> &points)
+                                  float turningRadius, float sampleSpacing, std::vector<Vec3> &points,
+                                  std::vector<float> *outHeadings = nullptr)
         {
             double g = (element.gear == Gear::Backward) ? -1.0 : 1.0;
             double kappaLabel = 0.0;
@@ -413,6 +415,8 @@ namespace ReedsShepp
                     double px = x + g * s * std::cos(theta);
                     double pz = z + g * s * std::sin(theta);
                     points.push_back(Vec3(static_cast<float>(px), static_cast<float>(y), static_cast<float>(pz)));
+                    if (outHeadings)
+                        outHeadings->push_back(static_cast<float>(theta));
                 }
                 x += g * element.param * std::cos(theta);
                 z += g * element.param * std::sin(theta);
@@ -431,6 +435,8 @@ namespace ReedsShepp
                     double px = cx + invKappa * std::sin(th);
                     double pz = cz - invKappa * std::cos(th);
                     points.push_back(Vec3(static_cast<float>(px), static_cast<float>(y), static_cast<float>(pz)));
+                    if (outHeadings)
+                        outHeadings->push_back(static_cast<float>(th));
                 }
                 theta += kappaActual * element.param;
                 x = cx + invKappa * std::sin(theta);
@@ -489,7 +495,13 @@ namespace ReedsShepp
         // PathCost가 가장 낮은(=사람이 운전할 법한) 경로 하나만 생성/보관해서 돌려준다 (반경 1
         // 기준 정규화 좌표 x, y, phi(rad)). 후보 벡터를 물리적으로 만들지 않으므로 매 호출의 힙
         // 할당이 48개 → 최대 2개로 줄어든다. 유효 경로가 없으면 빈 경로를 반환한다.
-        Path GetBestPath(double x, double y, double phi)
+        //
+        // isCollisionFree가 주어지면, 지금까지의 최적 후보보다 비용이 낮은 후보에 한해서만(어차피
+        // 채택 안 될 후보의 충돌검사는 건너뜀) 실제 거리로 스케일해서 검사하고, 통과한 것만 채택한다.
+        // 순회 순서와 무관하게 스캔이 끝나면 항상 "충돌 없는 후보 중 최소 비용"이 남는다 -- 매 후보마다
+        // 현재까지의 best와만 비교하기 때문.
+        Path GetBestPath(double x, double y, double phi, float turningRadius,
+                         const std::function<bool(const Path &)> &isCollisionFree)
         {
             Path best;
             double bestCost = std::numeric_limits<double>::max();
@@ -505,6 +517,15 @@ namespace ReedsShepp
                 double cost = PathCost(candidate);
                 if (cost >= bestCost)
                     return;
+
+                if (isCollisionFree)
+                {
+                    Path worldCandidate = candidate;
+                    for (PathElement &e : worldCandidate)
+                        e.param *= turningRadius;
+                    if (!isCollisionFree(worldCandidate))
+                        return;
+                }
 
                 bestCost = cost;
                 best = std::move(candidate);
@@ -532,7 +553,8 @@ namespace ReedsShepp
 
     Path GetOptimalPath(const Vec3 &start, float startAngleRad,
                         const Vec3 &end, float endAngleRad,
-                        float turningRadius)
+                        float turningRadius,
+                        const std::function<bool(const Path &)> &isCollisionFree)
     {
         double localX, localY, localTheta;
         ChangeOfBasis(start.GetX(), start.GetZ(), startAngleRad,
@@ -543,7 +565,7 @@ namespace ReedsShepp
         localX /= turningRadius;
         localY /= turningRadius;
 
-        Path best = GetBestPath(localX, localY, localTheta);
+        Path best = GetBestPath(localX, localY, localTheta, turningRadius, isCollisionFree);
         if (best.empty())
             return {};
 
@@ -569,6 +591,31 @@ namespace ReedsShepp
             AppendElementSamples(element, x, y, z, theta, turningRadius, sampleSpacing, points);
 
         return points;
+    }
+
+    std::vector<PoseSample> SamplePoses(const Path &path, const Vec3 &start, float startAngleRad,
+                                        float turningRadius, float sampleSpacing)
+    {
+        std::vector<PoseSample> poses;
+        if (path.empty() || turningRadius <= 0.0f || sampleSpacing <= 0.0f)
+            return poses;
+
+        double x = start.GetX();
+        double z = start.GetZ();
+        double y = start.GetY();
+        double theta = startAngleRad;
+
+        std::vector<Vec3> points;
+        std::vector<float> headings;
+        points.push_back(Vec3(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)));
+        headings.push_back(startAngleRad);
+        for (const PathElement &element : path)
+            AppendElementSamples(element, x, y, z, theta, turningRadius, sampleSpacing, points, &headings);
+
+        poses.reserve(points.size());
+        for (size_t i = 0; i < points.size(); ++i)
+            poses.push_back(PoseSample{points[i], headings[i]});
+        return poses;
     }
 
     namespace
