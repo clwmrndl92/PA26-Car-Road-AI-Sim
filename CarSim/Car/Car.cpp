@@ -507,9 +507,13 @@ void Car::WalkConnectedLanes(const shared_ptr<Lane> &rootLane, float rootPositio
     };
     std::vector<WorkItem> stack;
 
+    // 속도가 빠를수록 더 멀리 봐야 하므로 speed*time 기반, 저속/정지 시엔 최소값으로 바닥을 둔다.
+    float searchForward = std::max(MOBIL_SEARCH_FORWARD_MIN, m_speed * MOBIL_SEARCH_FORWARD_TIME);
+    float searchBackward = std::max(MOBIL_SEARCH_BACKWARD_MIN, m_speed * MOBIL_SEARCH_BACKWARD_TIME);
+
     float rootRemaining = rootLane->GetLength() - rootPosition;
-    stack.push_back({rootLane, rootRemaining, MOBIL_SEARCH_FORWARD - rootRemaining, false, nullptr});
-    stack.push_back({rootLane, rootPosition, MOBIL_SEARCH_BACKWARD, true, nullptr});
+    stack.push_back({rootLane, rootRemaining, searchForward - rootRemaining, false, nullptr});
+    stack.push_back({rootLane, -rootPosition, searchBackward, true, nullptr});
 
     while (!stack.empty())
     {
@@ -602,6 +606,7 @@ void Car::DriveSpeedIDM(float steerSpeedCap)
     constexpr float OPEN_ROAD_GAP = 100000.0f;
     Vec3 position = GetPosition();
     float accel = CarFollowing::CalculateAcceleration(m_speed, m_acceleration, v0, 0.0f, OPEN_ROAD_GAP, idmParams);
+    std::string brakeCause = "free flow (v0 = " + std::to_string(v0) + ")";
 
     // 캐시된 도로 제약(커브/레인 제한속도/정지점)을 각각 정지/저속 가상 리더로 보고, 그중 가장
     // 보수적인(작은) 가속도를 채택한다 -- 앞에 여러 제약이 겹쳐 있어도 가장 급한 것에 맞춰 미리 감속한다.
@@ -609,7 +614,11 @@ void Car::DriveSpeedIDM(float steerSpeedCap)
     {
         float gap = (sample.position - position).Length();
         float constrainedAccel = CarFollowing::CalculateAcceleration(m_speed, m_acceleration, sample.speed, 0.0f, gap, idmParams);
-        accel = std::min(accel, constrainedAccel);
+        if (constrainedAccel < accel)
+        {
+            accel = constrainedAccel;
+            brakeCause = "road constraint (target speed = " + std::to_string(sample.speed) + ", gap = " + std::to_string(gap) + ")";
+        }
     }
 
     // 연결된 차선까지 넓혀 찾은 실제 앞차(합류 지점 등 다른 레인 위의 차 포함): MOBIL이 이 차를 근거로
@@ -623,7 +632,11 @@ void Car::DriveSpeedIDM(float steerSpeedCap)
         float gap = leader.position - leader.car->GetLength();
         float leaderAccel = CarFollowing::CalculateAcceleration(m_speed, m_acceleration, leader.car->GetSpeed(),
                                                                 leader.car->GetAcceleration(), gap, idmParams);
-        accel = std::min(accel, leaderAccel);
+        if (leaderAccel < accel)
+        {
+            accel = leaderAccel;
+            brakeCause = "leading car " + leader.car->GetName() + " (gap = " + std::to_string(gap) + ")";
+        }
     }
 
     // ScanBBoxObstacleGap이 경로 폭 안에서 찾아둔 최근접 정적/동적 장애물: 정지한 가상 선행차량으로
@@ -634,7 +647,26 @@ void Car::DriveSpeedIDM(float steerSpeedCap)
         CarFollowing::Params obstacleParams = idmParams;
         obstacleParams.s0 = AVOID_OBSTACLE_STANDSTILL_DISTANCE;
         float obstacleAccel = CarFollowing::CalculateAcceleration(m_speed, m_acceleration, 0.0f, 0.0f, m_obstacleAheadGap, obstacleParams);
-        accel = std::min(accel, obstacleAccel);
+        if (obstacleAccel < accel)
+        {
+            accel = obstacleAccel;
+            brakeCause = "bbox obstacle (gap = " + std::to_string(m_obstacleAheadGap) + ")";
+        }
+    }
+
+    // 제동(accel < 0) 시작/원인 변경 시점에만 로그 -- 매 프레임 찍으면 스팸이 되므로 원인이 바뀔
+    // 때만(비제동 -> 제동 포함) 기록하고, 제동이 풀리면 다음 제동 때 다시 찍히도록 초기화한다.
+    if (accel < 0.0f)
+    {
+        if (m_lastBrakeCause != brakeCause)
+        {
+            // DebugConsole::Log(GetName() + ": braking (accel = " + std::to_string(accel) + ") due to " + brakeCause);
+            m_lastBrakeCause = brakeCause;
+        }
+    }
+    else
+    {
+        m_lastBrakeCause.clear();
     }
 
     m_acceleration = accel;

@@ -203,7 +203,7 @@ private:
         Car *car = nullptr;
         float position = 0.0f;
     };
-    // rootLane과 successor/predecessor로 연결된 차선(최대 MOBIL_SEARCH_FORWARD/BACKWARD 거리, 합류 지점의
+    // rootLane과 successor/predecessor로 연결된 차선(속도 기반 탐색 예산 거리, 합류 지점의
     // 곁가지 predecessor 포함)을 훑으며, 그 위의 모든 차에 대해 visitor(car, u)를 호출한다. u는 root
     // 기준 통일 거리(부호 있음, +면 앞) -- rootLane 자신 위의 차는 u = 그 차의 레인 arclength - rootPosition.
     void WalkConnectedLanes(const shared_ptr<Lane> &rootLane, float rootPosition,
@@ -260,8 +260,9 @@ private:
     float m_avoidReplanCooldown = 0.0f;
     float m_avoidLateralOffset = 0.0f;                                // TryAvoidObstacle이 계산한 회피용 좌우 오프셋(+우/-좌, m). DriveControl이 조준점에 더한다.
     float m_obstacleAheadGap = -1.0f;                                 // TryAvoidObstacle이 찾은, 경로 폭 안 최근접 장애물까지의 범퍼 대 범퍼 거리(m). 없으면 -1. DriveSpeedIDM이 가상 정지 리더로 사용.
-    static constexpr float AVOID_DETECT_DISTANCE = 20.0f;             // 박스캐스트 코리도어 길이 (전방 감지 거리)
-    static constexpr float AVOID_SAMPLE_STEP = 2.0f;                  // 코리도어를 따라 박스를 검사하는 간격
+    std::string m_lastBrakeCause;                                     // DriveSpeedIDM 제동 로그 중복 방지용(비어있으면 비제동 상태).
+    static constexpr float AVOID_DETECT_DISTANCE = 20.0f;             // 박스캐스트 바운딩박스 스윕 길이 (전방 감지 거리)
+    static constexpr float AVOID_SAMPLE_STEP = 2.0f;                  // 바운딩박스 스윕을 따라 박스를 검사하는 간격
     static constexpr float AVOID_CLOSE_DISTANCE_MARGIN = 1.5f;        // 제동거리 기반 "너무 가까움" 임계값의 여유 배수
     static constexpr float AVOID_OBSTACLE_STANDSTILL_DISTANCE = 0.5f; // 장애물 가상 리더용 s0 -- 일반 차량 추종(IDM_STANDSTILL_DISTANCE=2m)보다 더 붙어도 되게 별도로 둔다.
     vector<LaneStep> m_path;
@@ -289,8 +290,12 @@ private:
     float m_lastLaneChangeTime = 0.0f;
 
     // FindGraphNeighbors가 successor/predecessor를 타고 넘어가는 탐색 예산(레인 그래프 누적 거리, m).
-    static constexpr float MOBIL_SEARCH_FORWARD = 100.0f; // 정방향(successor) 탐색 예산
-    static constexpr float MOBIL_SEARCH_BACKWARD = 30.0f; // root 레인 자신의 역방향(predecessor) 예산
+    // 속도가 빠를수록 더 멀리 봐야 하므로 speed*time 기반으로 계산하고(WalkConnectedLanes), 저속/정지
+    // 시에도 최소한은 보게 바닥값을 둔다.
+    static constexpr float MOBIL_SEARCH_FORWARD_TIME = 2.0f;  // 정방향(successor) 탐색 예산 = 속도 * 이 시간(s)
+    static constexpr float MOBIL_SEARCH_FORWARD_MIN = 30.0f;  // 정방향 탐색 예산의 최소값(m)
+    static constexpr float MOBIL_SEARCH_BACKWARD_TIME = 0.6f; // root 레인 자신의 역방향(predecessor) 예산 = 속도 * 이 시간(s)
+    static constexpr float MOBIL_SEARCH_BACKWARD_MIN = 10.0f; // 역방향 탐색 예산의 최소값(m)
 
     // 차량 주행 상태 변수 (Vehicle States)
     float m_speed = 0.0f;
@@ -329,7 +334,7 @@ private:
     RenderObject m_parkPathRender;                // Park 계획(RS 경로) 폴리라인
     RenderObject m_parkTargetMarker;              // Park 목표 위치
     RenderObject m_parkTargetLine;                // Park 목표 방향
-    std::vector<RenderObject> m_bboxDebugRenders; // TryAvoidObstacle 코리도어 샘플 박스(충돌=빨강/통과=초록)
+    std::vector<RenderObject> m_bboxDebugRenders; // TryAvoidObstacle 바운딩박스 샘플 박스(충돌=빨강/통과=초록)
 };
 
 static float CalcMaxSteerAngle(float speed)

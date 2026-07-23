@@ -45,7 +45,7 @@ namespace HybridAStar
                               const Params &params = {});
 
     // position/headingRad에 있는 차량(shape)이 obstacles 중 하나와 겹치면 true. 검색 트리 확장 없이
-    // 단발 충돌판정만 필요한 곳(예: 주행 중 실시간 회피의 코리도어 스윕)에서 재사용하려고 공개해둔다.
+    // 단발 충돌판정만 필요한 곳(예: 주행 중 실시간 회피의 바운딩박스 스윕)에서 재사용하려고 공개해둔다.
     bool IsColliding(const Vec3 &position, float headingRad,
                      const std::vector<Obstacle> &obstacles, const VehicleShape &shape);
 }

@@ -993,7 +993,7 @@ bool Car::TryAvoidObstacle()
     {
         m_avoidLateralOffset = 0.0f;
         m_obstacleAheadGap = -1.0f;
-        return false; // 코리도어 궤적 전체가 깨끗함
+        return false; // 바운딩박스 궤적 전체가 깨끗함
     }
     float collisionDistance = collideIndex * AVOID_SAMPLE_STEP;
 
