@@ -1,7 +1,6 @@
 #include "Car.h"
 #include "Core/Physics/PhysicsSystem.h"
 #include "Rendering/Effects.h"
-#include "Nav/CarFollowing.h"
 #include <ModelManager.h>
 #include <algorithm>
 #include <cmath>
@@ -48,9 +47,6 @@ void Car::Init(const CarSpec &spec, RoadDataManager *roadDataManager, JPH::Vec3 
     m_parkSpot->position = GetPosition();
     m_parkSpot->direction = GetForwardAxis();
     m_parkSpot->nodeType = RoadNodeType::ParkSpot;
-
-    m_roadConstraints.clear();
-    m_lastConstraintScanTime = 0.0f;
 
     // DEBUG
     DebugInit();
@@ -131,7 +127,7 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
     }
 
     if ((m_rearTrailRender.GetModel() || m_frontTrailRender.GetModel() || m_splineRender.GetModel() ||
-         m_parkPathRender.GetModel() || m_parkTargetLine.GetModel() || !m_bboxDebugRenders.empty()))
+         m_parkPathRender.GetModel() || m_parkTargetLine.GetModel()))
     {
         if (auto *pBasic = dynamic_cast<BasicEffect *>(&effect))
         {
@@ -146,9 +142,6 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
                 m_parkPathRender.Draw(context, effect);
             if (m_parkTargetLine.GetModel())
                 m_parkTargetLine.Draw(context, effect);
-            for (RenderObject &bboxRender : m_bboxDebugRenders)
-                if (bboxRender.GetModel())
-                    bboxRender.Draw(context, effect);
             pBasic->SetRenderDefault();
         }
     }
@@ -309,11 +302,7 @@ void Car::SetCurrentLane(const shared_ptr<Lane> &lane)
 {
     if (m_currentLane == lane)
         return;
-    if (m_currentLane != nullptr)
-        m_currentLane->UnregisterCar(this);
     m_currentLane = lane;
-    if (m_currentLane != nullptr)
-        m_currentLane->RegisterCar(this);
 
     RebuildSplineRender();
 }
@@ -452,307 +441,6 @@ void Car::RescanRoadSpeedConstraints()
     m_lastConstraintScanTime = m_currentTime;
 }
 
-CarFollowing::Params Car::BuildIdmParams(float v0) const
-{
-    CarFollowing::Params idmParams;
-    idmParams.v0 = v0;
-    idmParams.T = IDM_TIME_HEADWAY;
-    idmParams.s0 = IDM_STANDSTILL_DISTANCE;
-    idmParams.a = m_maxAccel;
-    idmParams.b = m_maxBrake;
-    idmParams.delta = IDM_ACCEL_EXPONENT;
-    idmParams.coolness = IDM_COOLNESS;
-    return idmParams;
-}
-
-void Car::WalkConnectedLanes(const shared_ptr<Lane> &rootLane, float rootPosition,
-                             const std::function<void(Car *, float)> &visitor) const
-{
-    // 어떤 레인 위의 차들을 스캔해서 u(root 기준 통일 거리)와 함께 visitor에 넘긴다.
-    // backward=false: entryOffset은 lane 시작점의 u (u = entryOffset + p).
-    // backward=true : entryOffset은 lane 끝점의 u (u = entryOffset - length + p).
-    auto scanLaneCars = [&](const shared_ptr<Lane> &lane, float entryOffset, bool backward)
-    {
-        const Spline &spline = lane->GetSpline();
-        float length = lane->GetLength();
-        for (Car *other : lane->GetCars())
-        {
-            if (other == this)
-                continue;
-
-            Vec3 otherPos = other->GetPosition();
-            float t = spline.GetSplinePosition(otherPos);
-            if ((otherPos - spline.GetPositionAt(t)).Length() > LANE_ENTRY_THRESHOLD)
-                continue;
-
-            float p = t * length;
-            float u = backward ? (entryOffset - length + p) : (entryOffset + p);
-            visitor(other, u);
-        }
-    };
-
-    std::unordered_set<Lane *> visited;
-    visited.insert(rootLane.get());
-    scanLaneCars(rootLane, -rootPosition, /*backward=*/false); // rootLane 자신: u = p - rootPosition
-
-    // 정방향(successor)/역방향(predecessor) 예산 기반 그래프 탐색. 스택 기반이라 사이클/깊은 체인에도
-    // 안전(재귀 깊이 제한 없음).
-    struct WorkItem
-    {
-        shared_ptr<Lane> lane;
-        float entryOffset;
-        float remainingBudget;
-        bool backward;
-        Lane *excludeBranch; // backward 탐색 시 방금 거쳐온(되돌아가지 않을) 레인
-    };
-    std::vector<WorkItem> stack;
-
-    // 속도가 빠를수록 더 멀리 봐야 하므로 speed*time 기반, 저속/정지 시엔 최소값으로 바닥을 둔다.
-    float searchForward = std::max(MOBIL_SEARCH_FORWARD_MIN, m_speed * MOBIL_SEARCH_FORWARD_TIME);
-    float searchBackward = std::max(MOBIL_SEARCH_BACKWARD_MIN, m_speed * MOBIL_SEARCH_BACKWARD_TIME);
-
-    float rootRemaining = rootLane->GetLength() - rootPosition;
-    stack.push_back({rootLane, rootRemaining, searchForward - rootRemaining, false, nullptr});
-    stack.push_back({rootLane, -rootPosition, searchBackward, true, nullptr});
-
-    while (!stack.empty())
-    {
-        WorkItem item = std::move(stack.back());
-        stack.pop_back();
-        if (item.remainingBudget <= 0.0f)
-            continue;
-
-        if (!item.backward)
-        {
-            for (const weak_ptr<Lane> &succWeak : item.lane->GetSuccessors())
-            {
-                shared_ptr<Lane> succ = succWeak.lock();
-                if (!succ || visited.count(succ.get()))
-                    continue;
-                visited.insert(succ.get());
-                scanLaneCars(succ, item.entryOffset, false);
-
-                // 3-(b): succ로 들어오는 다른 predecessor(방금 온 item.lane 제외) -- 이 분기점에서 남은
-                // forward 예산과 같은 값으로 역방향 탐색(합류 지점 차량을 내 진행경로 연장으로 취급).
-                stack.push_back({succ, item.entryOffset, item.remainingBudget, true, item.lane.get()});
-
-                float childRemaining = item.remainingBudget - succ->GetLength();
-                stack.push_back({succ, item.entryOffset + succ->GetLength(), childRemaining, false, nullptr});
-            }
-        }
-        else
-        {
-            for (const weak_ptr<Lane> &predWeak : item.lane->GetPredecessors())
-            {
-                shared_ptr<Lane> pred = predWeak.lock();
-                if (!pred || pred.get() == item.excludeBranch || visited.count(pred.get()))
-                    continue;
-                visited.insert(pred.get());
-                scanLaneCars(pred, item.entryOffset, true);
-
-                float childRemaining = item.remainingBudget - pred->GetLength();
-                stack.push_back({pred, item.entryOffset - pred->GetLength(), childRemaining, true, nullptr});
-            }
-        }
-    }
-}
-
-void Car::FindGraphNeighbors(const shared_ptr<Lane> &rootLane, float rootPosition,
-                             LaneNeighbor &outLeader, LaneNeighbor &outFollower) const
-{
-    outLeader = LaneNeighbor{};
-    outFollower = LaneNeighbor{};
-
-    WalkConnectedLanes(rootLane, rootPosition, [&](Car *car, float u)
-                       {
-        if (u >= 0.0f)
-        {
-            if (outLeader.car == nullptr || u < outLeader.position)
-                outLeader = {car, u};
-        }
-        else
-        {
-            if (outFollower.car == nullptr || u > outFollower.position)
-                outFollower = {car, u};
-        } });
-}
-
-std::vector<Car *> Car::CollectNearbyCars(const shared_ptr<Lane> &rootLane, float rootPosition) const
-{
-    std::vector<Car *> cars;
-    WalkConnectedLanes(rootLane, rootPosition, [&](Car *car, float /*u*/)
-                       { cars.push_back(car); });
-    return cars;
-}
-
-// 레인 연결 여부와 무관하게, 전체 레인의 등록 차량 중 순수 물리적 거리(반경)로만 후보를 모은다(자신
-// 제외) -- 차선변경 중 옆 레인 차처럼 레인 그래프(WalkConnectedLanes)로는 안 잡히는 상대도 잡기 위함.
-std::vector<Car *> Car::CollectCarsWithinRadius(float radius) const
-{
-    std::vector<Car *> cars;
-    Vec3 position = GetPosition();
-    for (const shared_ptr<Lane> &lane : m_RoadDataManager->GetLanes())
-    {
-        for (Car *other : lane->GetCars())
-        {
-            if (other != this && (other->GetPosition() - position).Length() <= radius)
-                cars.push_back(other);
-        }
-    }
-    return cars;
-}
-
-Mobil::VehicleState Car::ToVehicleState(const LaneNeighbor &n) const
-{
-    return Mobil::VehicleState{n.car->GetSpeed(), n.car->GetAcceleration(), n.position, n.car->GetLength()};
-}
-
-bool Car::FindNearestObstacleOnLane(const shared_ptr<Lane> &lane, float rootPosition, Mobil::VehicleState &out) const
-{
-    const Spline &spline = lane->GetSpline();
-    float length = lane->GetLength();
-    float searchForward = std::max(MOBIL_SEARCH_FORWARD_MIN, m_speed * MOBIL_SEARCH_FORWARD_TIME);
-
-    bool found = false;
-    float bestPosition = 0.0f;
-    float bestLength = 0.0f;
-    // LANE_ENTRY_THRESHOLD(차량-레인 매칭용, 레인 폭과 거의 같음)를 그대로 쓰면 인접 레인 중심선까지의
-    // 거리(ROAD_WIDTH)보다 판정 반경이 커져 장애물 하나가 옆 레인에서도 겹쳐 걸린다 -- 그러면 옆으로
-    // 옮겨도 똑같이 막힌 것처럼 보여 MOBIL 유인이 안 생긴다. 레인 폭의 절반으로 좁혀 옆 레인과
-    // 겹치지 않게 한다.
-    constexpr float LANE_HALF_WIDTH = RoadDataManager::ROAD_WIDTH * 0.5f;
-    for (const VehicleCollision::Obstacle &obstacle : m_RoadDataManager->GetObstacles())
-    {
-        float t = spline.GetSplinePosition(obstacle.center);
-        if ((obstacle.center - spline.GetPositionAt(t)).Length() > LANE_HALF_WIDTH)
-            continue;
-
-        float u = t * length - rootPosition;
-        if (u < 0.0f || u > searchForward)
-            continue;
-
-        if (!found || u < bestPosition)
-        {
-            found = true;
-            bestPosition = u;
-            bestLength = obstacle.halfLength * 2.0f;
-        }
-    }
-
-    if (!found)
-        return false;
-
-    out = Mobil::VehicleState{0.0f, 0.0f, bestPosition, bestLength}; // 정지한 가상 차량 취급
-    return true;
-}
-
-// carLeader(실제 앞차)와 그 레인 위 정적 장애물 중 더 가까운 쪽을 MOBIL 리더로 반환한다. 둘 다 없으면
-// laneLimitSpeed로 달리는 가상 리더(뚫린 도로 기준선).
-Mobil::VehicleState Car::BuildLeaderState(const shared_ptr<Lane> &lane, float rootPosition, const LaneNeighbor &carLeader,
-                                          float laneLimitSpeed) const
-{
-    constexpr float VIRTUAL_LEADER_GAP = 100000.0f;
-
-    Mobil::VehicleState obstacleState;
-    bool hasObstacle = FindNearestObstacleOnLane(lane, rootPosition, obstacleState);
-
-    if (carLeader.car != nullptr)
-    {
-        Mobil::VehicleState carState = ToVehicleState(carLeader);
-        return (hasObstacle && obstacleState.position < carState.position) ? obstacleState : carState;
-    }
-
-    if (hasObstacle)
-        return obstacleState;
-
-    return Mobil::VehicleState{laneLimitSpeed, 0.0f, VIRTUAL_LEADER_GAP, 0.0f};
-}
-
-void Car::DriveSpeedIDM(float steerSpeedCap)
-{
-    // 주기 재스캔: 곡률 스캔은 비교적 무거우니 매 틱이 아니라 LOOK_PROFILE_TIME/SPEED_PROFILE_COUNT마다,
-    // 또는 경로를 벗어난 것으로 감지되면(다음 재스캔까지 기다리지 않고) 갱신한다.
-    constexpr float RESCAN_INTERVAL = LOOK_PROFILE_TIME / SPEED_PROFILE_COUNT;
-    if (IsOffCourse() || m_currentTime - m_lastConstraintScanTime >= RESCAN_INTERVAL)
-        RescanRoadSpeedConstraints();
-
-    float v0 = std::min({m_maxSpeed, m_currentLane->GetLimitSpeed(), steerSpeedCap});
-    CarFollowing::Params idmParams = BuildIdmParams(v0);
-
-    // 개방도로(앞을 막는 지점이 전혀 없는) 기준선 -- gap을 아주 크게 줘서 CarFollowing이 자유흐름
-    // 가속도(a_free)로 수렴하게 한다.
-    constexpr float OPEN_ROAD_GAP = 100000.0f;
-    Vec3 position = GetPosition();
-    float accel = CarFollowing::CalculateAcceleration(m_speed, m_acceleration, v0, 0.0f, OPEN_ROAD_GAP, idmParams);
-    std::string brakeCause = "free flow (v0 = " + std::to_string(v0) + ")";
-
-    // 캐시된 도로 제약(커브/레인 제한속도/정지점)을 각각 정지/저속 가상 리더로 보고, 그중 가장
-    // 보수적인(작은) 가속도를 채택한다 -- 앞에 여러 제약이 겹쳐 있어도 가장 급한 것에 맞춰 미리 감속한다.
-    for (const RoadSpeedSample &sample : m_roadConstraints)
-    {
-        float gap = (sample.position - position).Length();
-        float constrainedAccel = CarFollowing::CalculateAcceleration(m_speed, m_acceleration, sample.speed, 0.0f, gap, idmParams);
-        if (constrainedAccel < accel)
-        {
-            accel = constrainedAccel;
-            brakeCause = "road constraint (target speed = " + std::to_string(sample.speed) + ", gap = " + std::to_string(gap) + ")";
-        }
-    }
-
-    // 연결된 차선까지 넓혀 찾은 실제 앞차(합류 지점 등 다른 레인 위의 차 포함): MOBIL이 이 차를 근거로
-    // 차선변경을 판단하는 것과 일관되게, 실제로도 이 차를 향해 감속해야 뚫고 지나가지 않는다.
-    float egoLanePos = m_currentLane->GetSpline().GetSplinePosition(position) * m_currentLane->GetLength();
-    LaneNeighbor leader, follower;
-    FindGraphNeighbors(m_currentLane, egoLanePos, leader, follower);
-    if (leader.car != nullptr)
-    {
-        // leader.position은 이미 egoLanePos 기준 상대 거리(u)라 다시 뺄 필요 없음.
-        float gap = leader.position - leader.car->GetLength();
-        float leaderAccel = CarFollowing::CalculateAcceleration(m_speed, m_acceleration, leader.car->GetSpeed(),
-                                                                leader.car->GetAcceleration(), gap, idmParams);
-        if (leaderAccel < accel)
-        {
-            accel = leaderAccel;
-            brakeCause = "leading car " + leader.car->GetName() + " (gap = " + std::to_string(gap) + ")";
-        }
-    }
-
-    // ScanBBoxObstacleGap이 경로 폭 안에서 찾아둔 최근접 정적/동적 장애물을 가상 선행차량으로 취급해
-    // 감속한다. 속도는 m_obstacleAheadSpeed(장애물 속도를 내 진행방향에 투영한 성분) -- 정적 장애물은
-    // 0이라 자동으로 정지 취급되고, 동적(차)은 실제로 다가오는/멀어지는 정도가 반영된다. s0는 일반
-    // 차량 추종용(IDM_STANDSTILL_DISTANCE)보다 작게 따로 둔다 -- 정적 장애물은 다른 차만큼 넉넉한
-    // 여유를 안 두고 더 붙어도 된다.
-    if (m_obstacleAheadGap >= 0.0f)
-    {
-        CarFollowing::Params obstacleParams = idmParams;
-        obstacleParams.s0 = AVOID_OBSTACLE_STANDSTILL_DISTANCE;
-        float obstacleAccel = CarFollowing::CalculateAcceleration(m_speed, m_acceleration, m_obstacleAheadSpeed, 0.0f,
-                                                                   m_obstacleAheadGap, obstacleParams);
-        if (obstacleAccel < accel)
-        {
-            accel = obstacleAccel;
-            brakeCause = "bbox obstacle (gap = " + std::to_string(m_obstacleAheadGap) + ", speed = " +
-                        std::to_string(m_obstacleAheadSpeed) + ")";
-        }
-    }
-
-    // 제동(accel < 0) 시작/원인 변경 시점에만 로그 -- 매 프레임 찍으면 스팸이 되므로 원인이 바뀔
-    // 때만(비제동 -> 제동 포함) 기록하고, 제동이 풀리면 다음 제동 때 다시 찍히도록 초기화한다.
-    if (accel < 0.0f)
-    {
-        if (m_lastBrakeCause != brakeCause)
-        {
-            // DebugConsole::Log(GetName() + ": braking (accel = " + std::to_string(accel) + ") due to " + brakeCause);
-            m_lastBrakeCause = brakeCause;
-        }
-    }
-    else
-    {
-        m_lastBrakeCause.clear();
-    }
-
-    m_acceleration = accel;
-}
 
 void Car::UpdateCar()
 {
@@ -1014,73 +702,6 @@ void Car::RebuildRSDebugRender(const ReedsShepp::Path &path, const Vec3 &startPo
     m_parkTargetLine.SetModel(pTargetLineModel);
 }
 
-// TryAvoidObstacle이 SimulateBBTrajectory로 예측한 궤적을 그대로 훑어 전부 박스 윤곽선으로
-// 그린다(첫 충돌에서 멈추지 않음) — 충돌한 샘플은 빨강, 통과한 샘플은 초록.
-void Car::RebuildBBDebugRender(const std::vector<Vec3> &positions, const std::vector<Vec3> &directions,
-                               const std::vector<VehicleCollision::Obstacle> &obstacles,
-                               const VehicleCollision::VehicleShape &shape)
-{
-    constexpr float DEBUG_LINE_HEIGHT = 0.15f;
-
-    m_bboxDebugRenders.clear();
-    for (size_t sampleIndex = 0; sampleIndex < positions.size(); ++sampleIndex)
-    {
-        const Vec3 &samplePos = positions[sampleIndex];
-        const Vec3 &sampleDir = directions[sampleIndex];
-        float headingRad = atan2f(sampleDir.GetZ(), sampleDir.GetX());
-        bool colliding = VehicleCollision::IsColliding(samplePos, headingRad, obstacles, shape);
-
-        // IsColliding과 동일하게, 실제 충돌판정 박스 중심은 pivot(samplePos)에서 heading 방향으로
-        // pivotToCenter만큼 떨어진 지점이다.
-        Vec3 forward(cosf(headingRad), 0.0f, sinf(headingRad));
-        Vec3 right(-forward.GetZ(), 0.0f, forward.GetX());
-        Vec3 bodyCenter = samplePos + forward * shape.pivotToCenter;
-
-        auto corner = [&](float alongSign, float acrossSign)
-        {
-            DirectX::XMFLOAT3 p = ToXMFLOAT3(bodyCenter + forward * (shape.halfLength * alongSign) + right * (shape.halfWidth * acrossSign));
-            p.y += DEBUG_LINE_HEIGHT;
-            return p;
-        };
-        std::vector<DirectX::XMFLOAT3> corners = {
-            corner(1.0f, 1.0f), corner(1.0f, -1.0f), corner(-1.0f, -1.0f), corner(-1.0f, 1.0f), corner(1.0f, 1.0f)};
-
-        Model *pModel = ModelManager::Get().CreateFromGeometry(
-            "__bbox_bbox__:" + GetName() + ":" + std::to_string(sampleIndex), Geometry::CreatePolyline(corners));
-        DirectX::XMFLOAT4 color = colliding ? DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f) : DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f);
-        pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", color);
-        pModel->materials[0].Set<float>("$Opacity", 1.0f);
-
-        RenderObject &render = m_bboxDebugRenders.emplace_back();
-        render.SetModel(pModel);
-    }
-}
-
-// IsParkObstacleAhead의 부채꼴 레이 하나하나를 선으로 그린다 -- 맞은 레이는 히트 지점까지만(빨강),
-// 안 맞은 레이는 최대 거리까지 전부(초록) 그려서 어디서 걸렸는지 한눈에 보이게 한다.
-void Car::RebuildParkRayDebugRender(const std::vector<Vec3> &rayStarts, const std::vector<Vec3> &rayEnds,
-                                    const std::vector<bool> &hits)
-{
-    constexpr float DEBUG_LINE_HEIGHT = 0.15f;
-
-    m_bboxDebugRenders.clear();
-    for (size_t i = 0; i < rayStarts.size(); ++i)
-    {
-        DirectX::XMFLOAT3 lineStart = ToXMFLOAT3(rayStarts[i]);
-        DirectX::XMFLOAT3 lineEnd = ToXMFLOAT3(rayEnds[i]);
-        lineStart.y += DEBUG_LINE_HEIGHT;
-        lineEnd.y += DEBUG_LINE_HEIGHT;
-
-        Model *pModel = ModelManager::Get().CreateFromGeometry(
-            "__park_ray__:" + GetName() + ":" + std::to_string(i), Geometry::CreateLine(lineStart, lineEnd));
-        DirectX::XMFLOAT4 color = hits[i] ? DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f) : DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f);
-        pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", color);
-        pModel->materials[0].Set<float>("$Opacity", 1.0f);
-
-        RenderObject &render = m_bboxDebugRenders.emplace_back();
-        render.SetModel(pModel);
-    }
-}
 
 void Car::SetDestination(const shared_ptr<RoadNode> &destNode)
 {
