@@ -151,23 +151,9 @@ private:
     bool CheckPath();
     bool TryLaneChange(bool ignoreCooldown = false);
 
-    // 다른 차와 진행경로가 겹쳤을 때 누가 양보할지 정하는 우선순위: 직진 > 차선변경 > 회전(급커브).
-    // 값이 작을수록 우선순위가 높다(= 낮은 값이 이긴다). ScanBBoxObstacleGap이 상대 차의 우선순위가
-    // 자신보다 낮으면(값이 크면) 그 차를 장애물 취급에서 제외해 진행시킨다.
-    enum class ManeuverPriority
-    {
-        Straight = 0,   // 직진 -- 최우선
-        LaneChange = 1, // 차선변경 직후 일정 시간 -- 차선변경 중으로 간주
-        Turning = 2,    // 급커브(교차로 회전 등) 진행 중 -- 최하위
-    };
-    // 지금 이 차가 어떤 상태로 취급되는지: 최근 차선변경 직후면 LaneChange, 진행경로 앞쪽 곡률이
-    // TURN_RADIUS_THRESHOLD보다 작으면 Turning, 그 외에는 Straight.
-    ManeuverPriority GetManeuverPriority() const;
-
     // SimulateBBoxTrajectory 전방 sweep으로 정적+동적(주변 차량) 장애물을 검사해 최근접 충돌까지의 거리를
     // 반환한다(없으면 -1). DriveSpeedIDM이 이 값을 정지한 가상 리더로 취급. RebuildBBDebugRender로 디버그
-    // 렌더링도 갱신하므로 const가 아니다. 우선순위가 자신보다 낮은 상대 차는 애초에 장애물 목록에서
-    // 제외한다(양보 관계가 한쪽으로만 성립하게 해 맞물림 데드락을 줄임).
+    // 렌더링도 갱신하므로 const가 아니다.
     float ScanBBoxObstacleGap();
     void GetLookaheadPose(const Spline *startSpline, const shared_ptr<Lane> &startLane, size_t startPathIndex,
                           const Vec3 &fromPosition, float distance, Vec3 &outPosition, Vec3 &outDirection) const;
@@ -229,8 +215,20 @@ private:
                             LaneNeighbor &outLeader, LaneNeighbor &outFollower) const;
     Mobil::VehicleState ToVehicleState(const LaneNeighbor &n) const;
     // WalkConnectedLanes가 훑는 것과 같은 연결된 차선 집합에서 차량 목록만 모아 반환한다
-    // (ScanBBoxObstacleGap이 바운딩박스 동적 장애물 후보 풀로 재사용).
+    // (IsParkObstacleAhead가 동적 장애물 후보 풀로 재사용).
     std::vector<Car *> CollectNearbyCars(const shared_ptr<Lane> &rootLane, float rootPosition) const;
+    // 레인 연결 여부와 무관하게, 전체 레인의 등록 차량 중 반경 안의 차만 모은다(자신 제외).
+    // ScanBBoxObstacleGap의 bbox 동적 장애물 후보 풀 -- 차선변경 중 옆 레인 차처럼 레인 그래프로는
+    // 안 잡히는 상대까지 잡기 위해 CollectNearbyCars 대신 이걸 쓴다.
+    std::vector<Car *> CollectCarsWithinRadius(float radius) const;
+    // lane 위에서 rootPosition(그 레인 자신의 누적 거리 기준) 앞쪽으로 MOBIL 탐색 예산 안에 있는 가장
+    // 가까운 정적 장애물을 찾아 Mobil::VehicleState(정지 차량 취급)로 채운다. 레인 폭 절반 밖(=다른
+    // 레인 소속)의 장애물은 걸러낸다. 없으면 false.
+    bool FindNearestObstacleOnLane(const shared_ptr<Lane> &lane, float rootPosition, Mobil::VehicleState &out) const;
+    // carLeader(실제 앞차)와 그 레인 위 정적 장애물 중 더 가까운 쪽을 MOBIL 리더로 반환한다. 둘 다
+    // 없으면 laneLimitSpeed로 달리는 가상 리더(뚫린 도로).
+    Mobil::VehicleState BuildLeaderState(const shared_ptr<Lane> &lane, float rootPosition, const LaneNeighbor &carLeader,
+                                         float laneLimitSpeed) const;
 
 public:
     // 차선 진입 허용 오차/임계값 (예: 현재 타깃 차선에 안착했는지 확인하는 기준)
@@ -271,29 +269,28 @@ private:
     unordered_set<int> m_triedParkSpotIds; // 이번 입차에서 경로탐색이 실패해 이미 시도해본 ParkSpot id들
     bool m_parkPlanPending = false;
 
-    float m_avoidLateralOffset = 0.0f;                                // 회피용 좌우 오프셋(+우/-좌, m). DriveControl이 조준점에 더한다. (예정된 Reynolds 회피가 채울 자리 -- 현재는 항상 0)
-    float m_obstacleAheadGap = -1.0f;                                 // ScanBBoxObstacleGap이 찾은, 경로 폭 안 최근접 장애물까지의 범퍼 대 범퍼 거리(m). 없으면 -1. DriveSpeedIDM이 가상 정지 리더로 사용.
-    std::string m_lastBrakeCause;                                     // DriveSpeedIDM 제동 로그 중복 방지용(비어있으면 비제동 상태).
-    static constexpr float AVOID_DETECT_DISTANCE = 20.0f;             // 박스캐스트 바운딩박스 스윕 길이 (전방 감지 거리)
-    static constexpr float AVOID_SAMPLE_STEP = 2.0f;                  // 바운딩박스 스윕을 따라 박스를 검사하는 간격
-    static constexpr float PARK_OBSTACLE_DETECT_DISTANCE = 5.0f;      // IsParkObstacleAhead 레이 길이 -- RS 저속 매뉴버라 짧게만 봐도 충분
+    float m_avoidLateralOffset = 0.0f;                                      // 회피용 좌우 오프셋(+우/-좌, m). DriveControl이 조준점에 더한다. (예정된 Reynolds 회피가 채울 자리 -- 현재는 항상 0)
+    float m_obstacleAheadGap = -1.0f;                                       // ScanBBoxObstacleGap이 찾은, 경로 폭 안 최근접 장애물까지의 범퍼 대 범퍼 거리(m). 없으면 -1. DriveSpeedIDM이 가상 리더 gap으로 사용.
+    float m_obstacleAheadSpeed = 0.0f;                                      // 위 장애물의 속도를 내 진행방향에 투영한 성분(m/s). 정적 장애물이면 0. m_obstacleAheadGap이 -1이면 의미 없음.
+    std::string m_lastBrakeCause;                                           // DriveSpeedIDM 제동 로그 중복 방지용(비어있으면 비제동 상태).
+    static constexpr float AVOID_DETECT_DISTANCE = 20.0f;                   // 박스캐스트 바운딩박스 스윕 길이 (전방 감지 거리)
+    static constexpr float AVOID_SAMPLE_STEP = 2.0f;                        // 바운딩박스 스윕을 따라 박스를 검사하는 간격
+    // CollectCarsWithinRadius 검색 반경 -- bbox 스윕이 실제로 닿는 범위(AVOID_DETECT_DISTANCE)보다
+    // 여유를 둔다(후보만 좁히는 용도라 정밀할 필요 없음, 실제 충돌 여부는 OBB 검사가 가른다).
+    static constexpr float NEARBY_CAR_SEARCH_RADIUS = AVOID_DETECT_DISTANCE + 10.0f;
+    static constexpr float PARK_OBSTACLE_DETECT_DISTANCE = 5.0f;            // IsParkObstacleAhead 레이 길이 -- RS 저속 매뉴버라 짧게만 봐도 충분
     static constexpr float PARK_OBSTACLE_FAN_HALF_ANGLE = ToRadians(35.0f); // IsParkObstacleAhead 부채꼴의 좌우 반각(중앙 기준)
-    static constexpr int PARK_OBSTACLE_FAN_RAY_COUNT = 5;             // IsParkObstacleAhead 부채꼴 레이 개수(홀수면 정중앙 레이 포함)
-    static constexpr float AVOID_OBSTACLE_STANDSTILL_DISTANCE = 0.5f; // 장애물 가상 리더용 s0 -- 일반 차량 추종(IDM_STANDSTILL_DISTANCE=2m)보다 더 붙어도 되게 별도로 둔다.
-
-    // GetManeuverPriority 판정용
-    static constexpr float LANE_CHANGE_PRIORITY_WINDOW = 3.0f; // 차선변경 직후 이 시간(초) 동안은 LaneChange로 간주
-    static constexpr float TURN_RADIUS_THRESHOLD = 25.0f;      // 진행경로 곡률 반경(m)이 이보다 작으면 Turning으로 간주
-    static constexpr float TURN_LOOKAHEAD_WINDOW = 0.15f;      // GetMinRadiusAhead 조회용 t-window(현재 위치 기준 전후)
+    static constexpr int PARK_OBSTACLE_FAN_RAY_COUNT = 5;                   // IsParkObstacleAhead 부채꼴 레이 개수(홀수면 정중앙 레이 포함)
+    static constexpr float AVOID_OBSTACLE_STANDSTILL_DISTANCE = 1.0f;       // 장애물 가상 리더용 s0 -- 일반 차량 추종(IDM_STANDSTILL_DISTANCE=2m)보다 더 붙어도 되게 별도로 둔다.
 
     // bbox 장애물로 인한 데드락 강제 탈출용: 정지 상태(m_speed < STALL_SPEED_THRESHOLD)로
     // OBSTACLE_STALL_TIMEOUT초 이상 묶여 있으면, FORCED_ESCAPE_DURATION초 동안 bbox 장애물 감지를
-    // 무시하고 진행해 우선순위가 같아 서로 양보만 하는 맞물림 상태를 풀어준다.
+    // 무시하고 진행해 서로 양보만 하는 맞물림 상태를 풀어준다.
     static constexpr float STALL_SPEED_THRESHOLD = 0.3f;
     static constexpr float OBSTACLE_STALL_TIMEOUT = 5.0f;
     static constexpr float FORCED_ESCAPE_DURATION = 3.0f;
-    float m_obstacleStallTime = 0.0f;  // bbox 장애물에 막혀 정지 상태로 있은 누적 시간
-    float m_forcedEscapeTimer = 0.0f;  // > 0이면 강제 탈출 중(bbox 장애물 무시), 매 틱 감소
+    float m_obstacleStallTime = 0.0f; // bbox 장애물에 막혀 정지 상태로 있은 누적 시간
+    float m_forcedEscapeTimer = 0.0f; // > 0이면 강제 탈출 중(bbox 장애물 무시), 매 틱 감소
 
     vector<LaneStep> m_path;
     size_t m_pathIndex = 0;
@@ -318,6 +315,7 @@ private:
     static constexpr float MOBIL_THRESHOLD = 0.2f;     // a_thr
     static constexpr float MOBIL_EVAL_INTERVAL = 2.0f; // MOBIL 재평가 주기
     float m_lastLaneChangeTime = 0.0f;
+    bool m_hadObstacleAhead = false; // 직전 틱에 현재 레인에 장애물 리더가 있었는지 -- 새로 나타나면 TryLaneChange가 쿨다운을 건너뛰고 즉시 재평가.
 
     // FindGraphNeighbors가 successor/predecessor를 타고 넘어가는 탐색 예산(레인 그래프 누적 거리, m).
     // 속도가 빠를수록 더 멀리 봐야 하므로 speed*time 기반으로 계산하고(WalkConnectedLanes), 저속/정지

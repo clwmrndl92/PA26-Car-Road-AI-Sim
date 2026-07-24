@@ -65,8 +65,8 @@ namespace VehicleCollision
         }
     }
 
-    bool IsColliding(const Vec3 &position, float headingRad,
-                     const std::vector<Obstacle> &obstacles, const VehicleShape &shape)
+    const Obstacle *FindColliding(const Vec3 &position, float headingRad,
+                                  const std::vector<Obstacle> &obstacles, const VehicleShape &shape)
     {
         Vec3 forward(std::cos(headingRad), 0.0f, std::sin(headingRad));
         Vec3 bodyCenter = position + forward * shape.pivotToCenter;
@@ -75,9 +75,15 @@ namespace VehicleCollision
         {
             if (ObbOverlap(bodyCenter, shape.halfLength, shape.halfWidth, headingRad,
                            obstacle.center, obstacle.halfLength, obstacle.halfWidth, obstacle.headingRad))
-                return true;
+                return &obstacle;
         }
-        return false;
+        return nullptr;
+    }
+
+    bool IsColliding(const Vec3 &position, float headingRad,
+                     const std::vector<Obstacle> &obstacles, const VehicleShape &shape)
+    {
+        return FindColliding(position, headingRad, obstacles, shape) != nullptr;
     }
 
     float RaycastObstacles(const Vec3 &origin, float directionRad, float maxDistance,

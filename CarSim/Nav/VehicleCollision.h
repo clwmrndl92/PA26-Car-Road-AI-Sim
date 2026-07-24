@@ -13,6 +13,7 @@ namespace VehicleCollision
         float halfLength;
         float halfWidth;
         float headingRad = 0.0f;
+        float speed = 0.0f; // headingRad 방향 기준 스칼라 속도. 정적 장애물은 0(기본값)로 둔다.
     };
 
     struct VehicleShape
@@ -25,6 +26,11 @@ namespace VehicleCollision
     // position/headingRad에 있는 차량(shape)이 obstacles 중 하나와 겹치면 true.
     bool IsColliding(const Vec3 &position, float headingRad,
                      const std::vector<Obstacle> &obstacles, const VehicleShape &shape);
+
+    // IsColliding과 같은 판정이지만, 겹친 obstacle을 직접 가리키는 포인터를 반환한다(없으면 nullptr).
+    // 어떤 장애물과 부딪혔는지(그리고 그 obstacle.speed)를 알아야 하는 호출부용.
+    const Obstacle *FindColliding(const Vec3 &position, float headingRad,
+                                  const std::vector<Obstacle> &obstacles, const VehicleShape &shape);
 
     // origin에서 directionRad 방향(XZ 평면, y 무시)으로 뻗은 반직선이 obstacles 중 하나와 만나는
     // 가장 가까운 거리(0 이상)를 반환한다. maxDistance 안에 아무것도 안 맞으면 -1.

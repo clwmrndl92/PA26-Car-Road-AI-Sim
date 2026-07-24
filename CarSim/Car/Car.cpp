@@ -585,9 +585,87 @@ std::vector<Car *> Car::CollectNearbyCars(const shared_ptr<Lane> &rootLane, floa
     return cars;
 }
 
+// 레인 연결 여부와 무관하게, 전체 레인의 등록 차량 중 순수 물리적 거리(반경)로만 후보를 모은다(자신
+// 제외) -- 차선변경 중 옆 레인 차처럼 레인 그래프(WalkConnectedLanes)로는 안 잡히는 상대도 잡기 위함.
+std::vector<Car *> Car::CollectCarsWithinRadius(float radius) const
+{
+    std::vector<Car *> cars;
+    Vec3 position = GetPosition();
+    for (const shared_ptr<Lane> &lane : m_RoadDataManager->GetLanes())
+    {
+        for (Car *other : lane->GetCars())
+        {
+            if (other != this && (other->GetPosition() - position).Length() <= radius)
+                cars.push_back(other);
+        }
+    }
+    return cars;
+}
+
 Mobil::VehicleState Car::ToVehicleState(const LaneNeighbor &n) const
 {
     return Mobil::VehicleState{n.car->GetSpeed(), n.car->GetAcceleration(), n.position, n.car->GetLength()};
+}
+
+bool Car::FindNearestObstacleOnLane(const shared_ptr<Lane> &lane, float rootPosition, Mobil::VehicleState &out) const
+{
+    const Spline &spline = lane->GetSpline();
+    float length = lane->GetLength();
+    float searchForward = std::max(MOBIL_SEARCH_FORWARD_MIN, m_speed * MOBIL_SEARCH_FORWARD_TIME);
+
+    bool found = false;
+    float bestPosition = 0.0f;
+    float bestLength = 0.0f;
+    // LANE_ENTRY_THRESHOLD(차량-레인 매칭용, 레인 폭과 거의 같음)를 그대로 쓰면 인접 레인 중심선까지의
+    // 거리(ROAD_WIDTH)보다 판정 반경이 커져 장애물 하나가 옆 레인에서도 겹쳐 걸린다 -- 그러면 옆으로
+    // 옮겨도 똑같이 막힌 것처럼 보여 MOBIL 유인이 안 생긴다. 레인 폭의 절반으로 좁혀 옆 레인과
+    // 겹치지 않게 한다.
+    constexpr float LANE_HALF_WIDTH = RoadDataManager::ROAD_WIDTH * 0.5f;
+    for (const VehicleCollision::Obstacle &obstacle : m_RoadDataManager->GetObstacles())
+    {
+        float t = spline.GetSplinePosition(obstacle.center);
+        if ((obstacle.center - spline.GetPositionAt(t)).Length() > LANE_HALF_WIDTH)
+            continue;
+
+        float u = t * length - rootPosition;
+        if (u < 0.0f || u > searchForward)
+            continue;
+
+        if (!found || u < bestPosition)
+        {
+            found = true;
+            bestPosition = u;
+            bestLength = obstacle.halfLength * 2.0f;
+        }
+    }
+
+    if (!found)
+        return false;
+
+    out = Mobil::VehicleState{0.0f, 0.0f, bestPosition, bestLength}; // 정지한 가상 차량 취급
+    return true;
+}
+
+// carLeader(실제 앞차)와 그 레인 위 정적 장애물 중 더 가까운 쪽을 MOBIL 리더로 반환한다. 둘 다 없으면
+// laneLimitSpeed로 달리는 가상 리더(뚫린 도로 기준선).
+Mobil::VehicleState Car::BuildLeaderState(const shared_ptr<Lane> &lane, float rootPosition, const LaneNeighbor &carLeader,
+                                          float laneLimitSpeed) const
+{
+    constexpr float VIRTUAL_LEADER_GAP = 100000.0f;
+
+    Mobil::VehicleState obstacleState;
+    bool hasObstacle = FindNearestObstacleOnLane(lane, rootPosition, obstacleState);
+
+    if (carLeader.car != nullptr)
+    {
+        Mobil::VehicleState carState = ToVehicleState(carLeader);
+        return (hasObstacle && obstacleState.position < carState.position) ? obstacleState : carState;
+    }
+
+    if (hasObstacle)
+        return obstacleState;
+
+    return Mobil::VehicleState{laneLimitSpeed, 0.0f, VIRTUAL_LEADER_GAP, 0.0f};
 }
 
 void Car::DriveSpeedIDM(float steerSpeedCap)
@@ -639,18 +717,22 @@ void Car::DriveSpeedIDM(float steerSpeedCap)
         }
     }
 
-    // ScanBBoxObstacleGap이 경로 폭 안에서 찾아둔 최근접 정적/동적 장애물: 정지한 가상 선행차량으로
-    // 취급해 감속한다. s0는 일반 차량 추종용(IDM_STANDSTILL_DISTANCE)보다 작게 따로 둔다 -- 정적
-    // 장애물은 다른 차만큼 넉넉한 여유를 안 두고 더 붙어도 된다.
+    // ScanBBoxObstacleGap이 경로 폭 안에서 찾아둔 최근접 정적/동적 장애물을 가상 선행차량으로 취급해
+    // 감속한다. 속도는 m_obstacleAheadSpeed(장애물 속도를 내 진행방향에 투영한 성분) -- 정적 장애물은
+    // 0이라 자동으로 정지 취급되고, 동적(차)은 실제로 다가오는/멀어지는 정도가 반영된다. s0는 일반
+    // 차량 추종용(IDM_STANDSTILL_DISTANCE)보다 작게 따로 둔다 -- 정적 장애물은 다른 차만큼 넉넉한
+    // 여유를 안 두고 더 붙어도 된다.
     if (m_obstacleAheadGap >= 0.0f)
     {
         CarFollowing::Params obstacleParams = idmParams;
         obstacleParams.s0 = AVOID_OBSTACLE_STANDSTILL_DISTANCE;
-        float obstacleAccel = CarFollowing::CalculateAcceleration(m_speed, m_acceleration, 0.0f, 0.0f, m_obstacleAheadGap, obstacleParams);
+        float obstacleAccel = CarFollowing::CalculateAcceleration(m_speed, m_acceleration, m_obstacleAheadSpeed, 0.0f,
+                                                                   m_obstacleAheadGap, obstacleParams);
         if (obstacleAccel < accel)
         {
             accel = obstacleAccel;
-            brakeCause = "bbox obstacle (gap = " + std::to_string(m_obstacleAheadGap) + ")";
+            brakeCause = "bbox obstacle (gap = " + std::to_string(m_obstacleAheadGap) + ", speed = " +
+                        std::to_string(m_obstacleAheadSpeed) + ")";
         }
     }
 

@@ -127,11 +127,11 @@ Car::Mode Car::DecideNextMode(const char **reason) const
             }
         }
 
-        if (arrived && GetParkTargetNode() != nullptr)
-        {
-            *reason = "arrived at destination";
-            return Mode::Park;
-        }
+        // if (arrived && GetParkTargetNode() != nullptr)
+        // {
+        //     *reason = "arrived at destination";
+        //     return Mode::Park;
+        // }
         if (m_destLane == nullptr || arrived)
         {
             *reason = m_destLane == nullptr ? "no destination lane" : "arrived at destination";
@@ -448,10 +448,13 @@ void Car::BeginParkPlan()
         ReedsShepp::Path path = ReedsShepp::GetOptimalPath(rigidPosition, startAngleRad, targetPos, targetAngleRad, turningRadius, isCollisionFree);
         if (path.empty())
         {
-            // 출차 실패는 이미 차가 그 자리를 점유 중이므로 예약을 풀지 않는다.
-            DebugConsole::Log(GetName() + ": BeginParkPlan: Reeds-Shepp failed to find an exit path, abandoning this park attempt");
-            m_destLane = nullptr;
-            SetSubMode(SubMode::None);
+            // // 출차 실패는 이미 차가 그 자리를 점유 중이므로 예약을 풀지 않는다.
+            // DebugConsole::Log(GetName() + ": BeginParkPlan: Reeds-Shepp failed to find an exit path, abandoning this park attempt");
+            // m_destLane = nullptr;
+            // SetSubMode(SubMode::None);
+            // return;
+
+            m_vehicleController.BeginPlan({});
             return;
         }
         m_vehicleController.BeginPlan(BuildReedSheppSegments(path, rigidPosition, startAngleRad, turningRadius));
@@ -498,7 +501,7 @@ bool Car::PlanEnterForCurrentSpot()
             }
         }
 
-        Vec3 pPos = bestSpline->GetLookaheadPoint(m_parkSpot->position, P_LEAD_DISTANCE);
+        Vec3 pPos = bestSpline->GetLookaheadPoint(m_parkSpot->position, -P_LEAD_DISTANCE);
         float pParam = bestSpline->GetSplinePosition(pPos);
         // 주차레인의 방향은 출차 기준으로 잡아뒀으므로, 입차 시 P에서의 목표 heading은 그 반대다.
         float pAngleRad = DirectionToAngleRad(bestSpline->GetDirectionAt(pParam) * -1.0f);
@@ -702,14 +705,14 @@ void Car::UpdateDrive()
     else if (obstacleGap >= 0.0f && m_speed < STALL_SPEED_THRESHOLD)
     {
         m_obstacleStallTime += m_deltaTime;
-        if (m_obstacleStallTime >= OBSTACLE_STALL_TIMEOUT)
-        {
-            DebugConsole::Log(GetName() + ": stalled on bbox obstacle for " + std::to_string(m_obstacleStallTime) +
-                              "s, forcing escape");
-            m_forcedEscapeTimer = FORCED_ESCAPE_DURATION;
-            m_obstacleStallTime = 0.0f;
-            obstacleGap = -1.0f;
-        }
+        // if (m_obstacleStallTime >= OBSTACLE_STALL_TIMEOUT)
+        // {
+        //     DebugConsole::Log(GetName() + ": stalled on bbox obstacle for " + std::to_string(m_obstacleStallTime) +
+        //                       "s, forcing escape");
+        //     m_forcedEscapeTimer = FORCED_ESCAPE_DURATION;
+        //     m_obstacleStallTime = 0.0f;
+        //     obstacleGap = -1.0f;
+        // }
     }
     else
     {
@@ -718,25 +721,6 @@ void Car::UpdateDrive()
 
     m_obstacleAheadGap = obstacleGap;
     m_wantSegmentTick = true;
-}
-
-// 지금 이 차가 직진/차선변경/회전 중 어디에 해당하는지: 최근 차선변경 직후면 LaneChange, 진행경로
-// 앞쪽 곡률이 충분히 작으면(급커브) Turning, 그 외에는 Straight.
-Car::ManeuverPriority Car::GetManeuverPriority() const
-{
-    if (m_currentTime - m_lastLaneChangeTime < LANE_CHANGE_PRIORITY_WINDOW)
-        return ManeuverPriority::LaneChange;
-
-    if (m_currentLane != nullptr)
-    {
-        float t = m_currentSpline.GetSplinePosition(GetPosition());
-        float radius = m_currentSpline.GetMinRadiusAhead(std::max(0.0f, t - TURN_LOOKAHEAD_WINDOW),
-                                                          std::min(1.0f, t + TURN_LOOKAHEAD_WINDOW));
-        if (radius < TURN_RADIUS_THRESHOLD)
-            return ManeuverPriority::Turning;
-    }
-
-    return ManeuverPriority::Straight;
 }
 
 bool Car::TryLaneChange(bool ignoreCooldown)
@@ -749,8 +733,15 @@ bool Car::TryLaneChange(bool ignoreCooldown)
     // 평행한 차선이라 서로 같은 좌표계를 공유한다고 근사한다 (레인마다 다시 투영하지 않음).
     float egoPosition = m_currentLane->GetSpline().GetSplinePosition(position) * m_currentLane->GetLength();
 
+    // 방금 새로 나타난 장애물(직전 틱엔 없었는데 지금 있음)이면 MOBIL 쿨다운을 건너뛰고 즉시
+    // 재평가한다 -- 안 그러면 최대 MOBIL_EVAL_INTERVAL(2초)을 그냥 흘려보내고서야 반응한다.
+    Mobil::VehicleState obstacleAheadState;
+    bool obstacleAheadNow = FindNearestObstacleOnLane(m_currentLane, egoPosition, obstacleAheadState);
+    bool newObstacleAppeared = obstacleAheadNow && !m_hadObstacleAhead;
+    m_hadObstacleAhead = obstacleAheadNow;
+
     // 연결된 차선까지 넓혀 찾는다(FindGraphNeighbors) -- 결과 position은 egoPosition 기준 상대 거리(u)로
-    // 나오므로, 아래 ego/virtualLeader도 전부 그 좌표계(ego=0)로 맞춘다.
+    // 나오므로, 아래 ego/리더 상태도 전부 그 좌표계(ego=0)로 맞춘다.
     LaneNeighbor egoLeaderN, oldFollowerN;
     FindGraphNeighbors(m_currentLane, egoPosition, egoLeaderN, oldFollowerN);
 
@@ -758,12 +749,9 @@ bool Car::TryLaneChange(bool ignoreCooldown)
     CarFollowing::Params cfParams = BuildIdmParams(v0);
     Mobil::Params mobilParams{MOBIL_SAFE_DECEL, MOBIL_POLITENESS, MOBIL_THRESHOLD};
 
-    constexpr float VIRTUAL_LEADER_GAP = 100000.0f; // 실제 리더가 없을 때(뚫린 도로) 쓰는 가상 리더 거리
-    auto virtualLeader = [&](float laneLimitSpeed)
-    { return Mobil::VehicleState{laneLimitSpeed, 0.0f, VIRTUAL_LEADER_GAP, 0.0f}; };
-
     Mobil::VehicleState ego{m_speed, m_acceleration, 0.0f, GetLength()};
-    Mobil::VehicleState egoLeaderState = (egoLeaderN.car != nullptr) ? ToVehicleState(egoLeaderN) : virtualLeader(v0);
+    // 실제 앞차뿐 아니라 이 레인 위 정적 장애물도 리더 후보로 반영한다(둘 중 더 가까운 쪽).
+    Mobil::VehicleState egoLeaderState = BuildLeaderState(m_currentLane, egoPosition, egoLeaderN, v0);
     Mobil::VehicleState oldFollowerStorage;
     const Mobil::VehicleState *oldFollowerState = nullptr;
     if (oldFollowerN.car != nullptr)
@@ -783,7 +771,7 @@ bool Car::TryLaneChange(bool ignoreCooldown)
         FindGraphNeighbors(candidate, egoPosition, newLeaderN, newFollowerN);
 
         float candidateV0 = std::min(m_maxSpeed, candidate->GetLimitSpeed());
-        Mobil::VehicleState newLeaderState = (newLeaderN.car != nullptr) ? ToVehicleState(newLeaderN) : virtualLeader(candidateV0);
+        Mobil::VehicleState newLeaderState = BuildLeaderState(candidate, egoPosition, newLeaderN, candidateV0);
         Mobil::VehicleState newFollowerStorage;
         const Mobil::VehicleState *newFollowerState = nullptr;
         if (newFollowerN.car != nullptr)
@@ -809,6 +797,7 @@ bool Car::TryLaneChange(bool ignoreCooldown)
         SetCurrentLane(candidate);
         m_currentSpline = candidate->GetSpline();
         RescanRoadSpeedConstraints();
+        RebuildSplineRender(); // CheckPath의 자연 레인전환과 동일하게, 디버그 경로선도 새 레인으로 갱신
         m_lastLaneChangeTime = m_currentTime;
         DebugConsole::Log(GetName() + ": " + (mandatory ? "Mandatory" : "MOBIL") + " lane change -> lane " +
                           std::to_string(candidate->GetId()));
@@ -824,7 +813,7 @@ bool Car::TryLaneChange(bool ignoreCooldown)
         return commitTo(m_path[m_pathIndex + 1].lane, /*mandatory=*/true);
     }
 
-    if (!ignoreCooldown && m_currentTime - m_lastLaneChangeTime < MOBIL_EVAL_INTERVAL)
+    if (!ignoreCooldown && !newObstacleAppeared && m_currentTime - m_lastLaneChangeTime < MOBIL_EVAL_INTERVAL)
         return false;
 
     // 평가했다는 사실 자체로 다음 평가까지 쿨다운(성공/실패 무관 — 왕복 진동 방지).
@@ -957,7 +946,6 @@ void Car::GetLookaheadPose(const Spline *startSpline, const shared_ptr<Lane> &st
     }
 }
 
-
 void Car::SimulateBBoxTrajectory(float lateralOffset, std::vector<Vec3> &outPositions,
                                  std::vector<Vec3> &outDirections) const
 {
@@ -977,19 +965,14 @@ void Car::SimulateBBoxTrajectory(float lateralOffset, std::vector<Vec3> &outPosi
     // 서브스텝 다시 추측하지 않고 여기서 step만큼 직접 깎아나간다. 최초 1회만 실제 위치 기준으로
     // 앵커링한다(이 시점의 rigidPos는 시뮬레이션으로 흘러가기 전이라 신뢰 가능).
     float posSplineRemaining = posSpline->GetLength() > 0.0f
-        ? (1.0f - posSpline->GetSplinePosition(rigidPos)) * posSpline->GetLength()
-        : 0.0f;
+                                   ? (1.0f - posSpline->GetSplinePosition(rigidPos)) * posSpline->GetLength()
+                                   : 0.0f;
 
     constexpr float TRAJECTORY_SUBSTEP = 0.25f; // 오버슈트 방지용 적분 스텝
 
-    bool reachedPathEnd = false; // 경로 끝(다음 레인 없음)까지 소진되면 스윕을 여기서 접는다 -- 더 갈 곳이
-                                  // 없는데도 계속 적분하면 GetLookaheadPose가 고정된 레인 끝점을 계속
-                                  // 목표로 돌려주고, 자전거 모델이 그 고정점 주위를 빙글빙글 돌며 궤적이
-                                  // 발산한다(목적지 근처에서 바운딩박스 궤적이 원형으로 말리는 원인).
+    bool reachedPathEnd = false;
     for (float traveled = 0.0f; traveled <= AVOID_DETECT_DISTANCE && !reachedPathEnd; traveled += AVOID_SAMPLE_STEP)
     {
-        outPositions.push_back(rigidPos);
-        outDirections.push_back(dir);
 
         float remaining = AVOID_SAMPLE_STEP;
         while (remaining > 0.0f)
@@ -1046,9 +1029,10 @@ void Car::SimulateBBoxTrajectory(float lateralOffset, std::vector<Vec3> &outPosi
 
             remaining -= step;
         }
+        outPositions.push_back(rigidPos);
+        outDirections.push_back(dir);
     }
 }
-
 
 // SimulateBBoxTrajectory 전방 sweep으로 정적+동적(주변 차량) 장애물까지의 최근접 거리만 반환한다
 // (없으면 -1). DriveSpeedIDM이 이 값을 정지한 가상 리더의 gap으로 사용.
@@ -1062,26 +1046,11 @@ float Car::ScanBBoxObstacleGap()
 
     std::vector<VehicleCollision::Obstacle> obstacles = m_RoadDataManager->GetObstacles();
 
-    Vec3 position = GetPosition();
-    float egoLanePos = m_currentLane->GetSpline().GetSplinePosition(position) * m_currentLane->GetLength();
-    ManeuverPriority egoPriority = GetManeuverPriority();
-
-    for (Car *other : CollectNearbyCars(m_currentLane, egoLanePos))
+    // 레인 그래프(WalkConnectedLanes)로는 현재 레인의 successor/predecessor만 타고 가서, 차선변경
+    // 중 옆 레인에 있는 차처럼 경로상 안 이어진 차는 후보에 아예 안 들어갔다. bbox 스윕이 실제로
+    // 닿는 범위는 물리적 거리이므로, 후보도 레인 연결과 무관하게 순수 반경으로 모은다.
+    for (Car *other : CollectCarsWithinRadius(NEARBY_CAR_SEARCH_RADIUS))
     {
-        // 상대가 나보다 우선순위가 낮으면(값이 크면) 상대가 나에게 양보해야 하는 관계이므로, 여기서는
-        // 아예 장애물 취급하지 않고 지나간다 -- 그래야 양쪽 다 서로에게 양보하며 멈추는 맞물림이
-        // 안 생긴다(직진 > 차선변경 > 회전). 우선순위가 같으면(예: 직진 대 직진) Car에 별도 id 필드가
-        // 없으므로 인스턴스 주소를 대신 차량 식별자로 써서 비교한다 -- 주소가 더 작은 쪽이 이기게
-        // 고정해두면 두 차가 서로를 보는 두 번의 판정에서 정확히 한쪽만 양보하게 되어(항상 같은
-        // 순서쌍이 같은 결과), 동점으로 인해 둘 다 정지해버리는 경우 자체가 줄어든다. 그래도 남는
-        // 애매한 경우(예: 셋 이상이 얽힌 순환 대기)는 아래 강제 탈출 타이머가 마지막 안전장치로 푼다.
-        int otherRank = static_cast<int>(other->GetManeuverPriority());
-        int egoRank = static_cast<int>(egoPriority);
-        bool otherYieldsToEgo = otherRank > egoRank ||
-                                (otherRank == egoRank && reinterpret_cast<uintptr_t>(this) < reinterpret_cast<uintptr_t>(other));
-        if (otherYieldsToEgo)
-            continue;
-
         // BuildVehicleShape의 pivotToCenter 컨벤션과 동일하게, "pivot"(rigidbody 위치)에서 전방으로
         // pivotToCenter만큼 떨어진 지점을 실제 충돌판정 박스 중심으로 쓴다.
         VehicleCollision::VehicleShape otherShape = other->BuildVehicleShape();
@@ -1092,6 +1061,7 @@ float Car::ScanBBoxObstacleGap()
         obstacle.halfLength = otherShape.halfLength;
         obstacle.halfWidth = otherShape.halfWidth;
         obstacle.headingRad = DirectionToAngleRad(otherFwd);
+        obstacle.speed = other->GetSignedSpeed(); // 동적 장애물(차)만 실제 속도를 싣는다 -- 정적 장애물은 기본값 0(정지) 그대로.
         obstacles.push_back(obstacle);
     }
 
@@ -1108,8 +1078,17 @@ float Car::ScanBBoxObstacleGap()
 
     for (size_t i = 0; i < positions.size(); ++i)
     {
-        if (VehicleCollision::IsColliding(positions[i], DirectionToAngleRad(directions[i]), obstacles, shape))
+        const VehicleCollision::Obstacle *hit =
+            VehicleCollision::FindColliding(positions[i], DirectionToAngleRad(directions[i]), obstacles, shape);
+        if (hit != nullptr)
+        {
+            // 부딪힌 장애물의 (자기 헤딩 기준) 속도를 내 진행방향에 투영한 성분만 리더 속도로 쓴다 --
+            // 옆에서 대각선으로 다가오는 차처럼 헤딩이 어긋난 상대도 "내 차선 방향으로 얼마나
+            // 다가오는가"만 뽑아내기 위함. 정적 장애물은 speed=0이라 자동으로 정지 취급된다.
+            Vec3 obstacleVelocity = Vec3(cosf(hit->headingRad), 0.0f, sinf(hit->headingRad)) * hit->speed;
+            m_obstacleAheadSpeed = obstacleVelocity.Dot(GetForwardAxis());
             return static_cast<float>(i) * AVOID_SAMPLE_STEP;
+        }
     }
     return -1.0f;
 }

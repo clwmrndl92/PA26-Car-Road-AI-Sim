@@ -131,10 +131,21 @@ Vec3 Spline::GetLookaheadPoint(const Vec3 &position, float lookaheadDistance) co
     size_t lastIndex = splinePoints.size() - 1;
     size_t lookaheadIndex = closestIndex;
     float accumulatedDistance = 0.0f;
-    while (accumulatedDistance < lookaheadDistance && lookaheadIndex < lastIndex)
+    if (lookaheadDistance >= 0.0f)
     {
-        accumulatedDistance += (splinePoints[lookaheadIndex + 1] - splinePoints[lookaheadIndex]).Length();
-        ++lookaheadIndex;
+        while (accumulatedDistance < lookaheadDistance && lookaheadIndex < lastIndex)
+        {
+            accumulatedDistance += (splinePoints[lookaheadIndex + 1] - splinePoints[lookaheadIndex]).Length();
+            ++lookaheadIndex;
+        }
+    }
+    else
+    {
+        while (accumulatedDistance < -lookaheadDistance && lookaheadIndex > 0)
+        {
+            accumulatedDistance += (splinePoints[lookaheadIndex - 1] - splinePoints[lookaheadIndex]).Length();
+            --lookaheadIndex;
+        }
     }
 
     return splinePoints[lookaheadIndex];
@@ -215,7 +226,6 @@ float Spline::GetMinRadiusAhead(float start, float end, float *outApexT) const
 
     return minRadius;
 }
-
 
 /// @param position
 /// @return 0~1, 가까운 spline상의 위치, -1 : spline이 없음
