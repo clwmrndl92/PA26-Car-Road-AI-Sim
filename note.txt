@@ -1,0 +1,269 @@
+================================================================================
+자동차 행동 구조 정리 (2026-07-26 기준)
+================================================================================
+
+■ 전체 업데이트 흐름
+--------------------------------------------------------------------------------
+UpdateAI(매 프레임)                          Update(고정 물리 dt)
+  ├ UpdateMode()                               ├ m_wantSegmentTick이면
+  │   ├ UpdateFindPath()  : 레인 없으면 탐색   │   VehicleController.Tick()
+  │   ├ DecideNextMode()  : 다음 모드 결정     │   (세그먼트가 DriveControl 등 호출)
+  │   └ OnModeExit/Enter  : 전환 처리          ├ UpdateCar()   : 가속도->속도, 조향 클램프
+  └ 모드별 Update 함수 실행                    └ ApplyMotion() : 자전거 모델로 이동
+      (UpdateStop / UpdatePark / UpdateDrive)
+
+- AI(판단)와 물리(실행)가 분리되어 있고, 판단 결과는 "세그먼트 계획"과
+  "가속/조향 명령(m_acceleration, m_steerAngle)"으로만 물리에 전달된다.
+
+■ 상태머신 (Mode / SubMode) - CarFSM.cpp
+--------------------------------------------------------------------------------
+Mode:    Stop / Park / Drive
+SubMode: D_Normal, D_WaitSignal (Drive)
+         P_EXIT, P_ENTER_LEG1, P_ENTER_LEG2, P_ENTER_ALIGN (Park)
+
+전환 규칙 (DecideNextMode):
+- Stop  -> Park  : 목적지 레인(m_destLane)이 생기면 (P_EXIT 출차 판단부터.
+                   레인과 정렬돼 있으면 RS 없이 즉시 Drive로 통과)
+- Drive -> Park  : Park 노드 목적지에 도착하면 (입차 시퀀스)
+- Drive -> Stop  : (비주차 목적지) 목적지 레인 끝점 기준 "남은 경로거리" <
+                   ARRIVE_DISTANCE(5m) (직선거리로 재면 회전반경 때문에
+                   영원히 못 들어올 수 있어 스플라인 투영 기준으로 잰다)
+- Park  -> Drive : 출차(P_EXIT) 완료 시 (m_parkNodeId도 리셋)
+- Park  -> Stop  : 입차 완료 시 (m_destLane 소모됨)
+
+■ Stop 모드 (UpdateStop)
+--------------------------------------------------------------------------------
+1. 조향 원복 세그먼트(CenterSteerSegment)가 남아있으면 그것부터 끝낸다.
+2. 아직 구르는 중이면: 현재 레인 끝점을 계속 조준(PurePursuit)하며 감속.
+3. 완전히 멈추면: GetRandomDestNode()로 다음 목적지를 뽑아 SetDestination()
+   (너무 가까운 노드가 나오면 이번 틱은 스킵 -> Stop/Drive 무한 반복 방지)
+
+■ Drive 모드 (UpdateDrive)
+--------------------------------------------------------------------------------
+매 프레임: CheckPath() -> UpdateBehaviorPlan() -> (물리 틱에서) DriveControl()
+
+1) CheckPath - 경로 진행
+   - 현재 레인 끝까지 남은 거리 < LANE_TRANSITION_THRESHOLD(2m)면
+     path의 다음 레인으로 전환 (SetCurrentLane).
+   - 신호로 서야 하면(ShouldStopForSignal) 레인을 안 넘긴다.
+   - path가 끝나면 m_destLane/m_currentLane을 비운다 -> Stop으로.
+
+2) UpdateBehaviorPlan - 행동 계획 (0.2초 주기, BEHAVIOR_PLAN_INTERVAL)
+   a. ScanRoadSpeedConstraints: 현재 레인부터 path를 따라 lookDistance까지
+      5m 간격으로 스캔 -> RoadSpeedSample{위치, 거리, 요구속도} 수집
+      - 노드 제한속도, 커브(로컬 곡률 -> CURVE_SPEED_COEFF*sqrt(R)),
+        신호(빨간불이면 속도 0), 목적지 레인 끝(속도 0),
+        코리도와 겹치는 정적 장애물(속도 0)
+   a'. AppendCarConstraintSamples: 경로 코리도 안의 주변 차를 가상 리더
+      샘플로 추가 (거리=gap-차길이-마진, 속도=내 경로방향 성분, 역방향은 0)
+   b. desiredSpeed = ComputeSpeedCapFromSamples(samples, 0)
+      - 각 샘플에 대해 sqrt(v_sample^2 + 2*maxBrake*거리)로
+        "지금 허용되는 최대속도"를 구해 최솟값 채택 (제동거리 선반영)
+   c. 후보 생성: (차선유지/좌변경/우변경) x (가속/유지/감속) = 최대 9개
+      - BuildCandidate:
+        * 차선변경 후보는 그 레인에서 목적지까지 경로 재탐색(못 찾으면 무효)
+        * SimulateEgoTrajectory: Pure Pursuit + 자전거 모델로 3초
+          (BEHAVIOR_SAFETY_HORIZON) 동안 0.1초 간격 전진 시뮬레이션.
+          가속 후보는 각 지점의 국소 cap까지만 가속(넘은 속도는 유지 ->
+          overshoot로 잡힘)
+        * CollectNearbyCars(플랜당 1회): 전역 차량 레지스트리에서 반경 컬링
+          -- 반경 = (내속도+상대속도)*3s + 가속여유 + 차길이 + MIN_SAFE_GAP
+        * EvaluateTrajectorySafety: 주변 차들을 "각자 자기 레인 스플라인을
+          따라 등속 전진"으로 예측해(레인 이탈 차는 직진 외삽 폴백)
+          매 스텝 OBB 겹침 검사 -> collisionFree, minApproachGap
+        * ViolatesSignal: 정지선을 속도 있게 넘는지
+        * maxSpeedOvershoot: 궤적 각 지점에서 "그 지점 기준" 국소 안전속도
+          상한을 얼마나 넘었는지의 최댓값
+   d. 필터: IsCandidateSafe = collisionFree && minApproachGap >= MIN_SAFE_GAP(2m)
+   e. 비용: EvaluateCandidateCost
+      cost = w1*(속도부족 + 4*overshoot) + w2*(차선변경) + w4*(직전 결정과
+             달라짐: 플립플롭 억제) + w5*(신호위반)
+      가중치는 CarSpec::BehaviorWeights (차량별 성향, 디버그 창에서 조절 가능)
+   f. 최저 비용 후보 채택. 안전한 후보가 없으면 폴백 = 차선유지+감속.
+      차선변경 후보면 그 자리에서 레인/경로 즉시 전환.
+   g. 결과는 m_currentBehaviorPlan에 저장 (targetSpeed = 0.2초 뒤 예상 속도)
+
+3) DriveControl - 실제 제어 (VehicleController의 SplineFollowSegment가 호출)
+   - 조향: lookahead = max(speed*1.5s, 최소회전반경*2) 지점을 Pure Pursuit
+   - 속도: min(조향각 물리 한계 CalcMaxSpeed, behaviorPlan.targetSpeed)를
+     Accelerate()에 전달
+   - Accelerate: IDM 자유가속 항 a*(1-(v/v0)^4) 형태로 가속도 산출
+
+■ Park 모드 (UpdatePark / BeginParkPlan)
+--------------------------------------------------------------------------------
+공통: 완전히 정지한 뒤에만 Reeds-Shepp 계획을 세운다 (open-loop라 시작 pose 기준).
+
+입차: P_ENTER_LEG1 -> P_ENTER_LEG2 -> P_ENTER_ALIGN -> Stop
+  - LEG1: 주차레인 위 스팟 앞 지점(P)까지 RS 경로 (주차레인 없으면 생략)
+  - LEG2: P에서 스팟(위치 - 방향*wheelbase)까지 RS 경로
+  - ALIGN: pure pursuit 잔여 오차 보정. 같은 목표로 RS를 한 번 더 계획하되
+    exact=true (정지-조향-이동-정지 방식의 RSExactSegment)로 정밀 실행
+  - 각 leg의 RS 후보는 SamplePoses + VehicleCollision::IsColliding으로
+    장애물 충돌 검사를 통과해야 채택
+  - 실패 시: 같은 Park 노드의 다른 빈 스팟을 예약해 재시도
+    (m_triedParkSpotIds로 중복 방지), 전부 실패하면 목적지 포기
+  - 스팟 예약: TryReserveParkSpot / ReleaseParkSpot (RoadDataManager)
+
+출차: P_EXIT -> Drive
+  - 가장 가까운 (주차)레인을 찾고, 이미 레인 방향과 90도 이내로 정렬돼
+    있으면 RS 없이 바로 주행. 아니면 레인 위 지점까지 RS 출차 매뉴버.
+  - 출차 완료 시 스팟 예약 해제 + 새 경로 탐색.
+
+■ 주변 인지 방식
+--------------------------------------------------------------------------------
+- 모든 차는 RoadDataManager의 전역 레지스트리에 등록된다 (Car::Init/Destroy).
+  레인 등록 방식(Lane::RegisterCar)은 제거됨 -- 주차 중/레인 이탈 차도 보인다.
+- CollectNearbyCars: 위치 기반 반경 컬링으로 "3초 안에 서로 닿을 수 있는"
+  차만 모아 궤적 안전판정(EvaluateTrajectorySafety)에 넘긴다.
+- 정적 장애물은 RoadDataManager::GetObstacles() (주차 RS 계획에서만 사용).
+- 신호는 lane의 signalNode + GetSignalColor. 노란불은 정지거리 안이면
+  통과 확정(m_committedYellowNodeId)하고 초록될 때까지 유지.
+
+■ 알려진 문제 (앞차 무시하고 지나가는 원인, 2026-07-26 분석)
+--------------------------------------------------------------------------------
+1. [수정됨] EvaluateTrajectorySafety의 상대 차 피벗이 GetPosition()(앞축)이라
+   예측 OBB가 wheelbase(약 3m)만큼 앞으로 밀려 있던 버그
+   -> GetRigidbodyPosition()(뒷축, pivotToCenter 기준점)으로 수정.
+2. [수정됨] "3초 시야 < 제동거리" -> AppendCarConstraintSamples 추가: 경로
+   코리도 안의 차를 가상 리더 샘플(거리=gap-차길이-마진, 속도=경로방향 성분)로
+   넣어 신호/커브처럼 제동거리 기반 선제 감속이 걸린다. 교차/역방향 차는
+   속도 0 클램프 -> 그 지점 정지 장애물처럼 취급.
+3. [수정됨] 레인 등록 기반 인지의 사각지대(다음 레인으로 넘어간 차,
+   도착/주차로 등록 해제된 차) -> 전역 레지스트리 + 반경 컬링으로 교체.
+   부수효과: 교차로에서 교차 방향 차도 등속 직진 외삽으로 보이게 됨
+   (보수적 판정 증가 -> 데드락 여부 관찰 필요).
+4. [약점] minApproachGap은 중심간 거리라 MIN_SAFE_GAP(2m) 검사가 사실상
+   무의미 (범퍼가 닿아도 중심거리 약 4.2m).
+5. [수정됨] 도착 직전 Stop<->Drive 매 프레임 진동: 도착 판정(5m)이 나도
+   m_destLane을 아무도 안 지워서 Stop이 바로 Drive로 되돌아갔음.
+   -> UpdateStop 진입 시 도착한 목적지를 소모(m_destLane 해제).
+6. [수정됨] 커브/정지 지점이 3초 지평선 안에 들어오면 Accel 후보가 "3초
+   내내 풀가속" 시뮬 때문에 항상 overshoot 페널티를 받아, 허용속도보다
+   한참 느린 저속에서도 Maintain만 골라 기어가던 문제
+   -> SimulateEgoTrajectory에서 가속 후보는 국소 cap을 추종(가속 + maxBrake
+   한도 내 감속). "제약 앞에 다가가서 선다"가 가속 후보로 표현되므로
+   정지 제약 수십 m 앞에서 Maintain(0)으로 얼어붙는 문제도 함께 해결.
+7. [수정됨] 장애물 프로브 폭이 차선폭 절반(1.6m)이라 실제로는 지나갈 수
+   있는 길가 벽(lane 107 옆 1.5m 주차장 서쪽 벽)에 걸려 가짜 정지선이
+   생기고 그 10m 앞에서 동결되던 문제 -> 프로브 폭 = 차폭 절반 + 0.25m.
+8. [수정됨] 주차장 진입로가 벽으로 좁으면 도착 pose->P 직행 RS가 전부
+   벽에 클립되어 모든 스팟이 "unreachable"로 실패하던 문제 (RS는 장애물
+   회피가 아니라 후보 거부만 가능) -> 진입 leg 체인: P 직행 실패 시
+   "주차레인 최근접점(진입점)"으로 중간 leg -> 완료 후 다시 P 겨냥
+   (최대 4회, PlanEnterForCurrentSpot + UpdatePark LEG1 완료 처리).
+9. [수정됨] 출차(P_EXIT) 구조 버그 4종 (주차 후 출차 불능/핸들 미원복의
+   원인). BeginParkPlan에서:
+   a. targetPos/targetAngleRad 미초기화 (옛 GetLookaheadPose 호출이 시그니처
+      개편 때 주석 처리된 채 방치) -> 레인 스플라인에서 직접 계산.
+   b. 입차용 예약 블록이 P_EXIT보다 먼저 실행 -> 출발 목적지가 주차장이면
+      "도착지" 스팟을 미리 예약 + 도착지 주차레인으로 SetCurrentLane
+      -> 출발 불능 루프. P_EXIT를 예약 블록 앞으로 이동, 완전 분리.
+   c. 정렬 임계 90°(inclusive) -> 수직 주차 상태가 "정렬됨"으로 새서
+      RS 매뉴버 없이 주차칸에 박힌 채 출차 완료 처리 -> 60°로 축소.
+   d. 출차 완료 시 FindPath(주차레인->메인)가 분리망이라 실패해 전부
+      리셋되던 문제. "가장 가까운 메인 레인으로 점프"는 벽 너머 레인이
+      잡혀 전진 후보 전부 safe=N 동결(스팟에서 lane 105 잡힌 사례) ->
+      주차레인을 경로 없이 끝(로트 출구)까지 따라간 뒤, 거기서 Stop ->
+      재출발이 메인 레인에 붙는 방식으로 변경.
+   e. 출차 RS 목표가 6m 고정이라 턴어라운드 공간 부족 시 전멸 ->
+      {6,12,18}m 순차 재시도.
+10. [수정됨] 길가 park 노드(스팟 자식 없는 7~26번): 노드 옆을 지나도
+    도착 판정(5m)이 안 잡혀 레인 끝(교차로)까지 간 뒤 거기서 노드까지
+    도로 무시 RS 직행을 하던 문제 ->
+    - PARK_ARRIVE_DISTANCE(12m): 주차 노드는 넓은 반경으로 "옆을 지나는"
+      순간 도착 처리 -> 그 자리에서 짧은 RS 입차
+    - 직행 leg 상한 15m: 그래도 멀면 목적지 포기(재추첨)
+11. [수정됨/신호] 노란불 커밋(m_committedYellowNodeId)이 통과 후에도 영원히
+    남던 버그: 리셋이 "그 신호가 초록일 때 검사되면"뿐인데 통과 후엔 그
+    레인이 경로에서 빠져 검사 자체가 안 됨 -> 맵을 돌아 같은 신호에
+    빨간불로 재접근하면 그대로 통과("종종 신호 무시"의 원인).
+    -> 정지선(스플라인 t)을 넘는 순간 커밋 해제 + 신호 구속 해제.
+12. [수정됨/신호] 노란불 커밋 후 지연(앞차 등)돼 빨간불로 바뀌어도 커밋이
+    유지돼 빨간불을 뚫던 버그 -> 빨간불 시점에 아직 정지선 앞이고 설 수
+    있으면(gap > 제동거리) 커밋 취소.
+
+■ 구조 평가: IDM+MOBIL -> 후보 기반 행동 계획 전환 (2026-07-26)
+--------------------------------------------------------------------------------
+[전환 배경] 원래 IDM+MOBIL에서 장애물을 IDM의 speed cap으로 넣는 방식이었으나,
+파라미터 튜닝이 자유롭고 상황에 능동적으로 대처하는 구조를 원해서
+"후보 나열 x 궤적 시뮬레이션 x 비용 평가" 구조로 재설계함.
+
+[잘한 점 - 이 구조가 IDM+MOBIL보다 나은 부분]
+1. 종/횡 결정 통합: IDM(종방향)과 MOBIL(차선변경)은 별개 수식이라 결합이
+   임의적인데, 지금은 (차선 x 속도) 후보를 하나의 비용 틀에서 비교한다.
+   실제 자율주행 behavior layer에서 쓰는 샘플링 기반 계획과 같은 계열.
+2. 실제 차량 모델로 검증: IDM은 질점 가정이지만, 지금은 Pure Pursuit +
+   자전거 모델로 굴려보므로 조향 한계/궤적 실현 가능성이 판정에 반영된다.
+3. 기하 기반 충돌판정: IDM의 1차원 same-lane gap으로는 표현 불가능한
+   교차로 교차 차량, 비스듬한 차, 레인 밖 차를 OBB로 직접 판정.
+4. 튜닝 인터페이스: BehaviorWeights(w1~w5)가 차량별 성향(공격적/양보)으로
+   해석 가능하고 디버그 창에서 실시간 조정 가능.
+5. 확장성: 새 비용 항(횡가속 w3 등)이나 새 후보(가속 단계 세분화)를
+   틀 변경 없이 추가할 수 있다.
+
+[약한 점 - IDM을 버리면서 잃은 것 + 구조 자체의 공백]
+1. 안정적 차간 유지(car-following)의 부재. IDM은 연속 가속도로 평형 거리에
+   수렴하는 성질이 내장돼 있었는데, 지금은 {+max, 0, -max} 3단 가속뿐이라
+   앞차 뒤에서 가감속 플립플롭이 일어나고(관성 비용이 가려줄 뿐),
+   차간거리가 "제어된 값"이 아니라 "우연히 나오는 값"이다.
+2. 3초 시야 < 제동거리 (기존 문제 2번). 도로제약은 sqrt(v^2+2ad)로
+   제동거리를 선반영하는데 차량은 3초 충돌 시뮬로만 다뤄서 고속에서 늦다.
+3. 상대 차 예측이 등속 직진 외삽뿐. 커브에서 예측 궤적이 실제와 벌어져
+   오탐/미탐 발생. 상대의 반응(양보)도 가정하지 않음.
+4. 후보가 전부 unsafe일 때의 비상 계층 없음. 폴백이 Keep+Decel(약한
+   maxBrake)이고 m_maxEmergBrake는 계획에서 안 쓰인다.
+5. 교차로 우선순위/데드락 해소 규칙 없음. 반경 인지로 교차 차량이
+   보이게 되면서 서로 양보하다 멈추는 대칭 교착 가능성이 커짐.
+6. 차선변경이 결정 즉시 레인/경로를 전환하는 커밋 방식이라 변경 도중
+   상황이 바뀌어도 중단(abort) 개념이 없다.
+7. 비용 항들의 단위가 섞여 있어(m/s 오차 + 고정 상수) 가중치 튜닝의
+   직관성이 떨어진다.
+
+[다음에 필요한 것 - 우선순위순]
+1. [완료 2026-07-26] 리더를 RoadSpeedSample로: AppendCarConstraintSamples.
+   경로 코리도(차선폭/2+상대 반폭) 안의 차를 (거리=gap-차길이-MIN_SAFE_GAP,
+   속도=내 경로방향 성분, 역방향이면 0) 샘플로 추가. desiredSpeed와 후보별
+   overshoot 계산 양쪽에 반영된다.
+2. [완료 2026-07-26] 비상 제동 계층: 모든 후보 unsafe -> m_emergencyBrake
+   -> DriveControl이 Accelerate 대신 EmergBrake. Drive 진입 시 리셋.
+3. [완료 2026-07-26] 정적 장애물을 Drive에서도 인지:
+   - ScanRoadSpeedConstraints: 5m 샘플마다 코리도 프로브(차선폭x샘플간격
+     박스)로 장애물 겹침 검사 -> 0속도 샘플(가상 정지선)
+   - EvaluateTrajectorySafety: 궤적 OBB 검사에 정적 장애물 포함(차선변경
+     후보가 장애물 차선을 거르도록). minGap 집계에서는 제외.
+4. [완료 2026-07-27] 교차로 우선순위: NearbyCar{car, yieldsToMe}.
+   - 규칙: 직진 > 회전(IsTurningAhead: 전방 15m 최소 곡률반경 < 20m),
+     동급이면 이름 비교(결정적 tie-break). 상보적이라 교착이 안 생김.
+   - 적용: 교차/합류 방향(진행방향 차 45도 초과) 차에만. 같은 방향
+     앞차/뒷차는 대상 아님(코리도 리더 샘플이 차간 유지 담당).
+   - 효과: 내가 우선인 차는 (a) 코리도 가상 리더에서 제외 (b) OBB 예측
+     이동량을 제동거리로 캡("양보하며 멈춘다"). 멈춘 차체는 여전히
+     장애물로 남으므로 이미 길을 막은 차는 뚫지 않는다.
+   - 남은 것: 선진입 우선 규칙, 상호 물리 봉쇄(gridlock) 시 후진/creep.
+5. [완료 2026-07-26] 상대 차 예측 고도화: BuildOtherPrediction/PredictOtherPose.
+   상대를 자기 현재 레인 + 자기 path의 다음 레인들을 따라 등속 전진으로 예측
+   (횡 오프셋 유지). 레인이 없거나 중심에서 차선폭 이상 벗어났거나 역방향이면
+   직진 외삽 폴백. -> 반대편 차선 차의 "직진 유령"이 커브에서 내 차선을
+   가로질러 가짜 충돌로 잡히던 문제(정면에서 마주치면 멈춤) 해결.
+6. 거리유지 소프트 비용: 충돌 여부(이진)만이 아니라 TTC/시간헤드웨이가
+   짧을수록 비용을 물려 "안 부딪히지만 바짝 붙는" 후보를 걸러낸다.
+   겸사겸사 minApproachGap을 중심거리 -> 범퍼 gap으로 바꿔 MIN_SAFE_GAP을
+   의미 있게 만들 것 (약한 점, 기존 문제 4번).
+7. 가속 후보 세분화: {+max, +half, 0, -half, -max} 5단 정도로 늘리면
+   리더 샘플과 함께 승차감/수렴성이 좋아진다. 비용은 후보 수에 선형.
+8. 차선변경 진행 상태: "변경 중" 플래그 + 중단 조건(새 레인에서 unsafe로
+   바뀌면 원 레인 복귀 후보 생성).
+9. 횡가속 비용 w3 (기존 TODO): 커브/차선변경의 승차감 항.
+10. (차량 수 늘어나면) CollectNearbyCars에 공간 그리드. 지금 N이면 불필요.
+11. U자 도로 등 경로가 자기 코리도와 가까워지는 구간에서 반대편 차 오탐
+    가능(스플라인 최근접 투영 특성) -- 발생하면 "투영점까지 경로거리 vs
+    유클리드 거리 비교" 필터 추가.
+
+■ 주요 상수
+--------------------------------------------------------------------------------
+LANE_TRANSITION_THRESHOLD = 2m      ARRIVE_DISTANCE = 5m
+BEHAVIOR_PLAN_INTERVAL = 0.2s       BEHAVIOR_SAFETY_HORIZON = 3s
+BEHAVIOR_SIM_STEP = 0.1s            BEHAVIOR_LOOKAHEAD_TIME = 5s
+MIN_SAFE_GAP = 2m                   CURVE_SPEED_COEFF = 1.5
+maxSpeed = 200km/h                  maxAccel = 0-100km/h in 14s
+maxBrake = 100-0km/h in 15s         maxEmergBrake = 100-0km/h in 3s

@@ -1,5 +1,4 @@
 #pragma once
-#include <algorithm>
 #include <memory>
 #include <vector>
 #include "Spline.h"
@@ -7,7 +6,6 @@
 using namespace std;
 
 class Road;
-class Car;
 struct RoadNode;
 
 class Lane
@@ -40,12 +38,6 @@ public:
         m_right.reset();
     }
 
-    // 지금 이 레인 위에 있는 차 목록 (행동 계획의 주변 차량 인지용). Car::SetCurrentLane이 드나들 때마다
-    // 갱신한다.
-    void RegisterCar(Car *car) { m_cars.push_back(car); }
-    void UnregisterCar(Car *car) { m_cars.erase(std::remove(m_cars.begin(), m_cars.end(), car), m_cars.end()); }
-    const vector<Car *> &GetCars() const { return m_cars; }
-
     const Vec3 &GetStartPoint() const { return m_spline.GetSplinePoints().front(); }
     const Vec3 &GetEndPoint() const { return m_spline.GetSplinePoints().back(); }
 
@@ -62,6 +54,5 @@ private:
     vector<weak_ptr<Lane>> m_predecessors;
     weak_ptr<Lane> m_left;  // 같은 진행방향 좌측 인접 레인
     weak_ptr<Lane> m_right; // 같은 진행방향 우측 인접 레인
-    vector<Car *> m_cars;   // 지금 이 레인 위에 있는 차들
     weak_ptr<RoadNode> m_signalNode;
 };

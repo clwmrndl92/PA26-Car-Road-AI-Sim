@@ -43,6 +43,7 @@ public:
     void SetDestination(const shared_ptr<RoadNode> &parkNode);
     float GetAcceleration() const { return m_acceleration; }
     float GetLength() const { return m_halfExtents.GetZ() * 2.0f; }
+    float GetHalfWidth() const { return m_halfExtents.GetX(); }
 
     // 조작 및 제어 인터페이스 (Control Interface)
     void Accelerate(float desiredVelocity);
@@ -188,13 +189,6 @@ private:
         // 감속이 늦어진다 -- 그래서 매 지점마다 그 지점 기준 상한과 비교해 가장 심하게 넘어선 값을 잡는다.
         float maxSpeedOvershoot = 0.0f;
     };
-    // 주변 차량 인지 결과: 같은 레인 위에서 gap(범퍼~범퍼 거리)이 가장 작은 차 하나.
-    struct NearbyCarGap
-    {
-        Car *car = nullptr;
-        float gap = 0.0f;
-        float speed = 0.0f;
-    };
     // 후보 안전판정용으로 시뮬레이션한 미래 한 시점의 (위치, 진행방향, 속도, 지금까지 이동한 거리).
     struct TrajectorySample
     {
@@ -208,26 +202,65 @@ private:
         bool collisionFree = true;
         float minGap = std::numeric_limits<float>::max();
     };
+    // 주변 차 + 우선순위 관계. yieldsToMe면 "저 차가 나에게 양보한다"고 가정한다: 코리도 가상
+    // 리더 샘플에서 제외하고, OBB 예측에서는 제동거리 안에 멈추는 것으로 취급한다 -- 양쪽이
+    // 서로를 보고 동시에 멈추는 대칭 교착을 끊는 장치. 같은 방향(45도 이내) 차에는 적용하지
+    // 않는다 (앞차 추종은 우선순위가 아니라 차간유지 문제).
+    struct NearbyCar
+    {
+        Car *car = nullptr;
+        bool yieldsToMe = false;
+    };
 
     void UpdateBehaviorPlan();
     BehaviorCandidate BuildCandidate(LaneChoice laneChoice, SpeedAction speedAction, const shared_ptr<Lane> &lane,
-                                     const std::vector<RoadSpeedSample> &roadSamples) const;
+                                     const std::vector<RoadSpeedSample> &roadSamples,
+                                     const std::vector<NearbyCar> &nearbyCars) const;
     bool IsCandidateSafe(const BehaviorCandidate &candidate) const;
     float EvaluateCandidateCost(const BehaviorCandidate &candidate, float desiredSpeed) const;
     // samples 중 distanceOffset보다 먼 것들만 골라, "그 지점부터 남은 거리" 기준으로 안전속도 상한을
     // 구한다. distanceOffset=0이면 지금 이 순간의 목표속도(desiredSpeed)와 같다.
     float ComputeSpeedCapFromSamples(const std::vector<RoadSpeedSample> &samples, float distanceOffset) const;
-    NearbyCarGap FindLeaderOnLane(const shared_ptr<Lane> &lane) const;
-    NearbyCarGap FindFollowerOnLane(const shared_ptr<Lane> &lane) const;
+    // 레인 등록과 무관하게, 3초 시뮬레이션 동안 서로 닿을 수 있는 거리 안의 모든 차를 모은다
+    // (자기 자신 제외). 반경은 양쪽 속도 기반이라 정지해 있으면 좁고 빠르면 넓어진다.
+    std::vector<NearbyCar> CollectNearbyCars() const;
+    // 전방 약 15m 경로의 최소 곡률반경이 회전 매뉴버 수준인가 (교차로 우선순위: 직진 > 회전 판정용).
+    bool IsTurningAhead() const;
+    // 교차 상황에서 내가 other보다 통행 우선권을 갖는가. 직진 > 회전, 동급이면 이름 비교(결정적).
+    bool HasPriorityOver(const Car *other) const;
+    // nearbyCars 중 내 예정 경로 코리도 안의 차를 도로제약 샘플(가상 리더)로 변환해 추가한다.
+    // 신호/커브와 같은 제동거리(sqrt(v^2+2ad)) 기반 선제 감속이 앞차에도 걸리게 하는 핵심.
+    void AppendCarConstraintSamples(std::vector<RoadSpeedSample> &samples,
+                                    const std::vector<NearbyCar> &nearbyCars, float lookDistance) const;
     // lane의 스플라인을 따라 Pure Pursuit + 자전거 모델로 BEHAVIOR_SAFETY_HORIZON 동안 BEHAVIOR_SIM_STEP
-    // 간격으로 전진시켜본 궤적. simAccel(가정 가속도)로 speedAction의 종방향 프로파일을 반영한다. 속도는
-    // 물리적 한계([0, m_maxSpeed])로만 클램프한다 -- desiredSpeed에 맞는지는 여기서 미리 잘라내지 않고
-    // EvaluateCandidateCost가 판단한다 (그래야 "멈춰야 하는데 못 멈추는" 후보가 실제로 나쁘게 평가됨).
-    std::vector<TrajectorySample> SimulateEgoTrajectory(const shared_ptr<Lane> &lane, float simAccel) const;
-    // others(주로 리더/팔로워)는 지금 속도로 등속 직진한다고 가정하고 외삽해, 매 스텝 ego 궤적과 겹치는지
+    // 간격으로 전진시켜본 궤적. simAccel(가정 가속도)로 speedAction의 종방향 프로파일을 반영한다.
+    // 가속 후보는 국소 허용속도(roadSamples 기준 cap)를 추종한다(cap 아래면 가속, 넘으면 maxBrake
+    // 한도 내 감속) -- 실제 DriveControl의 동작과 같다. cap이 maxBrake보다 빨리 떨어지는 "진짜 못
+    // 멈추는" 상황만 overshoot로 남아 EvaluateCandidateCost에서 나쁘게 평가된다.
+    std::vector<TrajectorySample> SimulateEgoTrajectory(const shared_ptr<Lane> &lane, float simAccel,
+                                                        const std::vector<RoadSpeedSample> &roadSamples) const;
+    // 상대 차 미래 pose 예측용: 상대의 현재 레인(+그 차 path의 다음 레인들)을 따라 등속 전진시킨다.
+    // 레인이 없거나(주차/도착) 레인 중심에서 차선폭 이상 벗어나 있으면(RS 매뉴버 등) segments를
+    // 비워 직진 외삽으로 폴백한다.
+    struct OtherPrediction
+    {
+        struct Segment
+        {
+            const Spline *spline;
+            float startT;
+            float arcLength; // startT부터 이 세그먼트 끝까지의 호길이
+        };
+        std::vector<Segment> segments;      // 비어 있으면 직진 폴백
+        Vec3 basePos = Vec3::sZero();       // 예측 시작점(뒷축)
+        Vec3 baseFwd = Vec3::sZero();       // 시작 진행방향
+        float lateralOffset = 0.0f;         // 레인 중심선 기준 횡 오프셋(부호 포함) -- 예측 내내 유지
+    };
+    OtherPrediction BuildOtherPrediction(const Car *other) const;
+    static void PredictOtherPose(const OtherPrediction &pred, float distance, Vec3 &outPos, Vec3 &outFwd);
+    // others는 각자 자기 레인 스플라인을 따라 등속 전진한다고 예측해 매 스텝 ego 궤적과 겹치는지
     // 본다. 실제로 겹친 적이 있으면 collisionFree=false, 그와 별개로 전 구간 최소 중심간 거리도 반환.
     TrajectorySafety EvaluateTrajectorySafety(const std::vector<TrajectorySample> &trajectory,
-                                              const std::vector<Car *> &others) const;
+                                              const std::vector<NearbyCar> &others) const;
     // lane에 신호가 있고 지금 서야 하는 상황(ShouldStopForSignal)인데, trajectory가 멈추지 못하고
     // 정지선(신호 노드 위치)을 넘어버리는지 확인한다.
     bool ViolatesSignal(const shared_ptr<Lane> &lane, const std::vector<TrajectorySample> &trajectory) const;
@@ -237,6 +270,8 @@ private:
     bool PlanParkLegTo(const Vec3 &targetPos, float targetAngleRad, bool exact = false);
 
     bool PlanEnterForCurrentSpot();
+    const Spline *FindBestParkingSpline() const;
+    bool ComputeParkPrePose(Vec3 &outPos, float &outAngleRad) const;
     bool ReserveNextParkSpot();
     bool BeginParkEnterOrRetry();
 
@@ -255,6 +290,9 @@ public:
     static constexpr float LANE_TRANSITION_THRESHOLD = 2.0f;
     // 목적지 레인 끝점과 이 거리 안이면 "도착"으로 본다 (DecideNextMode/UpdateStop 공용).
     static constexpr float ARRIVE_DISTANCE = 5.0f;
+    // 주차 목적지 노드는 도로 옆으로 몇 m 떨어져 있어 5m로는 "옆을 지나가는" 순간을 못 잡고
+    // 레인 끝(교차로)까지 갔다가 멀리서 RS 직행을 하게 된다 -- 노드 도착 판정만 넓게 잡는다.
+    static constexpr float PARK_ARRIVE_DISTANCE = 12.0f;
 private:
     // 설정 및 스펙 상수/변수 (Constants & Specifications)
     const float m_maxSpeed = 200.0f / 3.6f;           // 200 km/h
@@ -282,6 +320,7 @@ private:
     shared_ptr<RoadNode> m_pendingParkNode; // 예약 전, 도착하면 그때 주차칸을 예약할 목표 Park 노드
     bool m_parkSequenceActive = false;
     int m_parkNodeId = -1;                 // 이번 입차의 대상 Park 노드 id (다른 빈 자리 재예약에 씀)
+    int m_parkLegTries = 0;                // 현재 스팟의 진입 leg 체인 시도 횟수 (무한 체인 방지)
     unordered_set<int> m_triedParkSpotIds; // 이번 입차에서 경로탐색이 실패해 이미 시도해본 ParkSpot id들
     bool m_parkPlanPending = false;
 
@@ -303,6 +342,9 @@ private:
     BehaviorWeights m_behaviorWeights;
     float m_lastBehaviorPlanTime = -1000.0f; // 처음 Drive 진입 시 바로 첫 판단이 돌도록 충분히 과거로 초기화
     BehaviorCandidate m_currentBehaviorPlan;
+    // 직전 플랜에서 안전한 후보가 하나도 없었음 -- 일반 제동(maxBrake)으로 못 피하는 상황이므로
+    // DriveControl이 Accelerate 대신 EmergBrake를 밟는다. 다음 플랜 틱마다 재판정.
+    bool m_emergencyBrake = false;
 
     // 차량 주행 상태 변수 (Vehicle States)
     float m_speed = 0.0f;
