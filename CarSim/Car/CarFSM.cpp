@@ -94,7 +94,8 @@ Car::Mode Car::DecideNextMode(const char **reason) const
             return Mode::Stop;
         }
         *reason = "go to Dest";
-        return Mode::Park;
+        // return Mode::Park;
+        return Mode::Drive;
     }
     else if (m_mode == Mode::Park)
     {
@@ -115,11 +116,15 @@ Car::Mode Car::DecideNextMode(const char **reason) const
     }
     else if (m_mode == Mode::Drive)
     {
-        constexpr float ARRIVE_DISTANCE = 5.0f;
         bool arrived = false;
         if (m_destLane != nullptr)
         {
-            arrived = (m_destLane->GetEndPoint() - GetPosition()).Length() < ARRIVE_DISTANCE;
+            // 직선거리(현재 위치 <-> 끝점)로 재면, 이 속도의 최소회전반경(wheelbase/tan(maxSteerAngle))이
+            // ARRIVE_DISTANCE보다 큰 경우 차가 끝점 주변을 궤도처럼 돌면서 영원히 이 거리 안으로 못 들어올
+            // 수 있다. 대신 destLane 스플라인 위로 현재 위치를 투영한 지점 기준 "남은 경로 거리"로 재면,
+            // 차가 목적지 주변 어디에 있든(옆으로 벗어나 돌고 있어도) 경로상 끝에 가까우면 도착으로 잡힌다.
+            Vec3 projectedPosition = m_destLane->GetSpline().GetLookaheadPoint(GetPosition(), 0.0f);
+            arrived = (m_destLane->GetEndPoint() - projectedPosition).Length() < ARRIVE_DISTANCE;
             if (m_pendingParkNode != nullptr)
             {
                 arrived |= (m_pendingParkNode->position - GetPosition()).Length() < ARRIVE_DISTANCE;
@@ -206,8 +211,6 @@ bool Car::TryFindPathAndSetLane()
         return false;
     }
 
-    m_currentSpline = m_currentLane->GetSpline();
-    RescanRoadSpeedConstraints();
     return true;
 }
 #pragma endregion
@@ -377,7 +380,7 @@ void Car::BeginParkPlan()
         constexpr float EXIT_LEAD_DISTANCE = 6.0f;
         Vec3 targetPos;
         float targetAngleRad;
-        // GetLaneLookaheadPoint(closestLane, rigidPosition, EXIT_LEAD_DISTANCE, targetPos, targetAngleRad);
+        // GetLookaheadPose(closestLane, rigidPosition, EXIT_LEAD_DISTANCE, targetPos, targetAngleRad);
 
         VehicleCollision::VehicleShape shape = BuildVehicleShape();
         const std::vector<VehicleCollision::Obstacle> &obstacles = m_RoadDataManager->GetObstacles();
@@ -564,14 +567,31 @@ void Car::UpdateStop()
         return;
     }
 
-    if (m_speed > 0.0f)
+    if (m_speed > 0.01f)
     {
+        // 방금 "도착"으로 넘어온 경우 조향을 그 순간 각도로 얼어붙힌 채 그냥 굴러가게 두면, 남은
+        // 제동거리 동안 차가 똑바로(혹은 마지막 조향이 튼 방향으로) 밀려나가 목적지 지점을 지나쳐버린다.
+        // m_currentLane이 아직 유효한 동안은 계속 그 레인(끝점)을 조준해서 감속 중에도 목적지 쪽으로
+        // 붙는 방향을 유지한다.
+        if (m_currentLane != nullptr)
+        {
+            Vec3 rigidPosition = GetRigidbodyPosition();
+            float lookaheadDistance = ComputeLookaheadDistance();
+            Vec3 targetPosition, targetDir;
+            GetLookaheadPose(m_currentLane, m_pathIndex, rigidPosition, lookaheadDistance, targetPosition, targetDir);
+            Steer(PurePursuit(targetPosition));
+        }
         Accelerate(0.0f);
         return;
     }
 
     std::shared_ptr<RoadNode> dest = m_RoadDataManager->GetRandomDestNode();
     if (!dest)
+        return;
+    // GetRandomDestNode는 지금 위치와 무관하게 뽑으므로, 이미 도착 판정 거리 안인 노드(방금 왔던 곳과
+    // 같거나 바로 근처)가 나오면 그냥 이번 틱은 건너뛴다 -- 안 그러면 Drive 진입하자마자 그 자리서 바로
+    // "도착"으로 잡혀 Stop<->Drive가 실제 주행 없이 계속 반복된다.
+    if ((dest->position - GetPosition()).Length() < ARRIVE_DISTANCE)
         return;
 
     SetDestination(dest);
@@ -583,7 +603,7 @@ void Car::UpdateDrive()
 {
     if (!CheckPath())
         return;
-    // TryLaneChange();
+    UpdateBehaviorPlan();
 
     m_wantSegmentTick = true;
 }
@@ -600,9 +620,8 @@ bool Car::CheckPath()
     Vec3 position = GetPosition();
 
     // 현재 레인의 끝에 다가가면 경로상 다음 레인으로 넘어간다.
-    Vec3 projectedPosition = m_currentSpline.GetLookaheadPoint(position, 0.0f);
+    Vec3 projectedPosition = m_currentLane->GetSpline().GetLookaheadPoint(position, 0.0f);
     float laneEndDistance = (m_currentLane->GetEndPoint() - projectedPosition).Length();
-    bool enteredByLaneChange = false;
     while (laneEndDistance < LANE_TRANSITION_THRESHOLD)
     {
         // 신호로 서야 하면 레인을 안 넘긴다
@@ -617,17 +636,9 @@ bool Car::CheckPath()
         }
         ++m_pathIndex;
         SetCurrentLane(m_path[m_pathIndex].lane);
-        enteredByLaneChange = m_path[m_pathIndex].isLaneChange;
-        m_currentSpline = m_currentLane->GetSpline();
-        projectedPosition = m_currentSpline.GetLookaheadPoint(position, 0.0f);
+        projectedPosition = m_currentLane->GetSpline().GetLookaheadPoint(position, 0.0f);
         laneEndDistance = (m_currentLane->GetEndPoint() - projectedPosition).Length();
         RebuildSplineRender();
-    }
-    // 차선변경으로 진입한 레인이면(레인/스플라인은 위 while에서 이미 세팅됨) 도로 제약(IDM용)만
-    // 새 레인 기준으로 다시 스캔한다.
-    if (enteredByLaneChange)
-    {
-        RescanRoadSpeedConstraints();
     }
     return true;
 }
@@ -635,8 +646,8 @@ bool Car::CheckPath()
 float Car::ComputeLookaheadDistance() const
 {
     float minSafeLookahead = 2.0f * m_wheelbase / tanf(m_maxSteerAngle);
-    constexpr float LOOKAHEAD_TIME = 1.0f; // 몇 초 앞을 볼지
-    return std::max(minSafeLookahead, m_speed * LOOKAHEAD_TIME);
+    constexpr float LOOKAHEAD_TIME = 1.5f; // 몇 초 앞을 볼지
+    return  max(m_speed * LOOKAHEAD_TIME, minSafeLookahead);
 }
 
 void Car::DriveControl()
@@ -644,13 +655,14 @@ void Car::DriveControl()
     Vec3 rigidPosition = GetRigidbodyPosition();
     float lookaheadDistance = ComputeLookaheadDistance();
     Vec3 targetPosition, targetDir;
-    GetLookaheadPose(&m_currentSpline, m_currentLane, m_pathIndex, rigidPosition, lookaheadDistance, targetPosition, targetDir);
+    GetLookaheadPose(m_currentLane, m_pathIndex, rigidPosition, lookaheadDistance, targetPosition, targetDir);
     float targetSteer = PurePursuit(targetPosition);
     Steer(targetSteer);
 
-    // speed control
+    // speed control: 목표 속도는 행동 계획(UpdateBehaviorPlan, 0.2초 주기)이 정해두고, 여기선 이번
+    // 프레임의 조향각이 물리적으로 허용하는 한계 속도로 한 번 더 클램프만 한다.
     float steerSpeedCap = CalcMaxSpeed(targetSteer);
-    // DriveSpeedIDM(steerSpeedCap);
+    Accelerate(std::min(steerSpeedCap, m_currentBehaviorPlan.targetSpeed));
 
     // Debug
     DirectX::XMFLOAT3 targetMarkerPos = ToXMFLOAT3(targetPosition);
@@ -658,11 +670,11 @@ void Car::DriveControl()
     m_targetMarker.GetTransform().SetPosition(targetMarkerPos);
 }
 
-void Car::GetLookaheadPose(const Spline *startSpline, const shared_ptr<Lane> &startLane, size_t startPathIndex,
+void Car::GetLookaheadPose(const shared_ptr<Lane> &startLane, size_t startPathIndex,
                            const Vec3 &fromPosition, float distance, Vec3 &outPosition, Vec3 &outDirection) const
 {
-    const Spline *spline = startSpline;
     shared_ptr<Lane> segmentLane = startLane;
+    const Spline *spline = &startLane->GetSpline();
     size_t pathIndex = startPathIndex;
     Vec3 segmentStart = fromPosition;
     float remainingDistance = distance;
@@ -685,7 +697,7 @@ void Car::GetLookaheadPose(const Spline *startSpline, const shared_ptr<Lane> &st
         shared_ptr<Lane> nextLane = (pathIndex + 1 < m_path.size()) ? m_path[pathIndex + 1].lane : nullptr;
         bool isNextLaneCurved = nextLane && nextLane->GetSpline().GetMinRadiusAhead(0.0f, 1.0f) < std::numeric_limits<float>::max();
         float nextLaneRamain = (fromPosition - segmentLane->GetEndPoint()).Length();
-        if (!nextLane || (isNextLaneCurved && nextLaneRamain >= LANE_TRANSITION_THRESHOLD * 1.5f))
+        if (!nextLane || (isNextLaneCurved && nextLaneRamain >= LANE_TRANSITION_THRESHOLD * 2.0f))
         {
             // 경로가 여기서 끝남 -- 기존 스플라인 클램프와 동일하게 마지막 레인 끝점에 멈춘다.
             outPosition = segmentLane->GetEndPoint();
