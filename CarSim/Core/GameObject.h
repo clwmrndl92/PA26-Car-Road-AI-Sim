@@ -15,7 +15,8 @@ public:
     virtual ~GameObject() = default;
 
     void Init(JPH::Vec3 halfExtents, Rigidbody::Type type = Rigidbody::Type::Dynamic,
-              JPH::Vec3 colliderOffset = JPH::Vec3::sZero(), float mass = 1.0f);
+              JPH::Vec3 colliderOffset = JPH::Vec3::sZero(), float mass = 1.0f,
+              JPH::EAllowedDOFs allowedDOFs = JPH::EAllowedDOFs::All);
 
     virtual void Destroy();
 

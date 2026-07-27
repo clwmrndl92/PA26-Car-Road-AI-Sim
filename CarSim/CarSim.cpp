@@ -11,6 +11,24 @@
 
 using namespace DirectX;
 
+namespace
+{
+    // 박스의 로컬 +Z(길이축)를 forward 방향에 정렬하는 쿼터니언. 경사(오르막/내리막)도 반영.
+    XMFLOAT4 QuatFromForward(const Vec3 &forwardIn)
+    {
+        XMVECTOR fwd = XMVector3Normalize(XMVectorSet(forwardIn.GetX(), forwardIn.GetY(), forwardIn.GetZ(), 0.0f));
+        XMVECTOR up = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+        if (fabsf(XMVectorGetX(XMVector3Dot(fwd, up))) > 0.999f) // 거의 수직이면 up 평행 -> 대체축
+            up = XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
+        XMVECTOR right = XMVector3Normalize(XMVector3Cross(up, fwd));
+        XMVECTOR trueUp = XMVector3Cross(fwd, right);
+        XMMATRIX rot(right, trueUp, fwd, XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f)); // 행 = X/Y/Z축 상(image)
+        XMFLOAT4 q;
+        XMStoreFloat4(&q, XMQuaternionRotationMatrix(rot));
+        return q;
+    }
+}
+
 CarSim::CarSim(HINSTANCE hInstance, const std::wstring &windowName, int initWidth, int initHeight)
     : GameApp(hInstance, windowName, initWidth, initHeight)
 {
@@ -83,17 +101,20 @@ bool CarSim::InitResource()
 
         InitRoadRenderer();
         InitMarkingRenderer();
+        InitRoadColliders();
+        InitObstacleColliders();
     }
 
     // Car 1
     {
         auto car = std::make_shared<Car>();
-        car->Init(GetCarSpec(CarType::Car0), &m_SimState, JPH::Vec3(-15.0f, 0.1f, 8.0f));
+        car->Init(GetCarSpec(CarType::Car0), &m_SimState, JPH::Vec3(0.0f, 0.1f, -30.0f));
 
-        car->SetDestination(m_RoadDataManager.GetNode(1));
+        // car->SetDestination(m_RoadDataManager.GetNode(1));
         // std::shared_ptr<RoadNode> dest = m_RoadDataManager.GetRandomDestNode();
         // if (dest)
         //     car->SetDestination(dest);
+        car->SetRoaming(true); // 목적지 없이 스플라인 따라 배회
         car->SetRotation(Vec3(-1, 0, 0));
 
         m_GameObjects.push_back(car);
@@ -540,5 +561,90 @@ void CarSim::InitMarkingRenderer()
 
         RenderObject &ro = m_MarkingRenders.emplace_back();
         ro.SetModel(pMarking);
+    }
+}
+
+void CarSim::InitRoadColliders()
+{
+    constexpr float ROAD_WIDTH = RoadDataManager::ROAD_WIDTH;
+    constexpr float ROAD_THICKNESS = 0.2f; // 도로 판 두께
+    constexpr float SEGMENT_LENGTH = 3.0f; // 콜라이더 박스 하나가 덮는 목표 길이(곡선은 이 길이의 직선 박스들로 근사)
+
+    int segIndex = 0;
+    for (const auto &lane : m_RoadDataManager.GetLanes())
+    {
+        // 컨트롤 포인트 y가 전부 0.01 이하인 지면 레인은 ground plane이 이미 받쳐주므로 만들지 않는다.
+        const std::vector<Vec3> &ctrl = lane->GetSpline().GetControlPoints();
+        bool elevated = std::any_of(ctrl.begin(), ctrl.end(),
+                                    [](const Vec3 &p)
+                                    { return std::fabs(p.GetY()) > 0.01f; });
+        if (!elevated)
+            continue;
+
+        const std::vector<Vec3> &pts = lane->GetSpline().GetSplinePoints();
+        if (pts.size() < 2)
+            continue;
+
+        // 스플라인을 호길이 기준으로 걸어가며 SEGMENT_LENGTH마다(또는 끝에서) 박스 하나로 끊는다.
+        size_t start = 0;
+        float accum = 0.0f;
+        for (size_t i = 1; i < pts.size(); ++i)
+        {
+            accum += (pts[i] - pts[i - 1]).Length();
+            if (accum < SEGMENT_LENGTH && i + 1 < pts.size())
+                continue;
+
+            const Vec3 &a = pts[start];
+            const Vec3 &b = pts[i];
+            start = i;
+            accum = 0.0f;
+
+            Vec3 delta = b - a;
+            float length = delta.Length();
+            if (length < 1e-3f)
+                continue;
+
+            Vec3 mid = (a + b) * 0.5f - Vec3(0.0f, ROAD_THICKNESS * 0.5f, 0.0f); // 박스 윗면 = 레인 높이
+
+            Model *pRoad = m_ModelManager.CreateFromGeometry(
+                "road_seg" + std::to_string(segIndex++),
+                Geometry::CreateBox(ROAD_WIDTH, ROAD_THICKNESS, length));
+            pRoad->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.25f, 0.25f, 0.27f, 1.0f));
+            pRoad->materials[0].Set<float>("$Opacity", 1.0f);
+
+            auto road = std::make_shared<GameObject>();
+            road->SetName("Road_L" + std::to_string(lane->GetId()));
+            road->SetModel(pRoad);
+            road->SetPosition(mid);
+            road->Init(JPH::Vec3(ROAD_WIDTH * 0.5f, ROAD_THICKNESS * 0.5f, length * 0.5f), Rigidbody::Type::Static);
+            road->SetRotation(QuatFromForward(delta));
+            m_GameObjects.push_back(road);
+        }
+    }
+}
+
+void CarSim::InitObstacleColliders()
+{
+    constexpr float OBSTACLE_HEIGHT = 1.5f; // 큐브 높이(장애물 데이터엔 높이가 없어 고정값 사용)
+
+    int obstacleIndex = 0;
+    for (const VehicleCollision::Obstacle &obstacle : m_RoadDataManager.GetObstacles())
+    {
+        // heading 기준 forward축을 박스 로컬 +Z(길이축)에 정렬. 길이=2*halfLength(Z), 폭=2*halfWidth(X).
+        Vec3 forward(cosf(obstacle.headingRad), 0.0f, sinf(obstacle.headingRad));
+
+        Model *pCube = m_ModelManager.CreateFromGeometry(
+            "obstacle_cube" + std::to_string(obstacleIndex++),
+            Geometry::CreateBox(obstacle.halfWidth * 2.0f, OBSTACLE_HEIGHT, obstacle.halfLength * 2.0f));
+        pCube->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.0f, 0.4f, 1.0f, 1.0f));
+        pCube->materials[0].Set<float>("$Opacity", 1.0f);
+
+        auto cube = std::make_shared<GameObject>();
+        cube->SetName("Obstacle" + std::to_string(obstacleIndex));
+        cube->SetModel(pCube);
+        cube->SetPosition(obstacle.center + Vec3(0.0f, OBSTACLE_HEIGHT * 0.5f, 0.0f)); // 바닥면을 center.y에 맞춘다
+        cube->Init(JPH::Vec3(obstacle.halfWidth, OBSTACLE_HEIGHT * 0.5f, obstacle.halfLength), Rigidbody::Type::Static);
+        cube->SetRotation(QuatFromForward(forward));
+        m_GameObjects.push_back(cube);
     }
 }

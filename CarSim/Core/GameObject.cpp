@@ -24,7 +24,8 @@ void GameObject::SetRotation(const DirectX::XMFLOAT4 &rotation)
         m_rigidbody.SetPositionAndRotation(m_rigidbody.GetPosition(), JPH::Quat(rotation.x, rotation.y, rotation.z, rotation.w));
 }
 
-void GameObject::Init(JPH::Vec3 halfExtents, Rigidbody::Type type, JPH::Vec3 colliderOffset, float mass)
+void GameObject::Init(JPH::Vec3 halfExtents, Rigidbody::Type type, JPH::Vec3 colliderOffset, float mass,
+                      JPH::EAllowedDOFs allowedDOFs)
 {
     DirectX::XMFLOAT3 pos = m_transform.GetPosition();
     m_rigidbody.Init(PhysicsSystem::Get().GetBodyInterface(),
@@ -32,7 +33,8 @@ void GameObject::Init(JPH::Vec3 halfExtents, Rigidbody::Type type, JPH::Vec3 col
                      JPH::Vec3(pos.x, pos.y, pos.z),
                      type,
                      colliderOffset,
-                     mass);
+                     mass,
+                     allowedDOFs);
 
     m_colliderOffset = ToXMFLOAT3(colliderOffset);
 }

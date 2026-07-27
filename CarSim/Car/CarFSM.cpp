@@ -71,6 +71,12 @@ void Car::UpdateMode()
 
 void Car::UpdateFindPath()
 {
+    if (m_roaming)
+    {
+        EnsureRoamingPath();
+        return;
+    }
+
     if (m_destLane == nullptr || m_currentLane != nullptr)
         return;
 
@@ -91,6 +97,11 @@ Car::Mode Car::DecideNextMode(const char **reason) const
 
     if (m_mode == Mode::Stop)
     {
+        if (m_roaming)
+        {
+            *reason = "roaming";
+            return Mode::Drive; // 배회 모드는 출차(Park) 없이 바로 주행 시작
+        }
         if (m_destLane == nullptr)
         {
             return Mode::Stop;
@@ -119,6 +130,9 @@ Car::Mode Car::DecideNextMode(const char **reason) const
     }
     else if (m_mode == Mode::Drive)
     {
+        if (m_roaming)
+            return Mode::Drive; // 배회 모드: 목적지/도착 판정 없이 계속 주행
+
         bool arrived = false;
         if (m_destLane != nullptr)
         {
@@ -152,8 +166,8 @@ void Car::OnModeEnter(Mode prev)
     if (m_mode == Mode::Drive)
     {
         SetSubMode(SubMode::D_Normal);
-        m_emergencyBrake = false;     // 직전 Drive의 비상 상태가 새 주행에 새지 않게 리셋
-        m_laneChangeActive = false;   // 새 주행 시작 -- 이전 차선변경 매뉴버 상태가 남지 않게 리셋
+        m_emergencyBrake = false;   // 직전 Drive의 비상 상태가 새 주행에 새지 않게 리셋
+        m_laneChangeActive = false; // 새 주행 시작 -- 이전 차선변경 매뉴버 상태가 남지 않게 리셋
         m_laneChangeFromLane = nullptr;
         std::vector<std::unique_ptr<VehicleSegment>> segments;
         segments.push_back(std::make_unique<SplineFollowSegment>());
@@ -214,6 +228,72 @@ bool Car::TryFindPathAndSetLane()
     }
 
     return true;
+}
+
+shared_ptr<Lane> Car::PickRandomSuccessor(const shared_ptr<Lane> &lane) const
+{
+    if (lane == nullptr)
+        return nullptr;
+
+    std::vector<shared_ptr<Lane>> successors;
+    for (const weak_ptr<Lane> &weak : lane->GetSuccessors())
+        if (shared_ptr<Lane> succ = weak.lock())
+            successors.push_back(succ);
+
+    if (successors.empty())
+        return nullptr;
+    return successors[rand() % successors.size()];
+}
+
+vector<LaneStep> Car::BuildRoamingPath(const shared_ptr<Lane> &startLane) const
+{
+    vector<LaneStep> path;
+    if (startLane == nullptr)
+        return path;
+
+    path.push_back({startLane, false});
+    shared_ptr<Lane> current = startLane;
+    for (size_t i = 0; i < ROAMING_MIN_AHEAD; ++i)
+    {
+        shared_ptr<Lane> next = PickRandomSuccessor(current);
+        if (next == nullptr)
+            break; // 막다른 레인
+        path.push_back({next, false});
+        current = next;
+    }
+    return path;
+}
+
+void Car::EnsureRoamingPath()
+{
+    if (m_currentLane == nullptr)
+    {
+        SetCurrentLane(RoadDataManager::Get().GetClosestLane(GetPosition()));
+        m_path = BuildRoamingPath(m_currentLane);
+        m_pathIndex = 0;
+        return;
+    }
+    MaintainRoamingPath();
+}
+
+void Car::MaintainRoamingPath()
+{
+    constexpr size_t KEEP_BEHIND = 1; // 메모리 상한용: 지나온 레인은 이만큼만 남기고 앞부분을 버린다
+
+    while (m_pathIndex > KEEP_BEHIND)
+    {
+        m_path.erase(m_path.begin());
+        --m_pathIndex;
+    }
+
+    // 현재 레인 앞으로 항상 ROAMING_MIN_AHEAD개의 레인이 남아 있도록 랜덤 후속으로 채운다.
+    while (!m_path.empty() && m_path.size() - m_pathIndex <= ROAMING_MIN_AHEAD)
+    {
+        shared_ptr<Lane> next = PickRandomSuccessor(m_path.back().lane);
+        if (next == nullptr)
+            break; // 막다른 레인
+        m_path.push_back({next, false});
+    }
 }
 #pragma endregion
 
@@ -715,9 +795,18 @@ bool Car::CheckPath()
 
         if (m_pathIndex + 1 >= m_path.size())
         {
-            m_destLane = nullptr;
-            SetCurrentLane(nullptr);
-            return false;
+            if (m_roaming)
+            {
+                MaintainRoamingPath(); // 랜덤 후속 레인으로 버퍼를 채운다
+                if (m_pathIndex + 1 >= m_path.size())
+                    break; // 후속 레인이 없는 막다른 레인 -- 현재 레인 끝에서 멈춘다
+            }
+            else
+            {
+                m_destLane = nullptr;
+                SetCurrentLane(nullptr);
+                return false;
+            }
         }
         ++m_pathIndex;
         SetCurrentLane(m_path[m_pathIndex].lane);
@@ -759,7 +848,7 @@ void Car::DriveControl()
 
     // Debug
     DirectX::XMFLOAT3 targetMarkerPos = ToXMFLOAT3(targetPosition);
-    targetMarkerPos.y = 0.2f;
+    targetMarkerPos.y = GetPosition().GetY() + 0.2f;
     m_targetMarker.GetTransform().SetPosition(targetMarkerPos);
 }
 
@@ -790,7 +879,7 @@ void Car::GetLookaheadPose(const shared_ptr<Lane> &startLane, size_t startPathIn
         shared_ptr<Lane> nextLane = (pathIndex + 1 < m_path.size()) ? m_path[pathIndex + 1].lane : nullptr;
         bool isNextLaneCurved = nextLane && nextLane->GetSpline().GetMinRadiusAhead() < std::numeric_limits<float>::max();
         float nextLaneRamain = (fromPosition - segmentLane->GetEndPoint()).Length();
-        if (!nextLane || (isNextLaneCurved && nextLaneRamain >= LANE_TRANSITION_THRESHOLD * 2.0f))
+        if (!nextLane || (isNextLaneCurved && nextLaneRamain >= LANE_CURVE_LOOKAHEAD_THRESHOLD))
         {
             // 경로가 여기서 끝남 -- 기존 스플라인 클램프와 동일하게 마지막 레인 끝점에 멈춘다.
             outPosition = segmentLane->GetEndPoint();
@@ -1328,10 +1417,12 @@ Car::BehaviorCandidate Car::BuildCandidate(LaneChoice laneChoice, SpeedAction sp
 
     if (laneChoice != LaneChoice::Keep)
     {
-        candidate.newPath = RoadDataManager::Get().FindPath(lane, m_destLane);
+        // 배회 모드는 목적지가 없으므로 대상 레인에서 시작하는 랜덤 경로로 후보를 유효화한다.
+        candidate.newPath = m_roaming ? BuildRoamingPath(lane)
+                                      : RoadDataManager::Get().FindPath(lane, m_destLane);
         if (candidate.newPath.empty())
         {
-            candidate.targetLane = nullptr; // 이 레인으로는 목적지에 못 감 -- 무효 후보
+            candidate.targetLane = nullptr; // 이 레인으로는 목적지에 못 감(배회면 레인 없음) -- 무효 후보
             return candidate;
         }
     }
@@ -1339,11 +1430,21 @@ Car::BehaviorCandidate Car::BuildCandidate(LaneChoice laneChoice, SpeedAction sp
     float simAccel = 0.0f;
     switch (speedAction)
     {
-    case SpeedAction::Accelerate:     simAccel = m_maxAccel;         break;
-    case SpeedAction::AccelerateHalf: simAccel = m_maxAccel * 0.5f;  break;
-    case SpeedAction::Maintain:       simAccel = 0.0f;               break;
-    case SpeedAction::DecelerateHalf: simAccel = -m_maxBrake * 0.5f; break;
-    case SpeedAction::Decelerate:     simAccel = -m_maxBrake;        break;
+    case SpeedAction::Accelerate:
+        simAccel = m_maxAccel;
+        break;
+    case SpeedAction::AccelerateHalf:
+        simAccel = m_maxAccel * 0.5f;
+        break;
+    case SpeedAction::Maintain:
+        simAccel = 0.0f;
+        break;
+    case SpeedAction::DecelerateHalf:
+        simAccel = -m_maxBrake * 0.5f;
+        break;
+    case SpeedAction::Decelerate:
+        simAccel = -m_maxBrake;
+        break;
     }
     std::vector<TrajectorySample> trajectory = SimulateEgoTrajectory(lane, simAccel, roadSamples);
     if (trajectory.empty())

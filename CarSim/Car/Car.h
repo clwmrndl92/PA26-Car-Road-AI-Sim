@@ -43,6 +43,7 @@ public:
         m_drawCollider = focused;
     }
     void SetDestination(const shared_ptr<RoadNode> &parkNode);
+    void SetRoaming(bool roaming) { m_roaming = roaming; } // 배회 모드 on/off
     float GetAcceleration() const { return m_acceleration; }
     float GetLength() const { return m_halfExtents.GetZ() * 2.0f; }
     float GetHalfWidth() const { return m_halfExtents.GetX(); }
@@ -144,6 +145,12 @@ private:
     void SetCurrentLane(const shared_ptr<Lane> &lane);            // m_currentLane을 직접 대입하지 않고 항상 이 함수를 거친다.
     bool ShouldStopForSignal(const shared_ptr<Lane> &lane) const; // CheckPath(Drive)와 ScanRoadSpeedConstraints/ViolatesSignal(BehaviorPlan)이 공유.
     bool TryFindPathAndSetLane();
+
+    // 배회(roaming) 모드: 목적지 없이 랜덤 후속 레인으로 계속 주행. m_path를 랜덤 successor로 채워 유지한다.
+    void EnsureRoamingPath();                                                   // currentLane/초기 path 세팅 + 유지
+    void MaintainRoamingPath();                                                 // 지나온 앞부분 트림 + 앞쪽 버퍼 채우기
+    shared_ptr<Lane> PickRandomSuccessor(const shared_ptr<Lane> &lane) const;   // successor 중 랜덤(없으면 nullptr)
+    vector<LaneStep> BuildRoamingPath(const shared_ptr<Lane> &startLane) const; // startLane + 랜덤 후속 몇 개
 
     void UpdatePark();
     void BeginParkPlan();
@@ -301,9 +308,10 @@ private:
 #pragma endregion
 
 public:
-    static constexpr float LANE_TRANSITION_THRESHOLD = 2.0f; // 다음 차선으로 완전히 넘어가는(전환되는) 임계값
     static constexpr float ARRIVE_DISTANCE = 5.0f;
     static constexpr float PARK_ARRIVE_DISTANCE = 10.0f;
+    static constexpr float LANE_TRANSITION_THRESHOLD = 2.0f; // 다음 차선으로 완전히 넘어가는(전환되는) 임계값
+    static constexpr float LANE_CURVE_LOOKAHEAD_THRESHOLD = 8.0f;
 
 private:
     // 설정 및 스펙 상수/변수 (Constants & Specifications)
@@ -345,6 +353,9 @@ private:
     unordered_set<int> m_triedParkSpotIds; // 이번 입차에서 경로탐색이 실패해 이미 시도해본 ParkSpot id들
     bool m_parkPlanPending = false;
 
+    bool m_roaming = false;                        // 배회 모드: 목적지 없이 스플라인 따라 랜덤 후속 레인으로 계속 주행
+    static constexpr size_t ROAMING_MIN_AHEAD = 3; // 배회 시 현재 레인 앞으로 항상 유지할 최소 레인 버퍼 수
+
     vector<LaneStep> m_path;
     size_t m_pathIndex = 0;
     float m_currentTime = 0.0f;
@@ -384,7 +395,6 @@ private:
     RenderObject m_rearTrailRender;
     RenderObject m_frontTrailRender;
     RenderObject m_debugBox;
-    RenderObject m_originMarker;
     bool m_drawCollider = false;
     RenderObject m_steerLine;
     RenderObject m_targetMarker;

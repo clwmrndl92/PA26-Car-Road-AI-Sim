@@ -15,8 +15,10 @@ public:
 
     // position stays the body's rotation pivot (its center of mass); colliderOffset shifts only
     // the collision box within that frame (see Init's OffsetCenterOfMassShape usage).
+    // allowedDOFs: Dynamic 바디의 허용 자유도(예: RotationY만 남겨 피치/롤 잠금). Static/Kinematic엔 영향 없음.
     void    Init(JPH::BodyInterface& bodyInterface, JPH::Vec3 halfExtents, JPH::Vec3 position, Type type,
-                 JPH::Vec3 colliderOffset = JPH::Vec3::sZero(), float mass = 1.0f);
+                 JPH::Vec3 colliderOffset = JPH::Vec3::sZero(), float mass = 1.0f,
+                 JPH::EAllowedDOFs allowedDOFs = JPH::EAllowedDOFs::All);
     void    Destroy(JPH::BodyInterface& bodyInterface);
 
     JPH::Vec3   GetPosition() const;

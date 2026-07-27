@@ -24,7 +24,9 @@ void Car::Init(const CarSpec &spec, SimulationState *simState, JPH::Vec3 positio
                             position.GetY() - fwd.y * m_wheelbase,
                             position.GetZ() - fwd.z * m_wheelbase);
 
-    GameObject::Init(spec.halfExtents, Rigidbody::Type::Kinematic, spec.colliderOffset, spec.mass);
+    constexpr JPH::EAllowedDOFs carDOFs = JPH::EAllowedDOFs::TranslationX | JPH::EAllowedDOFs::TranslationY |
+                                          JPH::EAllowedDOFs::TranslationZ | JPH::EAllowedDOFs::RotationY;
+    GameObject::Init(spec.halfExtents, Rigidbody::Type::Dynamic, spec.colliderOffset, spec.mass, carDOFs);
 
     m_spawnPosition = m_transform.GetPosition();
     m_spawnRotation = m_transform.GetRotationQuat();
@@ -100,18 +102,6 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
         {
             pBasic->SetRenderWireframe();
             m_debugBox.Draw(context, effect);
-            pBasic->SetRenderDefault();
-        }
-    }
-
-    if (m_originMarker.GetModel())
-    {
-        m_originMarker.GetTransform().SetPosition(m_transform.GetPosition());
-
-        if (auto *pBasic = dynamic_cast<BasicEffect *>(&effect))
-        {
-            pBasic->SetRenderNoDepthTest();
-            m_originMarker.Draw(context, effect);
             pBasic->SetRenderDefault();
         }
     }
@@ -267,7 +257,7 @@ bool Car::ShouldStopForSignal(const shared_ptr<Lane> &lane) const
 
     TrafficSignal::Color color = m_SimState->GetSignalColor(signalNode->signalPhaseOffset);
     float gap = (signalNode->position - GetPosition()).Length();
-    float brakingDistance = (m_speed * m_speed) / (2.0f * m_maxBrake);
+    float emergStopDistance = (m_speed * m_speed) / (2.0f * m_maxEmergBrake);
     if (color == TrafficSignal::Color::Green)
     {
         if (m_committedYellowNodeId == signalNode->id)
@@ -275,13 +265,13 @@ bool Car::ShouldStopForSignal(const shared_ptr<Lane> &lane) const
     }
     else if (color == TrafficSignal::Color::Yellow && m_committedYellowNodeId != signalNode->id)
     {
-        if (gap <= brakingDistance)
-            m_committedYellowNodeId = signalNode->id; // 정지거리 안쪽 -- 통과 확정
+        if (gap <= emergStopDistance)
+            m_committedYellowNodeId = signalNode->id; // 최대 제동으로도 못 서는 거리 -- 통과 확정
     }
     else if (color == TrafficSignal::Color::Red && m_committedYellowNodeId == signalNode->id)
     {
-        // 정지 가능
-        if (gap > brakingDistance)
+        // 아직 설 수 있으면(최대 제동 거리 밖) 커밋 취소하고 선다
+        if (gap > emergStopDistance)
             m_committedYellowNodeId = -1;
     }
     return color != TrafficSignal::Color::Green && m_committedYellowNodeId != signalNode->id;
@@ -356,14 +346,15 @@ void Car::ApplyMotion()
 {
     if (PhysicsSystem::Get().HasNewContact(m_rigidbody.GetBodyID()))
     {
-        m_rigidbody.SetLinearVelocity(JPH::Vec3::sZero());
+        float vy = m_rigidbody.GetLinearVelocity().GetY();
+        m_rigidbody.SetLinearVelocity(JPH::Vec3(0.0f, vy, 0.0f));
         m_rigidbody.SetAngularVelocity(JPH::Vec3::sZero());
         m_acceleration = 0.0f;
         m_speed = 0.0f;
+        DebugConsole::Log("CRASH!!");
         return;
     }
 
-    // Steering stays kinematic -- the bicycle model already gives the correct yaw rate.
     float angularVelocity = GetSignedSpeed() * tan(m_steerAngle) / m_wheelbase;
     m_rigidbody.SetAngularVelocity(JPH::Vec3(0.0f, angularVelocity, 0.0f));
     m_rigidbody.SetLinearVelocity(ComputeDesiredVelocity());
@@ -373,7 +364,7 @@ JPH::Vec3 Car::ComputeDesiredVelocity() const
 {
     float signedSpeed = GetSignedSpeed();
     DirectX::XMFLOAT3 fwd = m_transform.GetForwardAxis();
-    float vy = m_rigidbody.GetLinearVelocity().GetY();
+    float vy = m_rigidbody.GetLinearVelocity().GetY(); // 수직 속도는 물리(중력/지면)가 정한 값을 그대로 유지
     return JPH::Vec3(fwd.x * signedSpeed, vy, fwd.z * signedSpeed);
 }
 
@@ -603,11 +594,6 @@ void Car::DebugInit()
     pBox->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f));
     pBox->materials[0].Set<float>("$Opacity", 1.0f);
     m_debugBox.SetModel(pBox);
-
-    Model *pMarker = ModelManager::Get().CreateFromGeometry("__origin__:" + GetName(), Geometry::CreateSphere(0.1f, 8, 8));
-    pMarker->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f));
-    pMarker->materials[0].Set<float>("$Opacity", 1.0f);
-    m_originMarker.SetModel(pMarker);
 
     Model *pLine = ModelManager::Get().CreateFromGeometry("__steer_line__:" + GetName(),
                                                           Geometry::CreateLine(DirectX::XMFLOAT3(0.0f, 0.15f, 0.0f), DirectX::XMFLOAT3(0.0f, 0.15f, 6.0f)));

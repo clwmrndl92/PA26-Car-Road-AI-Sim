@@ -30,6 +30,8 @@ private:
     void FocusOnObject(const std::shared_ptr<Car> &obj);
     void InitRoadRenderer();
     void InitMarkingRenderer();
+    void InitRoadColliders();     // 고가(높이>0) 레인을 따라 lane 폭만큼 static 도로 GameObject 생성
+    void InitObstacleColliders(); // data.json의 obstacle 위치/크기/회전으로 static 큐브(차량과 충돌) 생성
     void SpawnCar(CarType type);
     void RemoveCar(const std::shared_ptr<Car> &car);
     void UpdateSignalMarkers();

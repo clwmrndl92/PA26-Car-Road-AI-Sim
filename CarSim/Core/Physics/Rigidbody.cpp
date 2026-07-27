@@ -4,7 +4,7 @@
 JPH_SUPPRESS_WARNINGS
 
 void Rigidbody::Init(JPH::BodyInterface &bodyInterface, JPH::Vec3 halfExtents, JPH::Vec3 position, Type type,
-                     JPH::Vec3 colliderOffset, float mass)
+                     JPH::Vec3 colliderOffset, float mass, JPH::EAllowedDOFs allowedDOFs)
 {
     m_bodyInterface = &bodyInterface;
 
@@ -30,6 +30,7 @@ void Rigidbody::Init(JPH::BodyInterface &bodyInterface, JPH::Vec3 halfExtents, J
         JPH::Quat::sIdentity(),
         motionType,
         layer);
+    settings.mAllowedDOFs = allowedDOFs; // 예: 차량은 RotationY만 허용해 충돌/중력에 의한 피치·롤(전복)을 막는다
 
     if (type == Type::Dynamic)
     {
