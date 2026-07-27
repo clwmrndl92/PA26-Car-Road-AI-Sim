@@ -169,6 +169,11 @@ private:
     void UpdateDrive();
     bool CheckPath();
 
+    // 경적: 장애물/차에 막혀 정지해 있으면 5초마다 한 번 울린다(2초간 차체를 빨갛게).
+    void UpdateHorn(float dt);
+    bool IsHornSituation() const;    // Drive 중 (빨간불 대기가 아닌) 정지 상태인가
+    bool KnowsRedSignalAhead() const; // 경로 앞쪽 가장 가까운 신호가 빨강인 걸 아는 상태인가(그럼 경적 안 울림)
+
     void GetLookaheadPose(const shared_ptr<Lane> &startLane, size_t startPathIndex,
                           const Vec3 &fromPosition, float distance, Vec3 &outPosition, Vec3 &outDirection) const;
     float ComputeLookaheadDistance() const;
@@ -361,6 +366,15 @@ private:
     float m_currentTime = 0.0f;
     // 노란불 때 "정지거리 안쪽이라 통과" 확정한 신호 id(초록될 때까지 유지). 없으면 -1.
     mutable int m_committedYellowNodeId = -1;
+
+    // 경적 상태
+    static constexpr float HORN_STOP_SPEED = 0.3f;      // 이 속도 이하면 "정지"로 본다(m/s)
+    static constexpr float HORN_INTERVAL = 5.0f;        // 막혀 있는 동안 경적 주기(초)
+    static constexpr float HORN_FLASH_DURATION = 2.0f;  // 경적 표시로 빨갛게 두는 시간(초)
+    static constexpr float HORN_SIGNAL_AWARE_DISTANCE = 40.0f; // 이 거리 안의 빨간 신호는 "알고 서 있다"고 보고 경적을 참는다(대기줄 커버, m)
+    float m_hornStoppedDuration = 0.0f;                 // 막혀서 정지해 있던 누적 시간
+    float m_hornFlashTimer = 0.0f;                      // 남은 빨간 표시 시간(>0이면 빨갛게 그린다)
+    Model *m_carModel = nullptr;                        // 차체 모델(경적 시 재질 색을 잠깐 빨갛게 바꾼다)
 
     // 행동 계획(Behavior Plan) 상태
     static constexpr float BEHAVIOR_PLAN_INTERVAL = 0.2f;   // 행동 후보 재판단 주기

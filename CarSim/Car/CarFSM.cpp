@@ -940,7 +940,9 @@ std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistan
                     float nodeT = spline->GetSplinePosition(signalNode->position);
                     if (nodeT >= startT)
                     {
-                        float nodeDistance = traveledDistance + (nodeT - startT) * splineLength;
+                        float nodeDistance = (segmentLane == m_currentLane)
+                                                 ? (signalNode->position - calPosition).Length()
+                                                 : traveledDistance + (nodeT - startT) * splineLength;
                         samples.push_back({signalNode->position, nodeDistance, 0.0f});
                     }
                 }
@@ -1641,33 +1643,42 @@ void Car::UpdateBehaviorPlan()
         m_path = std::move(chosen.newPath);
         m_pathIndex = 0;
         SetCurrentLane(chosen.targetLane); // 내부에서 RebuildSplineRender()까지 처리한다.
-        DebugConsole::Log(GetName() + ": behavior plan -> " +
-                          std::string(chosen.laneChoice == LaneChoice::Abort ? "ABORT to lane " : "lane change to lane ") +
-                          std::to_string(chosen.targetLane->GetId()) + " (target " +
-                          std::to_string(chosen.targetSpeed * 3.6f) + " km/h)");
+        // 신호 디버그 중 콘솔을 신호 로그만 남기려 잠시 끔 -- 필요하면 주석 해제.
+        // DebugConsole::Log(GetName() + ": behavior plan -> " +
+        //                   std::string(chosen.laneChoice == LaneChoice::Abort ? "ABORT to lane " : "lane change to lane ") +
+        //                   std::to_string(chosen.targetLane->GetId()) + " (target " +
+        //                   std::to_string(chosen.targetSpeed * 3.6f) + " km/h)");
 
         // 다음 틱의 관성 기준선은 "새 레인 유지". 안 그러면 저장된 laneChoice가 ChangeLeft로 남아
         // 다음 틱에 Keep(정착 지속)이 관성 페널티를 받아 매뉴버가 안정적으로 마무리되지 않는다.
         chosen.laneChoice = LaneChoice::Keep;
     }
 
-    // [진단용] 후보별 평가 결과 전체를 찍어서 커브 감속이 왜 안 걸리는지(혹은 잘 걸리는지) 확인한다.
-    // 확인 끝나면 지워도 된다.
-    DebugConsole::Log(GetName() + ": [plan] speed=" + std::to_string(m_speed * 3.6f) +
-                      "km/h desired=" + std::to_string(desiredSpeed * 3.6f) + "km/h");
-    for (const BehaviorCandidate &candidate : candidates)
+    // [신호 디버그] 경로상 첫 신호 레인의 상태와 이번 플랜의 선택만 찍는다 (신호무시 버그 추적용).
+    // 모두 읽기 전용 조회 -- ShouldStopForSignal은 committedYellow를 갱신하는 부작용이 있어 여기서 안 부른다.
+    for (size_t i = m_pathIndex; i < m_path.size(); ++i)
     {
-        bool safe = IsCandidateSafe(candidate);
-        float cost = safe ? EvaluateCandidateCost(candidate, desiredSpeed) : -1.0f;
-        DebugConsole::Log(GetName() + ":   " + LaneChoiceToString(candidate.laneChoice) + "/" +
-                          SpeedActionToString(candidate.speedAction) +
-                          " target=" + std::to_string(candidate.targetSpeed * 3.6f) +
-                          "km/h end=" + std::to_string(candidate.horizonEndSpeed * 3.6f) +
-                          "km/h overshoot=" + std::to_string(candidate.maxSpeedOvershoot * 3.6f) +
-                          "km/h safe=" + (safe ? "Y" : "N") + " cost=" + std::to_string(cost));
+        shared_ptr<Lane> lane = m_path[i].lane;
+        shared_ptr<RoadNode> sig = lane->GetSignalNode();
+        if (sig == nullptr)
+            continue;
+
+        TrafficSignal::Color color = m_SimState->GetSignalColor(sig->signalPhaseOffset);
+        const char *colorStr = color == TrafficSignal::Color::Red ? "RED" : color == TrafficSignal::Color::Yellow ? "YELLOW"
+                                                                                                                  : "GREEN";
+        const Spline &spline = lane->GetSpline();
+        float nodeT = spline.GetSplinePosition(sig->position);
+        float myT = spline.GetSplinePosition(GetPosition());
+        float gap = (sig->position - GetPosition()).Length();
+
+        DebugConsole::Log(GetName() + ": [signal] lane=" + std::to_string(lane->GetId()) + " node=" + std::to_string(sig->id) +
+                          " " + colorStr + " gap=" + std::to_string(gap) + "m myT=" + std::to_string(myT) +
+                          " nodeT=" + std::to_string(nodeT) + " committedYellow=" + (m_committedYellowNodeId == sig->id ? "Y" : "N") +
+                          " | speed=" + std::to_string(m_speed * 3.6f) + "km/h desired=" + std::to_string(desiredSpeed * 3.6f) +
+                          "km/h action=" + SpeedActionToString(chosen.speedAction) +
+                          " violation=" + (chosen.signalViolation ? "Y" : "N"));
+        break; // 가장 가까운(첫) 신호만
     }
-    DebugConsole::Log(GetName() + ":   -> chosen " + LaneChoiceToString(chosen.laneChoice) + "/" +
-                      SpeedActionToString(chosen.speedAction));
 
     m_currentBehaviorPlan = std::move(chosen);
 }

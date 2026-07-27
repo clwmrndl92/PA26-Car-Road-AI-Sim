@@ -6,6 +6,7 @@
 #include <ModelManager.h>
 #include <algorithm>
 #include <cmath>
+#include <utility>
 #include <imgui.h>
 #include "Utill/DebugConsole.h"
 #include "Utill/Assert.h"
@@ -13,7 +14,8 @@
 void Car::Init(const CarSpec &spec, SimulationState *simState, JPH::Vec3 position)
 {
     SetName(spec.name);
-    m_render.SetModel(ModelManager::Get().CreateFromFile(spec.modelPath));
+    m_carModel = ModelManager::Get().CreateFromFile(spec.modelPath);
+    m_render.SetModel(m_carModel);
     SetRenderOffset(ToXMFLOAT3(spec.renderOffset));
     m_wheelbase = spec.wheelbase;
     m_halfExtents = spec.halfExtents;
@@ -63,6 +65,7 @@ void Car::Update(float dt)
         UpdateDrive();
         break;
     }
+    UpdateHorn(dt);
 }
 
 void Car::UpdatePhysics(float dt)
@@ -82,9 +85,26 @@ void Car::UpdateUI(float dt)
 
 void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
 {
-    GameObject::Draw(context, effect);
-
     using namespace DirectX;
+
+    // 경적 중이면 차체 재질을 잠깐 빨갛게 칠해 그리고 곧바로 원복한다. 모델은 같은 modelPath끼리
+    // 공유되지만 Draw는 차마다 순차 호출이라, 이 차의 GameObject::Draw 동안만 빨간색이 적용된다.
+    bool honking = m_hornFlashTimer > 0.0f && m_carModel != nullptr;
+    std::vector<std::pair<size_t, XMFLOAT4>> savedDiffuse;
+    if (honking)
+    {
+        for (size_t i = 0; i < m_carModel->materials.size(); ++i)
+        {
+            Material &mat = m_carModel->materials[i];
+            if (!mat.Has<XMFLOAT4>("$DiffuseColor"))
+                continue;
+            savedDiffuse.emplace_back(i, mat.Get<XMFLOAT4>("$DiffuseColor"));
+            mat.Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f));
+        }
+    }
+    GameObject::Draw(context, effect);
+    for (const std::pair<size_t, XMFLOAT4> &saved : savedDiffuse)
+        m_carModel->materials[saved.first].Set<XMFLOAT4>("$DiffuseColor", saved.second);
 
     if (!m_drawCollider)
         return;
@@ -405,6 +425,60 @@ void Car::SetDestination(const shared_ptr<RoadNode> &destNode)
 
     if (m_currentLane != nullptr)
         TryFindPathAndSetLane();
+}
+
+void Car::UpdateHorn(float dt)
+{
+    if (IsHornSituation())
+    {
+        m_hornStoppedDuration += dt;
+        if (m_hornStoppedDuration >= HORN_INTERVAL)
+        {
+            m_hornStoppedDuration = 0.0f;           // 다음 5초 카운트 시작
+            m_hornFlashTimer = HORN_FLASH_DURATION; // 경적: 2초간 빨갛게
+            DebugConsole::Log(GetName() + ": HONK!");
+        }
+    }
+    else
+        m_hornStoppedDuration = 0.0f; // 다시 움직이면(또는 신호대기면) 리셋
+
+    if (m_hornFlashTimer > 0.0f)
+        m_hornFlashTimer -= dt;
+}
+
+// Drive 중 장애물/차에 막혀 멈춘 상태인가. 빨간불 대기(그걸 아는 차)와 정상 정차(도착 등 Drive 외)는 제외한다.
+bool Car::IsHornSituation() const
+{
+    if (m_mode != Mode::Drive)
+        return false;
+    if (m_speed > HORN_STOP_SPEED)
+        return false;
+    return !KnowsRedSignalAhead();
+}
+
+bool Car::KnowsRedSignalAhead() const
+{
+    for (size_t i = m_pathIndex; i < m_path.size(); ++i)
+    {
+        const shared_ptr<Lane> &lane = m_path[i].lane;
+        shared_ptr<RoadNode> signalNode = lane->GetSignalNode();
+        if (signalNode == nullptr)
+            continue;
+
+        // 현재 레인의 신호는 이미 정지선을 지났으면 건너뛴다(지난 신호엔 안 걸린다).
+        if (i == m_pathIndex)
+        {
+            const Spline &spline = lane->GetSpline();
+            if (spline.GetSplinePosition(GetPosition()) > spline.GetSplinePosition(signalNode->position))
+                continue;
+        }
+
+        // 경로상 가장 가까운(앞선) 신호가 판정 기준 -- 그 너머 신호는 이 신호를 지나야 만난다.
+        if ((signalNode->position - GetPosition()).Length() > HORN_SIGNAL_AWARE_DISTANCE)
+            return false; // 가장 가까운 신호가 너무 멀다 -- 신호 때문에 선 게 아님
+        return m_SimState->GetSignalColor(signalNode->signalPhaseOffset) == TrafficSignal::Color::Red;
+    }
+    return false;
 }
 #pragma region Debug
 // Debug / Rendering Helpers
