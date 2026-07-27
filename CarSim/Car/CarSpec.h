@@ -8,8 +8,10 @@ struct BehaviorWeights
 {
     float speed = 1.0f;            // w1: 목표속도 대비 도달속도(3초 뒤 예상속도) 부족분에 대한 가중치
     float laneChange = 5.0f;       // w2: 차선변경 자체에 물리는 고정 비용 가중치
+    float lateralAccel = 0.5f;     // w3: 궤적 중 최대 횡가속(m/s^2)에 물리는 승차감 가중치 (커브/차선변경)
     float inertia = 1.0f;          // w4: 직전에 고른 후보(차선/속도 결정)와 달라졌을 때 물리는 가중치
     float signalViolation = 20.0f; // w5: 신호를 지켜야 하는데 못 멈추고 통과하는 후보에 물리는 가중치
+    float following = 3.0f;        // w6: 앞차와의 시간헤드웨이가 목표(1.5s)보다 짧을 때 부족분에 물리는 가중치
 };
 
 struct CarSpec
