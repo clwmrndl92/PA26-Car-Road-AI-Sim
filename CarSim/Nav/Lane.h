@@ -18,7 +18,7 @@ public:
     const Spline &GetSpline() const { return m_spline; }
     const shared_ptr<Road> &GetRoad() const { return m_road; }
 
-    float GetLength() const { return length; }
+    float GetLength() const { return m_length; }
     float GetLimitSpeed() const;
 
     const vector<weak_ptr<Lane>> &GetSuccessors() const { return m_successors; }
@@ -49,7 +49,7 @@ private:
     int m_id;
     shared_ptr<Road> m_road;
 
-    float length = 0.0f;
+    float m_length = 0.0f;
     vector<weak_ptr<Lane>> m_successors;
     vector<weak_ptr<Lane>> m_predecessors;
     weak_ptr<Lane> m_left;  // 같은 진행방향 좌측 인접 레인

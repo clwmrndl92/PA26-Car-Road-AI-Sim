@@ -7,14 +7,11 @@
 #include "Lane.h"
 #include "Road.h"
 #include "VehicleCollision.h"
-#include "TrafficSignal.h"
 
 using namespace std;
 
 struct RoadNode;
-class Car;
 
-// 라우팅 결과 한 스텝: 따라갈 레인 + 이 레인으로 들어올 때 차선변경이 필요한지 여부.
 struct LaneStep
 {
     shared_ptr<Lane> lane;
@@ -24,8 +21,11 @@ struct LaneStep
 class RoadDataManager
 {
 public:
-    RoadDataManager() = default;
-    ~RoadDataManager() = default;
+    RoadDataManager();
+    ~RoadDataManager();
+
+    static RoadDataManager &Get();
+
     void Init(const string &filePath);
     void BuildRoadData(const string &filePath);
 
@@ -43,31 +43,14 @@ public:
 
     const vector<shared_ptr<Lane>> *GetParkingLanes(int parkNodeId) const;
 
-    shared_ptr<RoadNode> TryReserveParkSpot(int parkNodeId, const unordered_set<int> &excludeIds = {});
-    void ReleaseParkSpot(int spotNodeId);
-
-    // 전역 시뮬레이션 시계 누적 (CarSim::UpdateScene에서 매 프레임 한 번만 호출)
-    void Tick(float dt) { m_simTime += dt; }
-    TrafficSignal::Color GetSignalColor(float phaseOffset) const;
-
-    // 시뮬레이션에 존재하는 모든 차 (행동 계획의 주변 차량 인지용). 레인 등록과 무관하게
-    // Car::Init/Destroy가 등록/해제하므로, 주차 중이거나 레인을 벗어난 차도 항상 들어 있다.
-    void RegisterCar(Car *car) { m_cars.push_back(car); }
-    void UnregisterCar(Car *car) { m_cars.erase(std::remove(m_cars.begin(), m_cars.end(), car), m_cars.end()); }
-    const vector<Car *> &GetCars() const { return m_cars; }
-
 public:
-    static constexpr float ROAD_WIDTH = 3.2f;             // 차선 폭
-    static constexpr float CONNECT_EPSILON = 0.1f;        // 두 레인의 끝점/시작점이 이 거리 안이면 이어진 것으로 본다.
-    static constexpr float LANE_CHANGE_COST = 5.0f;       // 차선변경(좌/우 인접 레인으로 이동) 간선의 비용
-    static constexpr float CURVE_SPEED_COEFF = 1.22f;     // 최대 코너링 속도 = CURVE_SPEED_COEFF * sqrt(R)
-    static constexpr float SIGNAL_GREEN_DURATION = 8.0f;  // 초록불 지속 시간
-    static constexpr float SIGNAL_YELLOW_DURATION = 3.0f; // 노란불 지속 시간
-    static constexpr float SIGNAL_RED_DURATION = 12.0f;   // 빨간불 지속 시간
+    static constexpr float ROAD_WIDTH = 3.2f;         // 차선 폭
+    static constexpr float CONNECT_EPSILON = 0.1f;    // 두 레인의 끝점/시작점이 이 거리 안이면 이어진 것으로 본다.
+    static constexpr float LANE_CHANGE_COST = 5.0f;   // 차선변경(좌/우 인접 레인으로 이동) 간선의 비용
+    static constexpr float CURVE_SPEED_COEFF = 1.22f; // 최대 코너링 속도 = CURVE_SPEED_COEFF * sqrt(R)
 
 private:
-    // 주어진 레인 집합 안에서 끝점<->시작점을 공간 매칭해 successors를 구성한다. 메인 레인과 각
-    // Park의 주차레인 집합에 대해 따로 호출한다(집합 간에는 연결하지 않음 = Park 노드가 handoff 지점).
+    // Park의 주차레인 집합에 대해 따로 호출(집합 간에는 연결하지 않음 = Park 노드가 handoff 지점).
     void BuildSuccessors(const vector<shared_ptr<Lane>> &lanes);
 
 private:
@@ -75,10 +58,7 @@ private:
     vector<shared_ptr<Road>> m_roads;
     unordered_map<int, shared_ptr<RoadNode>> m_nodes; // node id -> RoadNode
     vector<VehicleCollision::Obstacle> m_obstacles;
-    unordered_set<int> m_reservedParkSpotIds; // 예약된(다른 차가 목표로 잡은) ParkSpot 노드 id
     unordered_map<int, vector<shared_ptr<Lane>>> m_parkingLanes;
-    vector<Car *> m_cars; // 시뮬레이션의 모든 차 (Car::Init/Destroy가 관리)
-    float m_simTime = 0.0f; // Tick()으로만 누적되는 전역 시뮬레이션 시계. 신호 색 계산 전용.
 };
 
 enum class RoadNodeType

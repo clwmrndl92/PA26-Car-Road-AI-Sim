@@ -29,7 +29,7 @@ class RSFollowSegment : public VehicleSegment
 {
 public:
     // endIndex: points[endIndex]가 실제 목표 지점. 마지막 leg는 endIndex 이후에 최종 정렬용으로
-    // 연장된 점들이 더 있을 수 있는데(ReedsShepp::SampleLegs 참고), 그 연장분은 Pure Pursuit의
+    // 연장된 점들이 더 있을 수 있는데(ReedsShepp::GetLegs 참고), 그 연장분은 Pure Pursuit의
     // 조준점 후보로만 쓰고 완료/제동 판정에는 쓰지 않는다.
     // isFinalLeg: 전체 RS 경로의 마지막 leg(이후로 기어가 다시 안 바뀜)인지 -- 중간 leg는 경로
     // 추종 정확도가 중요해 기존 선형 램프(Steer)를 그대로 쓰고, 마지막 leg만 Pure Pursuit 목표

@@ -390,8 +390,8 @@ namespace ReedsShepp
         }
 
         // 세그먼트 하나를 적분해 월드좌표 폴리라인 점들을 points에 append하고, (x,z,theta)를
-        // 그 세그먼트 끝의 pose로 갱신한다. SamplePath/SampleLegs/SamplePoses가 공유하는 핵심 적분
-        // 로직. outHeadings가 주어지면 각 점을 push한 시점의 heading도 같이 기록한다(SamplePoses용).
+        // 그 세그먼트 끝의 pose로 갱신한다. GetDebugPath/GetLegs/GetPoses가 공유하는 핵심 적분
+        // 로직. outHeadings가 주어지면 각 점을 push한 시점의 heading도 같이 기록한다(GetPoses용).
         void AppendElementSamples(const PathElement &element, double &x, double y, double &z, double &theta,
                                   float turningRadius, float sampleSpacing, std::vector<Vec3> &points,
                                   std::vector<float> *outHeadings = nullptr)
@@ -574,8 +574,8 @@ namespace ReedsShepp
         return best;
     }
 
-    std::vector<Vec3> SamplePath(const Path &path, const Vec3 &start, float startAngleRad,
-                                 float turningRadius, float sampleSpacing)
+    std::vector<Vec3> GetDebugPath(const Path &path, const Vec3 &start, float startAngleRad,
+                                   float turningRadius, float sampleSpacing)
     {
         std::vector<Vec3> points;
         if (path.empty() || turningRadius <= 0.0f || sampleSpacing <= 0.0f)
@@ -593,8 +593,8 @@ namespace ReedsShepp
         return points;
     }
 
-    std::vector<PoseSample> SamplePoses(const Path &path, const Vec3 &start, float startAngleRad,
-                                        float turningRadius, float sampleSpacing)
+    std::vector<PoseSample> GetPoses(const Path &path, const Vec3 &start, float startAngleRad,
+                                     float turningRadius, float sampleSpacing)
     {
         std::vector<PoseSample> poses;
         if (path.empty() || turningRadius <= 0.0f || sampleSpacing <= 0.0f)
@@ -643,8 +643,8 @@ namespace ReedsShepp
         }
     }
 
-    std::vector<Leg> SampleLegs(const Path &path, const Vec3 &start, float startAngleRad,
-                                float turningRadius, float sampleSpacing)
+    std::vector<Leg> GetLegs(const Path &path, const Vec3 &start, float startAngleRad,
+                            float turningRadius, float sampleSpacing)
     {
         std::vector<Leg> legs;
         if (path.empty() || turningRadius <= 0.0f || sampleSpacing <= 0.0f)

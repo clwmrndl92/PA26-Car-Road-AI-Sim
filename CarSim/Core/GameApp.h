@@ -13,6 +13,7 @@
 #include "Core/Physics/PhysicsSystem.h"
 #include "GameObject.h"
 #include <TextureManager.h>
+#include <algorithm>
 
 class GameApp : public D3DApp
 {
@@ -30,6 +31,8 @@ public:
 
     float GetTimeScale() const { return m_TimeScale; }
     void SetTimeScale(float scale) { m_TimeScale = scale; }
+
+    float GetSimDt(float dt) const { return std::min(dt, kMaxFrameDeltaTime) * m_TimeScale; }
 
 protected:
     BasicEffect m_BasicEffect;

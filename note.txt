@@ -269,20 +269,8 @@ maxSpeed = 200km/h                  maxAccel = 0-100km/h in 14s
 maxBrake = 100-0km/h in 15s         maxEmergBrake = 100-0km/h in 3s
 
 --------------------------------------------------------------------------------
-1. 진입점/뼈대
-   CarSim/Core/Main.cpp
-   CarSim/Core/GameApp.h .cpp
-   CarSim/Core/GameObject.h
-   CarSim/Core/Physics/PhysicsSystem.h
-   CarSim/Core/Physics/Rigidbody.h
-   CarSim/Core/Physics/PhysicsLayers.h
 
 2. Nav (도로 데이터)
-   CarSim/Nav/Road.h
-   CarSim/Nav/Lane.h
-   CarSim/Nav/TrafficSignal.h
-   CarSim/Nav/RoadDataManager.h .cpp
-   CarSim/Nav/Spline.cpp
    CarSim/Nav/ReedsShepp.h (.cpp는 필요시)
    CarSim/Nav/VehicleCollision.h .cpp
    CarSim/Nav/MarkingDataManager.h
@@ -298,3 +286,5 @@ maxBrake = 100-0km/h in 15s         maxEmergBrake = 100-0km/h in 3s
    CarSim/CarSim.h .cpp
    CarSim/EditApp.cpp (필요시)
    Tests/TrafficSignalTests.cpp
+
+--------------------------------------------------------------------------------

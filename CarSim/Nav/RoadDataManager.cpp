@@ -8,12 +8,13 @@
 #include <map>
 #include <limits>
 #include <algorithm>
-#include "TrafficSignal.h"
 #include "Utill/DebugConsole.h"
 #include "Utill/Assert.h"
 
 namespace
 {
+    RoadDataManager *s_pInstance = nullptr;
+
     // control_points 배열([[x,y,z], ...])을 Vec3 목록으로. 레인/주차레인 파싱 공용.
     vector<Vec3> ParseControlPoints(const nlohmann::json &pointsJson)
     {
@@ -26,6 +27,25 @@ namespace
         }
         return controlPoints;
     }
+}
+
+RoadDataManager::RoadDataManager()
+{
+    if (s_pInstance)
+        throw std::exception("RoadDataManager is a singleton!");
+    s_pInstance = this;
+}
+
+RoadDataManager::~RoadDataManager()
+{
+    s_pInstance = nullptr;
+}
+
+RoadDataManager &RoadDataManager::Get()
+{
+    if (!s_pInstance)
+        throw std::exception("RoadDataManager needs an instance!");
+    return *s_pInstance;
 }
 
 void RoadDataManager::Init(const string &filePath)
@@ -375,32 +395,3 @@ shared_ptr<RoadNode> RoadDataManager::GetRandomDestNode() const
     return candidates[rand() % candidates.size()];
 }
 
-shared_ptr<RoadNode> RoadDataManager::TryReserveParkSpot(int parkNodeId, const unordered_set<int> &excludeIds)
-{
-    shared_ptr<RoadNode> parkNode = GetNode(parkNodeId);
-    if (!parkNode)
-        return nullptr;
-
-    for (const weak_ptr<RoadNode> &weakChild : parkNode->children)
-    {
-        shared_ptr<RoadNode> spot = weakChild.lock();
-        if (!spot || spot->nodeType != RoadNodeType::ParkSpot)
-            continue;
-        if (m_reservedParkSpotIds.count(spot->id) || excludeIds.count(spot->id))
-            continue;
-
-        m_reservedParkSpotIds.insert(spot->id);
-        return spot;
-    }
-    return nullptr;
-}
-
-void RoadDataManager::ReleaseParkSpot(int spotNodeId)
-{
-    m_reservedParkSpotIds.erase(spotNodeId);
-}
-
-TrafficSignal::Color RoadDataManager::GetSignalColor(float phaseOffset) const
-{
-    return TrafficSignal::GetColor(SIGNAL_GREEN_DURATION, SIGNAL_YELLOW_DURATION, SIGNAL_RED_DURATION, phaseOffset, m_simTime);
-}

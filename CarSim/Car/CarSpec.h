@@ -3,8 +3,7 @@
 #include <Jolt/Jolt.h>
 #include <Jolt/Math/Vec3.h>
 
-// 행동 계획(Car::EvaluateCandidateCost) 비용 가중치 -- 차량마다 다른 성향(양보/공격적)을 주려고 CarSpec에
-// 둔다. 항목이 계속 늘어날 예정이라(w3 등) 별도 구조체로 분리했다.
+// 행동 계획 비용 가중치
 struct BehaviorWeights
 {
     float speed = 1.0f;            // w1: 목표속도 대비 도달속도(3초 뒤 예상속도) 부족분에 대한 가중치
@@ -15,8 +14,6 @@ struct BehaviorWeights
 
 struct CarSpec
 {
-    // A real constructor (vs. aggregate init) so editors show each argument's parameter name
-    // as an inline hint at the call site -- no need to hand-write a comment per field.
     CarSpec(const char *name, const char *modelPath, JPH::Vec3 halfExtents, JPH::Vec3 renderOffset,
             JPH::Vec3 colliderOffset, float wheelbase, float mass, BehaviorWeights behaviorWeights = {})
         : name(name), modelPath(modelPath), halfExtents(halfExtents), renderOffset(renderOffset),
@@ -27,10 +24,10 @@ struct CarSpec
     const char *name;
     const char *modelPath;
     JPH::Vec3 halfExtents;
-    JPH::Vec3 renderOffset;   // where the model is drawn, relative to the car's transform
-    JPH::Vec3 colliderOffset; // where the collider is placed, relative to the car's transform
-    float wheelbase;          // distance between front and rear axle centers, for the bicycle model
-    float mass;               // kg, used as the rigidbody's mass for force-based driving
+    JPH::Vec3 renderOffset;
+    JPH::Vec3 colliderOffset;
+    float wheelbase;
+    float mass;
 
     BehaviorWeights behaviorWeights;
 };

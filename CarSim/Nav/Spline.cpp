@@ -2,15 +2,17 @@
 #include <limits>
 #include <algorithm>
 #include <cmath>
+#include <Utill/DebugConsole.h>
 
 Spline::Spline()
 {
 }
 
 Spline::Spline(const std::vector<Vec3> &points)
-    : controlPoints(points)
+    : m_controlPoints(points)
 {
-    splinePoints = ComputeSplinePoints();
+    m_splinePoints = ComputeSplinePoints();
+    ComputeMinRadius();
 }
 
 Spline::~Spline()
@@ -19,7 +21,7 @@ Spline::~Spline()
 
 size_t Spline::GetControlPointCount() const
 {
-    return controlPoints.size();
+    return m_controlPoints.size();
 }
 
 Vec3 Spline::GetCatmullRomPoint(float t, const Vec3 &p0, const Vec3 &p1, const Vec3 &p2, const Vec3 &p3) const
@@ -67,8 +69,8 @@ Vec3 Spline::GetCatmullRomTangent(float t, const Vec3 &p0, const Vec3 &p1, const
 std::vector<Vec3> Spline::ComputeSplinePoints()
 {
     std::vector<Vec3> splinePoints;
-    length = 0.0f;
-    int n = static_cast<int>(controlPoints.size());
+    m_length = 0.0f;
+    int n = static_cast<int>(m_controlPoints.size());
     if (n < 4)
         return splinePoints; // Not enough control points for Catmull-Rom spline
 
@@ -86,10 +88,10 @@ std::vector<Vec3> Spline::ComputeSplinePoints()
     };
 
     // control points 치환됨
-    AdjustPhantom(controlPoints.front(), controlPoints[1]);
-    AdjustPhantom(controlPoints.back(), controlPoints[n - 2]);
+    AdjustPhantom(m_controlPoints.front(), m_controlPoints[1]);
+    AdjustPhantom(m_controlPoints.back(), m_controlPoints[n - 2]);
 
-    Vec3 prevSplinePoint = controlPoints[1];
+    Vec3 prevSplinePoint = m_controlPoints[1];
 
     auto MakeSegment = [&](const Vec3 &p0, const Vec3 &p1, const Vec3 &p2, const Vec3 &p3)
     {
@@ -98,14 +100,14 @@ std::vector<Vec3> Spline::ComputeSplinePoints()
             float t = static_cast<float>(j) / (CURVE_RESOLUTION - 1);
             Vec3 point = GetCatmullRomPoint(t, p0, p1, p2, p3);
             splinePoints.push_back(point);
-            length += (prevSplinePoint - point).Length();
+            m_length += (prevSplinePoint - point).Length();
             prevSplinePoint = point;
         }
     };
 
     for (int i = 1; i < n - 2; ++i)
     {
-        MakeSegment(controlPoints[i - 1], controlPoints[i], controlPoints[i + 1], controlPoints[i + 2]);
+        MakeSegment(m_controlPoints[i - 1], m_controlPoints[i], m_controlPoints[i + 1], m_controlPoints[i + 2]);
     }
 
     return splinePoints;
@@ -113,14 +115,14 @@ std::vector<Vec3> Spline::ComputeSplinePoints()
 
 Vec3 Spline::GetLookaheadPoint(const Vec3 &position, float lookaheadDistance) const
 {
-    if (splinePoints.empty())
+    if (m_splinePoints.empty())
         return position;
 
     float closestDistance = std::numeric_limits<float>::max();
     size_t closestIndex = 0;
-    for (size_t i = 0; i < splinePoints.size(); ++i)
+    for (size_t i = 0; i < m_splinePoints.size(); ++i)
     {
-        float distance = (splinePoints[i] - position).Length();
+        float distance = (m_splinePoints[i] - position).Length();
         if (distance < closestDistance)
         {
             closestDistance = distance;
@@ -128,14 +130,14 @@ Vec3 Spline::GetLookaheadPoint(const Vec3 &position, float lookaheadDistance) co
         }
     }
 
-    size_t lastIndex = splinePoints.size() - 1;
+    size_t lastIndex = m_splinePoints.size() - 1;
     size_t lookaheadIndex = closestIndex;
     float accumulatedDistance = 0.0f;
     if (lookaheadDistance >= 0.0f)
     {
         while (accumulatedDistance < lookaheadDistance && lookaheadIndex < lastIndex)
         {
-            accumulatedDistance += (splinePoints[lookaheadIndex + 1] - splinePoints[lookaheadIndex]).Length();
+            accumulatedDistance += (m_splinePoints[lookaheadIndex + 1] - m_splinePoints[lookaheadIndex]).Length();
             ++lookaheadIndex;
         }
     }
@@ -143,28 +145,28 @@ Vec3 Spline::GetLookaheadPoint(const Vec3 &position, float lookaheadDistance) co
     {
         while (accumulatedDistance < -lookaheadDistance && lookaheadIndex > 0)
         {
-            accumulatedDistance += (splinePoints[lookaheadIndex - 1] - splinePoints[lookaheadIndex]).Length();
+            accumulatedDistance += (m_splinePoints[lookaheadIndex - 1] - m_splinePoints[lookaheadIndex]).Length();
             --lookaheadIndex;
         }
     }
 
-    return splinePoints[lookaheadIndex];
+    return m_splinePoints[lookaheadIndex];
 }
 
 Vec3 Spline::GetPositionAt(float t) const
 {
-    if (splinePoints.empty())
+    if (m_splinePoints.empty())
         return Vec3(0.0f, 0.0f, 0.0f);
 
     // t=1.0이면 size()가 나와 배열 끝을 벗어나므로 마지막 인덱스로 클램프한다.
-    int lastIndex = static_cast<int>(splinePoints.size()) - 1;
-    int index = std::clamp(static_cast<int>(static_cast<float>(splinePoints.size()) * t), 0, lastIndex);
-    return splinePoints[index];
+    int lastIndex = static_cast<int>(m_splinePoints.size()) - 1;
+    int index = std::clamp(static_cast<int>(static_cast<float>(m_splinePoints.size()) * t), 0, lastIndex);
+    return m_splinePoints[index];
 }
 
 Vec3 Spline::GetDirectionAt(float t) const
 {
-    int n = static_cast<int>(controlPoints.size());
+    int n = static_cast<int>(m_controlPoints.size());
     int segmentCount = n - 3;
     if (segmentCount < 1)
         return Vec3(0.0f, 0.0f, 0.0f);
@@ -174,34 +176,56 @@ Vec3 Spline::GetDirectionAt(float t) const
     int segmentIndex = std::min(static_cast<int>(scaledT), segmentCount - 1);
     float localT = scaledT - segmentIndex;
 
-    const Vec3 &p0 = controlPoints[segmentIndex];
-    const Vec3 &p1 = controlPoints[segmentIndex + 1];
-    const Vec3 &p2 = controlPoints[segmentIndex + 2];
-    const Vec3 &p3 = controlPoints[segmentIndex + 3];
+    const Vec3 &p0 = m_controlPoints[segmentIndex];
+    const Vec3 &p1 = m_controlPoints[segmentIndex + 1];
+    const Vec3 &p2 = m_controlPoints[segmentIndex + 2];
+    const Vec3 &p3 = m_controlPoints[segmentIndex + 3];
 
     return GetCatmullRomTangent(localT, p0, p1, p2, p3).Normalized();
 }
 
-float Spline::GetMinRadiusAhead(float start, float end, float *outApexT) const
+bool Spline::IsStraight() const
 {
-    if (splinePoints.size() < 2)
-        return std::numeric_limits<float>::max();
+    constexpr float STRAIGHT_EPSILON = 0.05f; // 양끝을 잇는 직선에서 이 거리(m) 안이면 일직선으로 본다
 
-    size_t lastIndex = splinePoints.size() - 1;
-    start = std::clamp(start, 0.0f, 1.0f);
-    end = std::clamp(end, 0.0f, 1.0f);
+    if (m_controlPoints.size() < 2)
+        return true;
 
-    size_t startIndex = static_cast<size_t>(start * lastIndex);
-    size_t endIndex = static_cast<size_t>(end * lastIndex);
-    if (startIndex >= endIndex)
-        return std::numeric_limits<float>::max();
+    Vec3 dir = m_controlPoints.back() - m_controlPoints.front();
+    float dirLength = dir.Length();
+    if (dirLength < 1e-4f)
+        return false; // 시작/끝이 사실상 같은 점 -- 직선으로 판단할 기준선이 없으므로 곡률 스캔으로 폴백
 
-    float minRadius = std::numeric_limits<float>::max();
-    Vec3 prevTangent = GetDirectionAt(static_cast<float>(startIndex) / lastIndex);
+    dir = dir / dirLength;
 
-    for (size_t index = startIndex; index < endIndex; ++index)
+    for (size_t i = 1; i + 1 < m_controlPoints.size(); ++i)
     {
-        float segmentLength = (splinePoints[index + 1] - splinePoints[index]).Length();
+        Vec3 toPoint = m_controlPoints[i] - m_controlPoints.front();
+        Vec3 alongDir = dir * toPoint.Dot(dir);
+        float perpDistance = (toPoint - alongDir).Length();
+        if (perpDistance > STRAIGHT_EPSILON)
+            return false;
+    }
+    return true;
+}
+
+void Spline::ComputeMinRadius()
+{
+    m_minRadius = std::numeric_limits<float>::max();
+    m_apexT = 1.0f;
+
+    if (IsStraight())
+        return; // 직선, 곡률 없음
+
+    if (m_splinePoints.size() < 2)
+        return;
+
+    size_t lastIndex = m_splinePoints.size() - 1;
+    Vec3 prevTangent = GetDirectionAt(0.0f);
+
+    for (size_t index = 0; index < lastIndex; ++index)
+    {
+        float segmentLength = (m_splinePoints[index + 1] - m_splinePoints[index]).Length();
         Vec3 tangent = GetDirectionAt(static_cast<float>(index + 1) / lastIndex);
 
         if (segmentLength > 1e-4f)
@@ -212,33 +236,33 @@ float Spline::GetMinRadiusAhead(float start, float end, float *outApexT) const
             if (deltaAngle > 1e-6f)
             {
                 float radius = segmentLength / deltaAngle;
-                if (radius < minRadius)
+                if (radius < m_minRadius)
                 {
-                    minRadius = radius;
-                    if (outApexT)
-                        *outApexT = static_cast<float>(index) / lastIndex;
+                    m_minRadius = radius;
+                    m_apexT = static_cast<float>(index) / lastIndex;
                 }
             }
         }
 
         prevTangent = tangent;
     }
-
-    return minRadius;
 }
 
 /// @param position
 /// @return 0~1, 가까운 spline상의 위치, -1 : spline이 없음
 float Spline::GetSplinePosition(const Vec3 &position) const
 {
-    if (splinePoints.empty() || splinePoints.size() < 2)
+    if (m_splinePoints.empty() || m_splinePoints.size() < 2)
+    {
+        DebugConsole::Log("[Error] GetSplinePosition() : splinePoins.size() < 2 (" + ToString(m_splinePoints.size()) + ")");
         return -1.0f;
+    }
 
     float closestDistance = std::numeric_limits<float>::max();
     size_t closestIndex = 0;
-    for (size_t i = 0; i < splinePoints.size(); ++i)
+    for (size_t i = 0; i < m_splinePoints.size(); ++i)
     {
-        float distance = (splinePoints[i] - position).Length();
+        float distance = (m_splinePoints[i] - position).Length();
         if (distance < closestDistance)
         {
             closestDistance = distance;
@@ -246,65 +270,5 @@ float Spline::GetSplinePosition(const Vec3 &position) const
         }
     }
 
-    return closestIndex / (splinePoints.size() - 1.0f);
-}
-
-void Spline::AddSplinePointsFront(const std::vector<Vec3> &points, float t)
-{
-    if (!splinePoints.empty())
-    {
-        t = std::clamp(t, 0.0f, 1.0f);
-        size_t lastIndex = splinePoints.size() - 1;
-        size_t cutIndex = static_cast<size_t>(t * lastIndex);
-
-        if (cutIndex > 0)
-        {
-            // t 지점 앞은 잘라내고, 남은 구간 기준으로 길이를 다시 누적한다.
-            splinePoints.erase(splinePoints.begin(), splinePoints.begin() + cutIndex);
-
-            length = 0.0f;
-            for (size_t i = 1; i < splinePoints.size(); ++i)
-                length += (splinePoints[i] - splinePoints[i - 1]).Length();
-        }
-    }
-
-    if (points.empty())
-        return;
-
-    if (!splinePoints.empty())
-        length += (splinePoints.front() - points.back()).Length();
-    for (size_t i = 1; i < points.size(); ++i)
-        length += (points[i] - points[i - 1]).Length();
-
-    splinePoints.insert(splinePoints.begin(), points.begin(), points.end());
-}
-
-void Spline::AddSplinePointsBack(const std::vector<Vec3> &points, float t)
-{
-    if (!splinePoints.empty())
-    {
-        t = std::clamp(t, 0.0f, 1.0f);
-        size_t lastIndex = splinePoints.size() - 1;
-        size_t cutIndex = static_cast<size_t>(t * lastIndex);
-
-        if (cutIndex < lastIndex)
-        {
-            // t 지점 뒤는 잘라내고, 남은 구간 기준으로 길이를 다시 누적한다.
-            splinePoints.resize(cutIndex + 1);
-
-            length = 0.0f;
-            for (size_t i = 1; i < splinePoints.size(); ++i)
-                length += (splinePoints[i] - splinePoints[i - 1]).Length();
-        }
-    }
-
-    if (points.empty())
-        return;
-
-    if (!splinePoints.empty())
-        length += (points.front() - splinePoints.back()).Length();
-    for (size_t i = 1; i < points.size(); ++i)
-        length += (points[i] - points[i - 1]).Length();
-
-    splinePoints.insert(splinePoints.end(), points.begin(), points.end());
+    return closestIndex / (m_splinePoints.size() - 1.0f);
 }

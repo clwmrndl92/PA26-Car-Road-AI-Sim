@@ -10,8 +10,10 @@ add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
 add_executable(Tests
     TestHarness.cpp
     TrafficSignalTests.cpp
+    VehicleCollisionBenchmark.cpp
     ${CMAKE_SOURCE_DIR}/CarSim/Nav/ReedsShepp.cpp
     ${CMAKE_SOURCE_DIR}/CarSim/Nav/TrafficSignal.cpp
+    ${CMAKE_SOURCE_DIR}/CarSim/Nav/VehicleCollision.cpp
 )
 target_include_directories(Tests PRIVATE ${CMAKE_SOURCE_DIR}/CarSim)
 

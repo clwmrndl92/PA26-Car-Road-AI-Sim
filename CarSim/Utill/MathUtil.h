@@ -29,6 +29,10 @@ inline std::string ToString(int f)
 {
     return std::to_string(f);
 }
+inline std::string ToString(size_t f)
+{
+    return std::to_string(f);
+}
 
 constexpr float ToRadians(float degrees)
 {

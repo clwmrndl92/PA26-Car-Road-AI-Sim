@@ -4,6 +4,7 @@
 #include "Core/GameApp.h"
 #include "Car/Car.h"
 #include "Nav/MarkingDataManager.h"
+#include "Nav/SimulationState.h"
 
 class CarSim : public GameApp
 {
@@ -35,6 +36,7 @@ private:
 
 private:
     RoadDataManager m_RoadDataManager;
+    SimulationState m_SimState;
     MarkingDataManager m_MarkingDataManager;
 
     std::vector<std::shared_ptr<Car>> m_CarObjects;

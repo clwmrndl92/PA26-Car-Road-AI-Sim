@@ -17,11 +17,10 @@ public:
     void Init(JPH::Vec3 halfExtents, Rigidbody::Type type = Rigidbody::Type::Dynamic,
               JPH::Vec3 colliderOffset = JPH::Vec3::sZero(), float mass = 1.0f);
 
-    // 오브젝트 리스트에서 제거되기 직전에 호출: 물리 바디를 정리한다.
     virtual void Destroy();
 
-    virtual void UpdateAI(float dt) {}
     virtual void Update(float dt) {}
+    virtual void UpdatePhysics(float dt) {}
     virtual void UpdateUI(float dt) {}
     void UpdateRender() { SyncPhysicsToRender(); }
 
@@ -30,17 +29,12 @@ public:
     void SetName(std::string name) { m_name = std::move(name); }
     const std::string &GetName() const { return m_name; }
 
-    // True origin of the object (e.g. physics/steering reference point such as the rear axle
-    // center). Car overrides both so external callers see the front axle instead.
     virtual Vec3 GetPosition() const { return ToVec3(m_transform.GetPosition()); }
     virtual void SetPosition(Vec3 position);
 
-    // Rotation is shared by both axles (only position differs, by wheelbase), so Car doesn't
-    // need to override GetRotation -- only SetRotation, to keep the front axle fixed in place.
     virtual DirectX::XMFLOAT4 GetRotation() const { return m_transform.GetRotationQuat(); }
     virtual void SetRotation(const DirectX::XMFLOAT4 &rotation);
 
-    // Local-space offset applied only to where the model is drawn, relative to GetPosition()
     void SetRenderOffset(const DirectX::XMFLOAT3 &offset) { m_renderOffset = offset; }
 
     void SetModel(const Model *pModel) { m_render.SetModel(pModel); }

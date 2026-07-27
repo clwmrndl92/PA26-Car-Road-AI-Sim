@@ -36,7 +36,7 @@ bool CarSim::Init()
 
 void CarSim::UpdateScene(float dt)
 {
-    m_RoadDataManager.Tick(dt * GetTimeScale());
+    m_SimState.Tick(GetSimDt(dt));
     UpdateSignalMarkers();
     GameApp::UpdateScene(dt);
 }
@@ -46,7 +46,7 @@ void CarSim::UpdateSignalMarkers()
     for (const SignalMarker &marker : m_SignalMarkers)
     {
         XMFLOAT4 color;
-        switch (m_RoadDataManager.GetSignalColor(marker.phaseOffset))
+        switch (m_SimState.GetSignalColor(marker.phaseOffset))
         {
         case TrafficSignal::Color::Red:
             color = XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f);
@@ -88,7 +88,7 @@ bool CarSim::InitResource()
     // Car 1
     {
         auto car = std::make_shared<Car>();
-        car->Init(GetCarSpec(CarType::Car0), &m_RoadDataManager, JPH::Vec3(-15.0f, 0.1f, 8.0f));
+        car->Init(GetCarSpec(CarType::Car0), &m_SimState, JPH::Vec3(-15.0f, 0.1f, 8.0f));
 
         car->SetDestination(m_RoadDataManager.GetNode(1));
         // std::shared_ptr<RoadNode> dest = m_RoadDataManager.GetRandomDestNode();
@@ -104,7 +104,7 @@ bool CarSim::InitResource()
     // // Car 2
     // {
     //     auto car = std::make_shared<Car>();
-    //     car->Init(GetCarSpec(CarType::Car1), &m_RoadDataManager, JPH::Vec3(-25.0f, 0.1f, 8.0f));
+    //     car->Init(GetCarSpec(CarType::Car1), &m_SimState, JPH::Vec3(-25.0f, 0.1f, 8.0f));
     //     car->SetDestination(m_RoadDataManager.GetNode(1));
     //     car->SetRotation(Vec3(-1, 0, 0));
 
@@ -126,7 +126,7 @@ void CarSim::SpawnCar(CarType type)
     Vec3 direction(std::sin(yaw), 0.0f, std::cos(yaw));
 
     auto car = std::make_shared<Car>();
-    car->Init(GetCarSpec(type), &m_RoadDataManager,
+    car->Init(GetCarSpec(type), &m_SimState,
               JPH::Vec3(spawnNode->position.GetX(), 0.1f, spawnNode->position.GetZ()));
     car->SetRotation(direction);
     car->SetDestination(destNode);
