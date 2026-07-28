@@ -210,16 +210,12 @@ void Car::EmergBrake()
 
 void Car::Accelerate(float desiredVelocity)
 {
-    constexpr float MIN_TARGET_SPEED = 0.01f; // 0으로 나누기 방지 -- 사실상 "완전 정지"로 취급
-    if (desiredVelocity < MIN_TARGET_SPEED)
-    {
-        m_acceleration = (m_speed > 0.0f) ? -m_maxBrake : 0.0f;
-        return;
-    }
-
-    float ratio = m_speed / desiredVelocity;
-    float ratioPow4 = ratio * ratio * ratio * ratio; // IDM의 자유가속 항 a*(1-(v/v0)^4)
-    m_acceleration = std::max(-m_maxBrake, m_maxAccel * (1.0f - ratioPow4));
+    // 목표속도-현재속도 오차에 비례한 목표가속을 [−maxBrake, maxAccel]로 클램프하고, 저크(가속 변화율)를
+    // 방향별로 제한해 부드럽게 접근한다 (플랜트 지연이 없어 PID 없이 비례+저크제한으로 충분).
+    float aTarget = std::clamp(m_speedGain * (desiredVelocity - m_speed), -m_maxBrake, m_maxAccel);
+    float jerkLimit = (aTarget > m_acceleration) ? m_jerkUp : m_jerkDown;
+    float maxStep = jerkLimit * m_deltaTime;
+    m_acceleration += std::clamp(aTarget - m_acceleration, -maxStep, maxStep);
 }
 
 void Car::Steer(float radian, float steerRamp)
@@ -385,7 +381,7 @@ JPH::Vec3 Car::ComputeDesiredVelocity() const
     float signedSpeed = GetSignedSpeed();
     DirectX::XMFLOAT3 fwd = m_transform.GetForwardAxis();
     float vy = m_rigidbody.GetLinearVelocity().GetY(); // 수직 속도는 물리(중력/지면)가 정한 값을 그대로 유지
-    return JPH::Vec3(fwd.x * signedSpeed, vy, fwd.z * signedSpeed);
+    return JPH::Vec3(fwd.x * signedSpeed, vy > 0.0f ? 0.0f : vy, fwd.z * signedSpeed);
 }
 
 float Car::PurePursuit(Vec3 target)
@@ -411,6 +407,26 @@ float Car::PurePursuit(Vec3 target)
     float steeringAngle = atanf((2.0f * m_wheelbase * sinf(headingError)) / distance);
 
     return steeringAngle * directionSign;
+}
+
+float Car::Stanley(const Spline &spline)
+{
+    Vec3 frontAxle = GetPosition(); // Stanley는 앞축 기준
+    float t = spline.GetSplinePosition(frontAxle);
+    Vec3 pathPoint = spline.GetPositionAt(t);
+    Vec3 pathDir = spline.GetDirectionAt(t).Normalized();
+
+    Vec3 carFwd = ToVec3(m_transform.GetForwardAxis()).Normalized();
+    Vec3 carRight = ToVec3(m_transform.GetRightAxis()).Normalized();
+
+    // 헤딩오차: 경로 진행방향이 내 오른쪽을 향할수록 +(우조향)
+    float headingError = atan2f(carRight.Dot(pathDir), carFwd.Dot(pathDir));
+
+    // 횡오차: 앞축이 경로 오른쪽에 있으면 +, 되돌리려면 좌조향이므로 부호 반전. 저속 발산은 분모 소프트닝으로 막는다.
+    float crossTrackRight = (frontAxle - pathPoint).Dot(carRight);
+    float crossTrackTerm = atanf(m_stanleyGain * -crossTrackRight / (m_speed + m_stanleySoft));
+
+    return std::clamp(headingError + crossTrackTerm, -m_maxSteerAngle, m_maxSteerAngle);
 }
 
 void Car::SetDestination(const shared_ptr<RoadNode> &destNode)

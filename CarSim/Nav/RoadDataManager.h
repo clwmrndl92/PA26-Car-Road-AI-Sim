@@ -44,10 +44,9 @@ public:
     const vector<shared_ptr<Lane>> *GetParkingLanes(int parkNodeId) const;
 
 public:
-    static constexpr float ROAD_WIDTH = 3.2f;         // 차선 폭
-    static constexpr float CONNECT_EPSILON = 0.1f;    // 두 레인의 끝점/시작점이 이 거리 안이면 이어진 것으로 본다.
-    static constexpr float LANE_CHANGE_COST = 5.0f;   // 차선변경(좌/우 인접 레인으로 이동) 간선의 비용
-    static constexpr float CURVE_SPEED_COEFF = 1.22f; // 최대 코너링 속도 = CURVE_SPEED_COEFF * sqrt(R)
+    static constexpr float ROAD_WIDTH = 3.2f;       // 차선 폭
+    static constexpr float CONNECT_EPSILON = 0.1f;  // 두 레인의 끝점/시작점이 이 거리 안이면 이어진 것으로 본다.
+    static constexpr float LANE_CHANGE_COST = 5.0f; // 차선변경(좌/우 인접 레인으로 이동) 간선의 비용
 
 private:
     // Park의 주차레인 집합에 대해 따로 호출(집합 간에는 연결하지 않음 = Park 노드가 handoff 지점).

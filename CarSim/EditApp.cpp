@@ -450,7 +450,8 @@ namespace
     // one compact line, while the surrounding structure (keys, brackets) stays pretty-printed.
     // nlohmann's dump(indent) only offers "fully pretty" or "fully compact", not a mix, so this
     // builds the text by hand.
-    std::string DumpPrettyArraysCompactElements(const nlohmann::json &root)
+    template <typename JsonType>
+    std::string DumpPrettyArraysCompactElements(const JsonType &root)
     {
         std::string out = "{\n";
         size_t keyIndex = 0;
@@ -458,7 +459,7 @@ namespace
         {
             out += "  \"" + it.key() + "\": ";
 
-            const nlohmann::json &arr = it.value();
+            const JsonType &arr = it.value();
             if (arr.empty())
             {
                 out += "[]";
@@ -487,24 +488,23 @@ namespace
 
 void EditApp::SaveToJson()
 {
-    using nlohmann::json;
+    // ordered_json: 일반 json은 키를 알파벳순으로 저장해 control_points가 항상 맨 앞으로 가버린다.
+    // 레인 오브젝트의 필드 순서(id -> road/park -> left/right -> control_points)를 그대로
+    // 지키기 위해 삽입 순서를 보존하는 ordered_json을 쓴다.
+    using json = nlohmann::ordered_json;
     json root;
 
-    root["roads"] = json::array();
-    for (const auto &r : m_Roads)
-    {
-        root["roads"].push_back({{"id", r.id},
-                                 {"name", r.name},
-                                 {"speed_limit", r.speedLimit}});
-    }
+    // float 부정확성이 dump에 남지 않도록 double로 반올림(SaveMarkingsToJson과 동일).
+    auto round2 = [](double v)
+    { return std::round(v * 100.0) / 100.0; };
 
     root["lanes"] = json::array();
-    root["parking_lanes"] = json::array();
+    json parkingLanes = json::array();
     for (const auto &l : m_Lanes)
     {
         json cps = json::array();
         for (const auto &p : l.points)
-            cps.push_back({p.x, p.y, p.z});
+            cps.push_back({round2(p.x), round2(p.y), round2(p.z)});
 
         json jl;
         jl["id"] = l.id;
@@ -513,7 +513,7 @@ void EditApp::SaveToJson()
             // 주차레인: park(소속 Park 노드) + control_points만. 메인 "lanes"와 분리.
             jl["park"] = l.park;
             jl["control_points"] = cps;
-            root["parking_lanes"].push_back(jl);
+            parkingLanes.push_back(jl);
         }
         else
         {
@@ -552,6 +552,16 @@ void EditApp::SaveToJson()
         jo["size"] = {o.length, o.width};
         jo["rotation"] = o.rotation;
         root["obstacles"].push_back(jo);
+    }
+
+    root["parking_lanes"] = parkingLanes;
+
+    root["roads"] = json::array();
+    for (const auto &r : m_Roads)
+    {
+        root["roads"].push_back({{"id", r.id},
+                                 {"name", r.name},
+                                 {"speed_limit", r.speedLimit}});
     }
 
     std::time_t t = std::time(nullptr);

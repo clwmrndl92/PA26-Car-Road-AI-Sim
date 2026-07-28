@@ -13,6 +13,7 @@
 #include "Nav/VehicleCollision.h"
 
 class SimulationState;
+class Spline;
 
 class Car : public GameObject
 {
@@ -51,12 +52,13 @@ public:
     // 조작 및 제어 인터페이스 (Control Interface)
     void Accelerate(float desiredVelocity);
     void EmergBrake();
-    void Steer(float desiredRadian, float steerRamp = 0.4f);
+    void Steer(float desiredRadian, float steerRamp = 1.0f);
     void ChangeGear(); // 속도가 낮을 때 전진/후진 기어 토글
     bool IsReverse() const { return m_isReverse; }
 
     void DriveControl(); // VehicleController에서 호출
     float PurePursuit(Vec3 target);
+    float Stanley(const Spline &spline); // 앞축 기준 경로추종 조향각 (부호 규약은 PurePursuit와 동일: + = 우조향)
 
 private:
     // 내부 물리 및 제어 로직 (Internal Physics & Control)
@@ -171,11 +173,9 @@ private:
 
     // 경적: 장애물/차에 막혀 정지해 있으면 5초마다 한 번 울린다(2초간 차체를 빨갛게).
     void UpdateHorn(float dt);
-    bool IsHornSituation() const;    // Drive 중 (빨간불 대기가 아닌) 정지 상태인가
+    bool IsHornSituation() const;     // Drive 중 (빨간불 대기가 아닌) 정지 상태인가
     bool KnowsRedSignalAhead() const; // 경로 앞쪽 가장 가까운 신호가 빨강인 걸 아는 상태인가(그럼 경적 안 울림)
 
-    void GetLookaheadPose(const shared_ptr<Lane> &startLane, size_t startPathIndex,
-                          const Vec3 &fromPosition, float distance, Vec3 &outPosition, Vec3 &outDirection) const;
     float ComputeLookaheadDistance() const;
 #pragma endregion
 
@@ -316,7 +316,6 @@ public:
     static constexpr float ARRIVE_DISTANCE = 5.0f;
     static constexpr float PARK_ARRIVE_DISTANCE = 10.0f;
     static constexpr float LANE_TRANSITION_THRESHOLD = 2.0f; // 다음 차선으로 완전히 넘어가는(전환되는) 임계값
-    static constexpr float LANE_CURVE_LOOKAHEAD_THRESHOLD = 8.0f;
 
 private:
     // 설정 및 스펙 상수/변수 (Constants & Specifications)
@@ -324,12 +323,17 @@ private:
     const float m_maxAccel = (100.0f / 3.6f) / 14.0f; // 0-100 km/h in 14s
     const float m_maxBrake = (100.0f / 3.6f) / 15.0f;
     const float m_maxEmergBrake = (100.0f / 3.6f) / 3.0f; // 100-0 km/h in 3s
+    float m_speedGain = 1.0f;                             // 속도오차 -> 목표가속 비례게인
+    float m_jerkUp = 4.0f;                                // 가속 방향 저크 상한 (m/s^3)
+    float m_jerkDown = 10.0f;                             // 제동 방향 저크 상한 (m/s^3)
 
     float m_wheelbase = 0.0f;
     float m_mass = 1.0f;
-    Vec3 m_halfExtents = Vec3::sZero();              // 충돌판정용 차체 반크기(x=반폭, z=반길이). CarSpec::halfExtents.
-    float m_maxSteerAngle = ToRadians(45.0f);        // 최대 조향각 (45도)
-    static constexpr float CURVE_SPEED_COEFF = 1.5f; // 최대 코너링 속도 = CURVE_SPEED_COEFF * sqrt(R)
+    Vec3 m_halfExtents = Vec3::sZero();               // 충돌판정용 차체 반크기(x=반폭, z=반길이). CarSpec::halfExtents.
+    float m_maxSteerAngle = ToRadians(45.0f);         // 최대 조향각 (45도)
+    float m_stanleyGain = 1.0f;                       // Stanley 횡오차 게인 k
+    float m_stanleySoft = 1.0f;                       // Stanley 저속 소프트닝 상수 (분모 v+soft, 발산 방지)
+    static constexpr float CURVE_SPEED_COEFF = 1.22f; // 최대 코너링 속도 = CURVE_SPEED_COEFF * sqrt(R)
     static constexpr float STEER_RAMP_RATE = 0.4f;
 
     // 차량 주행 상태 변수 (Vehicle States)
@@ -368,17 +372,16 @@ private:
     mutable int m_committedYellowNodeId = -1;
 
     // 경적 상태
-    static constexpr float HORN_STOP_SPEED = 0.3f;      // 이 속도 이하면 "정지"로 본다(m/s)
-    static constexpr float HORN_INTERVAL = 5.0f;        // 막혀 있는 동안 경적 주기(초)
-    static constexpr float HORN_FLASH_DURATION = 2.0f;  // 경적 표시로 빨갛게 두는 시간(초)
+    static constexpr float HORN_STOP_SPEED = 0.3f;             // 이 속도 이하면 "정지"로 본다(m/s)
+    static constexpr float HORN_INTERVAL = 5.0f;               // 막혀 있는 동안 경적 주기(초)
+    static constexpr float HORN_FLASH_DURATION = 2.0f;         // 경적 표시로 빨갛게 두는 시간(초)
     static constexpr float HORN_SIGNAL_AWARE_DISTANCE = 40.0f; // 이 거리 안의 빨간 신호는 "알고 서 있다"고 보고 경적을 참는다(대기줄 커버, m)
-    float m_hornStoppedDuration = 0.0f;                 // 막혀서 정지해 있던 누적 시간
-    float m_hornFlashTimer = 0.0f;                      // 남은 빨간 표시 시간(>0이면 빨갛게 그린다)
-    Model *m_carModel = nullptr;                        // 차체 모델(경적 시 재질 색을 잠깐 빨갛게 바꾼다)
+    float m_hornStoppedDuration = 0.0f;                        // 막혀서 정지해 있던 누적 시간
+    float m_hornFlashTimer = 0.0f;                             // 남은 빨간 표시 시간(>0이면 빨갛게 그린다)
+    Model *m_carModel = nullptr;                               // 차체 모델(경적 시 재질 색을 잠깐 빨갛게 바꾼다)
 
     // 행동 계획(Behavior Plan) 상태
     static constexpr float BEHAVIOR_PLAN_INTERVAL = 0.2f;   // 행동 후보 재판단 주기
-    static constexpr float BEHAVIOR_LOOKAHEAD_TIME = 5.0f;  // 목표속도 산정 시 도로제약을 내다보는 시간(초)
     static constexpr float BEHAVIOR_SAFETY_HORIZON = 3.0f;  // 궤적 시뮬레이션으로 안전판정할 미래 시야(초, 사람의 3초 룰)
     static constexpr float BEHAVIOR_SIM_STEP = 0.1f;        // 궤적 시뮬레이션 적분 간격(초)
     static constexpr float MIN_SAFE_GAP = 1.0f;             // 시뮬레이션 중 앞차와 최소로 유지해야 하는 범퍼 gap(m).
