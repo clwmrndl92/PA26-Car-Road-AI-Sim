@@ -149,7 +149,8 @@ void CarSim::SpawnCar(CarType type)
     auto car = std::make_shared<Car>();
     car->Init(GetCarSpec(type), &m_SimState,
               JPH::Vec3(spawnNode->position.GetX(), 0.1f, spawnNode->position.GetZ()));
-    car->SetRotation(direction);
+    // car->SetRotation(direction);
+    car->SetRotation(spawnNode->direction);
     car->SetDestination(destNode);
     car->SetName(car->GetName() + ToString(m_carIDCounter++));
 

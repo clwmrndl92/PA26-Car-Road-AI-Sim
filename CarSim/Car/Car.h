@@ -50,7 +50,7 @@ public:
     float GetHalfWidth() const { return m_halfExtents.GetX(); }
 
     // 조작 및 제어 인터페이스 (Control Interface)
-    void Accelerate(float desiredVelocity);
+    void Accelerate(float desiredVelocity, float aFF = 0.0f); // aFF: 계획감속 피드포워드(리더면 앞차 가속도=CAH, 정적이면 −planBrake)
     void EmergBrake();
     void Steer(float desiredRadian, float steerRamp = 1.0f);
     void ChangeGear(); // 속도가 낮을 때 전진/후진 기어 토글
@@ -185,6 +185,7 @@ private:
         Vec3 position;
         float distance;
         float speed;
+        Car *leader = nullptr; // 이 샘플이 앞차(리더)면 그 차, 정적 제약(신호/커브/정지선 등)이면 nullptr
     };
 
     enum class LaneChoice
@@ -278,7 +279,8 @@ private:
                                      const std::vector<NearbyCar> &nearbyCars) const;
     bool IsCandidateSafe(const BehaviorCandidate &candidate) const;
     float EvaluateCandidateCost(const BehaviorCandidate &candidate, float desiredSpeed) const;
-    float ComputeSpeedCapFromSamples(const std::vector<RoadSpeedSample> &samples, float distanceOffset) const; // 안전속도 상한 구하기
+    float ComputeSpeedCapFromSamples(const std::vector<RoadSpeedSample> &samples, float distanceOffset,
+                                     const RoadSpeedSample **binding = nullptr) const; // 안전속도 상한(binding: 상한을 묶은 샘플)
     std::vector<NearbyCar> CollectNearbyCars() const;
     bool IsTurningAhead() const;                  // 교차로 우선순위: 직진 > 회전 판정용
     bool HasPriorityOver(const Car *other) const; // 우선순위 직진 > 회전, 동급이면 이름 비교
@@ -319,13 +321,14 @@ public:
 
 private:
     // 설정 및 스펙 상수/변수 (Constants & Specifications)
-    const float m_maxSpeed = 200.0f / 3.6f;           // 200 km/h
-    const float m_maxAccel = (100.0f / 3.6f) / 14.0f; // 0-100 km/h in 14s
-    const float m_maxBrake = (100.0f / 3.6f) / 15.0f;
+    const float m_maxSpeed = 200.0f / 3.6f;               // 200 km/h
+    const float m_maxAccel = (100.0f / 3.6f) / 14.0f;     // 0-100 km/h in 14s
+    const float m_maxBrake = (100.0f / 3.6f) / 6.0f;      // 0-100 km/h in 6s (~4.6 m/s², 현실적 상용제동)
+    const float m_planBrake = m_maxBrake * 0.5f;          // 계획감속(캡/FF). maxBrake보다 낮게 잡아 접근을 완만히 -> 저크지연 오버슈트 축소
     const float m_maxEmergBrake = (100.0f / 3.6f) / 3.0f; // 100-0 km/h in 3s
-    float m_speedGain = 1.0f;                             // 속도오차 -> 목표가속 비례게인
+    float m_speedGain = 2.0f;                             // 속도오차 -> 목표가속 비례게인
     float m_jerkUp = 4.0f;                                // 가속 방향 저크 상한 (m/s^3)
-    float m_jerkDown = 10.0f;                             // 제동 방향 저크 상한 (m/s^3)
+    float m_jerkDown = 15.0f;                             // 제동 방향 저크 상한
 
     float m_wheelbase = 0.0f;
     float m_mass = 1.0f;
@@ -362,7 +365,7 @@ private:
     unordered_set<int> m_triedParkSpotIds; // 이번 입차에서 경로탐색이 실패해 이미 시도해본 ParkSpot id들
     bool m_parkPlanPending = false;
 
-    bool m_roaming = false;                        // 배회 모드: 목적지 없이 스플라인 따라 랜덤 후속 레인으로 계속 주행
+    bool m_roaming = true;                         // 배회 모드: 목적지 없이 스플라인 따라 랜덤 후속 레인으로 계속 주행
     static constexpr size_t ROAMING_MIN_AHEAD = 3; // 배회 시 현재 레인 앞으로 항상 유지할 최소 레인 버퍼 수
 
     vector<LaneStep> m_path;
@@ -384,14 +387,15 @@ private:
     static constexpr float BEHAVIOR_PLAN_INTERVAL = 0.2f;   // 행동 후보 재판단 주기
     static constexpr float BEHAVIOR_SAFETY_HORIZON = 3.0f;  // 궤적 시뮬레이션으로 안전판정할 미래 시야(초, 사람의 3초 룰)
     static constexpr float BEHAVIOR_SIM_STEP = 0.1f;        // 궤적 시뮬레이션 적분 간격(초)
-    static constexpr float MIN_SAFE_GAP = 1.0f;             // 시뮬레이션 중 앞차와 최소로 유지해야 하는 범퍼 gap(m).
-    static constexpr float DESIRED_HEADWAY = 1.5f;          // 이보다 시간헤드웨이가 짧으면 부족분에 following 비용(w6).
+    static constexpr float MIN_SAFE_GAP = 2.0f;             // 앞차/정지선과 유지할 표준 범퍼 gap(m). 오버슈트 흡수 여유 포함.
+    static constexpr float DESIRED_HEADWAY = 2.0f;          // 이보다 시간헤드웨이가 짧으면 부족분에 following 비용(w6).
     static constexpr float LANE_CHANGE_DONE_LATERAL = 0.5f; // 목표 레인 중심에서 이 거리 안이면 차선변경 완료로 본다(m).
 
     BehaviorWeights m_behaviorWeights;
     float m_lastBehaviorPlanTime = -1000.0f; // 처음 Drive 진입 시 바로 첫 판단이 돌도록 충분히 과거로 초기화
     BehaviorCandidate m_currentBehaviorPlan;
     float m_lastDesiredSpeed = 0.0f; // UpdateBehaviorPlan이 마지막으로 계산한, 지금 위치 기준 속도 캡(디버그 UI 표시용)
+    float m_lastAccelFF = 0.0f;      // UpdateBehaviorPlan이 계산한 종방향 피드포워드(Accelerate에 넘김)
     bool m_emergencyBrake = false;
 
     // 차선변경 매뉴버 진행 상태: 커밋 순간부터 목표 레인 중심에 정착할 때까지 active. active 동안엔

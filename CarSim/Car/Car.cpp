@@ -208,11 +208,11 @@ void Car::EmergBrake()
     m_acceleration = -m_maxEmergBrake;
 }
 
-void Car::Accelerate(float desiredVelocity)
+void Car::Accelerate(float desiredVelocity, float aFF)
 {
-    // 목표속도-현재속도 오차에 비례한 목표가속을 [−maxBrake, maxAccel]로 클램프하고, 저크(가속 변화율)를
-    // 방향별로 제한해 부드럽게 접근한다 (플랜트 지연이 없어 PID 없이 비례+저크제한으로 충분).
-    float aTarget = std::clamp(m_speedGain * (desiredVelocity - m_speed), -m_maxBrake, m_maxAccel);
+    // 계획감속 피드포워드(접근 중일 때만) + 속도오차 비례 피드백. FF가 기준 감속을 미리 넣어 접근 시 P제어 lag를 없앤다.
+    float ff = (desiredVelocity < m_speed) ? aFF : 0.0f; // vRef 도달 순간 FF를 꺼 아래로 오버슈트 방지
+    float aTarget = std::clamp(ff + m_speedGain * (desiredVelocity - m_speed), -m_maxBrake, m_maxAccel);
     float jerkLimit = (aTarget > m_acceleration) ? m_jerkUp : m_jerkDown;
     float maxStep = jerkLimit * m_deltaTime;
     m_acceleration += std::clamp(aTarget - m_acceleration, -maxStep, maxStep);
