@@ -113,6 +113,13 @@ void EditApp::UpdateDrag()
         radius = CP_RADIUS;
         snap = LANE_GRID_SNAP;
     }
+    else if (m_Selection == Selection::Road && m_SelectedRoad >= 0 && m_SelectedRoad < (int)m_Roads.size())
+    {
+        for (auto &p : m_Roads[m_SelectedRoad].referenceLine)
+            pts.push_back(&p);
+        radius = CP_RADIUS;
+        snap = LANE_GRID_SNAP;
+    }
     else if (m_Selection == Selection::Node && m_SelectedNode >= 0 && m_SelectedNode < (int)m_Nodes.size())
     {
         pts.push_back(&m_Nodes[m_SelectedNode].position);
@@ -206,6 +213,40 @@ namespace
         float dz = p.z - (a.z + abz * t);
         return std::sqrt(dx * dx + dz * dz);
     }
+
+    // 참조선 control points를 스플라인으로 샘플링해 각 점을 진행방향 오른쪽으로 d만큼 민 폴리라인.
+    // 오른쪽 = (dir.z, 0, -dir.x) (북쪽 진행 시 +X). d>0=오른쪽, d<0=왼쪽. y는 liftY만큼 띄운다.
+    std::vector<XMFLOAT3> OffsetReferencePolyline(const std::vector<XMFLOAT3> &refPoints, float d, float liftY)
+    {
+        std::vector<XMFLOAT3> out;
+        if (refPoints.size() < 4)
+            return out;
+
+        std::vector<Vec3> cps;
+        cps.reserve(refPoints.size());
+        for (const auto &p : refPoints)
+            cps.push_back(ToVec3(p));
+
+        Spline spline(cps);
+        const std::vector<Vec3> &samples = spline.GetSplinePoints();
+        if (samples.size() < 2)
+            return out;
+
+        out.reserve(samples.size());
+        const size_t n = samples.size();
+        for (size_t i = 0; i < n; ++i)
+        {
+            XMFLOAT3 a = ToXMFLOAT3(samples[i]);
+            XMFLOAT3 next = ToXMFLOAT3(samples[i + 1 < n ? i + 1 : i]);
+            XMFLOAT3 prev = ToXMFLOAT3(samples[i > 0 ? i - 1 : i]);
+            float tx = next.x - prev.x, tz = next.z - prev.z; // 중앙차분 접선
+            float len = std::sqrt(tx * tx + tz * tz);
+            float rx = len > 1e-5f ? tz / len : 0.0f;
+            float rz = len > 1e-5f ? -tx / len : 0.0f;
+            out.push_back(XMFLOAT3(a.x + rx * d, a.y + liftY, a.z + rz * d));
+        }
+        return out;
+    }
 }
 
 bool EditApp::PickLaneUnderMouse(const Ray &ray)
@@ -262,6 +303,7 @@ void EditApp::RebuildRenderObjects()
 {
     m_PointRenders.clear();
     m_SplineRenders.clear();
+    m_RoadRenders.clear();
     m_MarkingRenders.clear();
     m_ObstacleRenders.clear();
 
@@ -300,6 +342,112 @@ void EditApp::RebuildRenderObjects()
 
         RenderObject &ro = m_SplineRenders.emplace_back();
         ro.SetModel(pLine);
+    }
+
+    // Every road's reference line (green) + its band/center marks (ribbons) are always shown.
+    // Marks are placed by offsetting the reference spline laterally (right = +, left = -).
+    auto roadMarkColor = [](MarkingColor c) -> XMFLOAT4
+    {
+        switch (c)
+        {
+        case MarkingColor::Yellow:
+            return XMFLOAT4(1.0f, 0.85f, 0.0f, 1.0f);
+        case MarkingColor::Gray:
+            return XMFLOAT4(0.22f, 0.22f, 0.22f, 1.0f);
+        default:
+            return XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+        }
+    };
+    for (const auto &road : m_Roads)
+    {
+        if (road.referenceLine.size() < 4)
+            continue;
+
+        // 도로 바닥 아스팔트(회색): 밴드 전체 d범위를 덮는 리본. y를 마킹보다 낮게 깔아 밑에 깔린다.
+        float dMin = FLT_MAX, dMax = -FLT_MAX;
+        for (const auto &sec : road.laneSections)
+            for (const auto &b : sec.bands)
+            {
+                dMin = std::min(dMin, b.centerOffset - b.width * 0.5f);
+                dMax = std::max(dMax, b.centerOffset + b.width * 0.5f);
+            }
+        if (dMax > dMin)
+        {
+            std::vector<XMFLOAT3> asphaltLine = OffsetReferencePolyline(road.referenceLine, (dMin + dMax) * 0.5f, 0.02f);
+            if (asphaltLine.size() >= 2)
+            {
+                GeometryData geo = Geometry::CreateRibbon(asphaltLine, dMax - dMin);
+                if (!geo.vertices.empty())
+                {
+                    Model *pAsphalt = m_ModelManager.CreateFromGeometry("edit_asphalt_" + std::to_string(road.id), geo);
+                    pAsphalt->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.18f, 0.18f, 0.18f, 1.0f));
+                    pAsphalt->materials[0].Set<float>("$Opacity", 1.0f);
+                    m_RoadRenders.emplace_back().SetModel(pAsphalt);
+                }
+            }
+        }
+
+        // 참조선: 초록 리본(폭 0.15).
+        std::vector<XMFLOAT3> refLine = OffsetReferencePolyline(road.referenceLine, 0.0f, 0.05f);
+        if (refLine.size() >= 2)
+        {
+            GeometryData geo = Geometry::CreateRibbon(refLine, 0.15f);
+            if (!geo.vertices.empty())
+            {
+                Model *pRef = m_ModelManager.CreateFromGeometry("edit_refline_" + std::to_string(road.id), geo);
+                pRef->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.1f, 0.9f, 0.3f, 1.0f));
+                pRef->materials[0].Set<float>("$Opacity", 1.0f);
+                m_RoadRenders.emplace_back().SetModel(pRef);
+            }
+        }
+
+        // 마킹 리본 한 줄(또는 복선이면 두 줄) 생성. d = 참조선 기준 오프셋.
+        auto addMark = [&](float d, const EditBoundaryMark &mk, const std::string &tag)
+        {
+            if (mk.type == BoundaryMarkType::None)
+                return;
+            auto ribbon = [&](float dd, const std::string &name)
+            {
+                std::vector<XMFLOAT3> poly = OffsetReferencePolyline(road.referenceLine, dd, 0.06f);
+                if (poly.size() < 2)
+                    return;
+                GeometryData geo = mk.type == BoundaryMarkType::Broken
+                                       ? Geometry::CreateDashedRibbon(poly, mk.width, 3.0f, 5.0f)
+                                       : Geometry::CreateRibbon(poly, mk.width);
+                if (geo.vertices.empty())
+                    return;
+                Model *pm = m_ModelManager.CreateFromGeometry(name, geo);
+                pm->materials[0].Set<XMFLOAT4>("$DiffuseColor", roadMarkColor(mk.color));
+                pm->materials[0].Set<float>("$Opacity", 1.0f);
+                m_RoadRenders.emplace_back().SetModel(pm);
+            };
+            if (mk.type == BoundaryMarkType::DoubleSolid)
+            {
+                ribbon(d - 0.12f, tag + "_a");
+                ribbon(d + 0.12f, tag + "_b");
+            }
+            else
+            {
+                ribbon(d, tag);
+            }
+        };
+
+        // 중앙선: 참조선 위(d=0).
+        if (road.hasCenterMark)
+            addMark(0.0f, road.centerMark, "edit_centermark_" + std::to_string(road.id));
+
+        // 밴드별 바깥쪽 경계 마킹(|d| 큰 쪽 = centerOffset + sign*width/2).
+        for (int si = 0; si < (int)road.laneSections.size(); ++si)
+        {
+            const EditLaneSection &sec = road.laneSections[si];
+            for (int bi = 0; bi < (int)sec.bands.size(); ++bi)
+            {
+                const EditBand &b = sec.bands[bi];
+                float outer = b.centerOffset + (b.centerOffset >= 0.0f ? 1.0f : -1.0f) * b.width * 0.5f;
+                addMark(outer, b.boundaryMark,
+                        "edit_bandmark_" + std::to_string(road.id) + "_" + std::to_string(si) + "_" + std::to_string(bi));
+            }
+        }
     }
 
     // Every marking line's ribbon (solid or dashed) is always shown. Freehand, independent of
@@ -426,6 +574,8 @@ void EditApp::RebuildRenderObjects()
     const std::vector<XMFLOAT3> *selectedPoints = nullptr;
     if (m_Selection == Selection::Lane && m_SelectedLane >= 0 && m_SelectedLane < (int)m_Lanes.size())
         selectedPoints = &m_Lanes[m_SelectedLane].points;
+    else if (m_Selection == Selection::Road && m_SelectedRoad >= 0 && m_SelectedRoad < (int)m_Roads.size())
+        selectedPoints = &m_Roads[m_SelectedRoad].referenceLine;
     else if (m_Selection == Selection::Marking && m_SelectedMarking >= 0 && m_SelectedMarking < (int)m_Markings.size())
         selectedPoints = &m_Markings[m_SelectedMarking].points;
 
@@ -537,8 +687,8 @@ void EditApp::SaveToJson()
         jn["type"] = n.type;
         if (!n.children.empty())
             jn["child"] = n.children;
-        if (!n.lanes.empty())
-            jn["lanes"] = n.lanes;
+        if (!n.roads.empty())
+            jn["roads"] = n.roads;
         if (n.phaseOffset != 0.0f)
             jn["phase_offset"] = n.phaseOffset;
         root["nodes"].push_back(jn);
@@ -556,12 +706,101 @@ void EditApp::SaveToJson()
 
     root["parking_lanes"] = parkingLanes;
 
+    auto markToJson = [&](const EditBoundaryMark &mk)
+    {
+        json jm;
+        jm["type"] = mk.type == BoundaryMarkType::Solid ? "solid" : mk.type == BoundaryMarkType::Broken ? "broken"
+                                                                : mk.type == BoundaryMarkType::DoubleSolid ? "double_solid"
+                                                                                                          : "none";
+        jm["color"] = mk.color == MarkingColor::Yellow ? "yellow" : mk.color == MarkingColor::Gray ? "gray"
+                                                                                                   : "white";
+        jm["width"] = round2(mk.width);
+        return jm;
+    };
+
+    auto linkToJson = [&](const EditRoadLink &lk)
+    {
+        json jlk;
+        jlk["type"] = lk.type == EditElementType::Junction ? "junction" : "road";
+        jlk["id"] = lk.elementId;
+        jlk["contact"] = lk.contact == EditContactPoint::End ? "end" : "start";
+        return jlk;
+    };
+
     root["roads"] = json::array();
     for (const auto &r : m_Roads)
     {
-        root["roads"].push_back({{"id", r.id},
-                                 {"name", r.name},
-                                 {"speed_limit", r.speedLimit}});
+        json jr;
+        jr["id"] = r.id;
+        jr["name"] = r.name;
+        jr["speed_limit"] = r.speedLimit;
+
+        if (!r.referenceLine.empty())
+        {
+            json rl = json::array();
+            for (const auto &p : r.referenceLine)
+                rl.push_back({round2(p.x), round2(p.y), round2(p.z)});
+            jr["reference_line"] = rl;
+        }
+        if (r.hasCenterMark)
+            jr["center_mark"] = markToJson(r.centerMark);
+        if (!r.laneSections.empty())
+        {
+            json secs = json::array();
+            for (const auto &sec : r.laneSections)
+            {
+                json js;
+                js["s_start"] = round2(sec.sStart);
+                json bands = json::array();
+                for (const auto &b : sec.bands)
+                {
+                    json jb;
+                    jb["center_offset"] = round2(b.centerOffset);
+                    jb["width"] = round2(b.width);
+                    jb["type"] = b.type;
+                    jb["speed_limit"] = b.speedLimit;
+                    jb["boundary_mark"] = markToJson(b.boundaryMark);
+                    bands.push_back(jb);
+                }
+                js["bands"] = bands;
+                secs.push_back(js);
+            }
+            jr["lane_sections"] = secs;
+        }
+        if (r.junction != -1)
+            jr["junction"] = r.junction;
+        if (r.predecessor.valid || r.successor.valid)
+        {
+            json jlink;
+            if (r.predecessor.valid)
+                jlink["predecessor"] = linkToJson(r.predecessor);
+            if (r.successor.valid)
+                jlink["successor"] = linkToJson(r.successor);
+            jr["link"] = jlink;
+        }
+        root["roads"].push_back(jr);
+    }
+
+    root["junctions"] = json::array();
+    for (const auto &j : m_Junctions)
+    {
+        json jj;
+        jj["id"] = j.id;
+        json conns = json::array();
+        for (const auto &c : j.connections)
+        {
+            json jc;
+            jc["incoming_road"] = c.incomingRoad;
+            jc["connecting_road"] = c.connectingRoad;
+            jc["contact"] = c.contact == EditContactPoint::End ? "end" : "start";
+            json links = json::array();
+            for (const auto &ll : c.laneLinks)
+                links.push_back({{"from", ll.from}, {"to", ll.to}});
+            jc["lane_links"] = links;
+            conns.push_back(jc);
+        }
+        jj["connections"] = conns;
+        root["junctions"].push_back(jj);
     }
 
     std::time_t t = std::time(nullptr);
@@ -600,6 +839,7 @@ void EditApp::LoadFromJson(const std::filesystem::path &path)
     }
 
     m_Roads.clear();
+    m_Junctions.clear();
     m_Lanes.clear();
     m_Nodes.clear();
     m_Obstacles.clear();
@@ -609,13 +849,96 @@ void EditApp::LoadFromJson(const std::filesystem::path &path)
         snprintf(dst, n, "%s", s.c_str());
     };
 
+    auto parseContact = [](const nlohmann::json &j, const char *key)
+    {
+        return j.value(std::string(key), std::string("start")) == "end" ? EditContactPoint::End : EditContactPoint::Start;
+    };
+
+    auto parseLink = [&](const nlohmann::json &jl)
+    {
+        EditRoadLink lk;
+        lk.valid = true;
+        lk.type = jl.value("type", std::string("road")) == "junction" ? EditElementType::Junction : EditElementType::Road;
+        lk.elementId = jl.value("id", -1);
+        lk.contact = parseContact(jl, "contact");
+        return lk;
+    };
+
+    auto parseMark = [](const nlohmann::json &jm)
+    {
+        EditBoundaryMark mk;
+        std::string t = jm.value("type", std::string("none"));
+        mk.type = t == "solid" ? BoundaryMarkType::Solid : t == "broken" ? BoundaryMarkType::Broken
+                              : t == "double_solid"    ? BoundaryMarkType::DoubleSolid
+                                                       : BoundaryMarkType::None;
+        std::string c = jm.value("color", std::string("white"));
+        mk.color = c == "yellow" ? MarkingColor::Yellow : c == "gray" ? MarkingColor::Gray
+                                                                      : MarkingColor::White;
+        mk.width = jm.value("width", 0.15f);
+        return mk;
+    };
+
     for (const auto &jr : root.value("roads", nlohmann::json::array()))
     {
         EditRoad r;
         r.id = jr.value("id", -1);
         copyStr(r.name, sizeof(r.name), jr.value("name", std::string("road")));
         r.speedLimit = jr.value("speed_limit", 40);
-        m_Roads.push_back(r);
+
+        for (const auto &pt : jr.value("reference_line", nlohmann::json::array()))
+        {
+            if (pt.is_array() && pt.size() >= 3)
+                r.referenceLine.push_back(XMFLOAT3(pt[0].get<float>(), pt[1].get<float>(), pt[2].get<float>()));
+        }
+        if (jr.contains("center_mark"))
+        {
+            r.hasCenterMark = true;
+            r.centerMark = parseMark(jr["center_mark"]);
+        }
+        for (const auto &js : jr.value("lane_sections", nlohmann::json::array()))
+        {
+            EditLaneSection sec;
+            sec.sStart = js.value("s_start", 0.0f);
+            for (const auto &jb : js.value("bands", nlohmann::json::array()))
+            {
+                EditBand b;
+                b.centerOffset = jb.value("center_offset", 0.0f);
+                b.width = jb.value("width", 3.5f);
+                copyStr(b.type, sizeof(b.type), jb.value("type", std::string("driving")));
+                b.speedLimit = jb.value("speed_limit", 40);
+                if (jb.contains("boundary_mark"))
+                    b.boundaryMark = parseMark(jb["boundary_mark"]);
+                sec.bands.push_back(b);
+            }
+            r.laneSections.push_back(std::move(sec));
+        }
+        r.junction = jr.value("junction", -1);
+        if (jr.contains("link"))
+        {
+            const auto &jlink = jr["link"];
+            if (jlink.contains("predecessor"))
+                r.predecessor = parseLink(jlink["predecessor"]);
+            if (jlink.contains("successor"))
+                r.successor = parseLink(jlink["successor"]);
+        }
+        m_Roads.push_back(std::move(r));
+    }
+
+    for (const auto &jj : root.value("junctions", nlohmann::json::array()))
+    {
+        EditJunction j;
+        j.id = jj.value("id", -1);
+        for (const auto &jc : jj.value("connections", nlohmann::json::array()))
+        {
+            EditConnection c;
+            c.incomingRoad = jc.value("incoming_road", -1);
+            c.connectingRoad = jc.value("connecting_road", -1);
+            c.contact = parseContact(jc, "contact");
+            for (const auto &jll : jc.value("lane_links", nlohmann::json::array()))
+                c.laneLinks.push_back({jll.value("from", 0), jll.value("to", 0)});
+            j.connections.push_back(std::move(c));
+        }
+        m_Junctions.push_back(std::move(j));
     }
 
     for (const auto &jl : root.value("lanes", nlohmann::json::array()))
@@ -661,8 +984,8 @@ void EditApp::LoadFromJson(const std::filesystem::path &path)
         copyStr(n.type, sizeof(n.type), jn.value("type", std::string("unknown")));
         for (const auto &childIdJson : jn.value("child", nlohmann::json::array()))
             n.children.push_back(childIdJson.get<int>());
-        for (const auto &laneIdJson : jn.value("lanes", nlohmann::json::array()))
-            n.lanes.push_back(laneIdJson.get<int>());
+        for (const auto &roadIdJson : jn.value("roads", nlohmann::json::array()))
+            n.roads.push_back(roadIdJson.get<int>());
         n.phaseOffset = jn.value("phase_offset", 0.0f);
         m_Nodes.push_back(n);
     }
@@ -692,6 +1015,9 @@ void EditApp::LoadFromJson(const std::filesystem::path &path)
     m_NextRoadId = 1;
     for (const auto &r : m_Roads)
         m_NextRoadId = std::max(m_NextRoadId, r.id + 1);
+    m_NextJunctionId = 1;
+    for (const auto &j : m_Junctions)
+        m_NextJunctionId = std::max(m_NextJunctionId, j.id + 1);
     m_NextNodeId = 1;
     for (const auto &n : m_Nodes)
         m_NextNodeId = std::max(m_NextNodeId, n.id + 1);
@@ -701,6 +1027,8 @@ void EditApp::LoadFromJson(const std::filesystem::path &path)
 
     m_Selection = Selection::None;
     m_SelectedLane = -1;
+    m_SelectedRoad = -1;
+    m_SelectedBand = -1;
     m_SelectedNode = -1;
     m_SelectedObstacle = -1;
     m_DraggingPoint = -1;
@@ -824,12 +1152,15 @@ void EditApp::UpdateUI(float dt)
     DrawToolbarWindow();
     DrawLaneListWindow();
     DrawRoadListWindow();
+    DrawJunctionListWindow();
     DrawNodeListWindow();
     DrawMarkingListWindow();
     DrawObstacleListWindow();
 
     if (m_Selection == Selection::Lane)
         DrawLaneEditWindow();
+    else if (m_Selection == Selection::Road)
+        DrawRoadEditWindow();
     else if (m_Selection == Selection::Node)
         DrawNodeEditWindow();
     else if (m_Selection == Selection::Marking)
@@ -1086,27 +1417,289 @@ void EditApp::DrawRoadListWindow()
             EditRoad road;
             road.id = m_NextRoadId++;
             m_Roads.push_back(road);
+            m_Selection = Selection::Road;
+            m_SelectedRoad = (int)m_Roads.size() - 1;
+            m_SelectedBand = -1;
         }
 
         ImGui::Separator();
 
         for (int i = 0; i < (int)m_Roads.size(); ++i)
         {
+            char label[64];
+            snprintf(label, sizeof(label), "Road %d (%s)", m_Roads[i].id, m_Roads[i].name);
+            bool selected = (m_Selection == Selection::Road && i == m_SelectedRoad);
+
             ImGui::PushID(i);
-            ImGui::Text("Road %d", m_Roads[i].id);
-            ImGui::SameLine();
-            bool erased = ImGui::SmallButton("Delete");
-            if (!erased)
+            float avail = ImGui::GetContentRegionAvail().x;
+            if (ImGui::Selectable(label, selected, 0, ImVec2(avail - 28.0f, 0.0f)))
             {
-                ImGui::InputText("name", m_Roads[i].name, sizeof(m_Roads[i].name));
-                ImGui::InputInt("speed", &m_Roads[i].speedLimit);
+                m_Selection = Selection::Road;
+                m_SelectedRoad = i;
+                m_SelectedBand = -1;
             }
-            ImGui::Separator();
+            ImGui::SameLine();
+            bool erased = ImGui::SmallButton("X");
             ImGui::PopID();
 
             if (erased)
             {
                 m_Roads.erase(m_Roads.begin() + i);
+                if (m_Selection == Selection::Road)
+                {
+                    if (m_SelectedRoad == i)
+                    {
+                        m_Selection = Selection::None;
+                        m_SelectedRoad = -1;
+                    }
+                    else if (m_SelectedRoad > i)
+                    {
+                        --m_SelectedRoad;
+                    }
+                }
+                break;
+            }
+        }
+    }
+    ImGui::End();
+}
+
+namespace
+{
+    // BoundaryMarkType <-> combo 인덱스 (콤보 항목 순서와 enum 순서 일치).
+    const char *const kMarkTypeNames[] = {"none", "solid", "broken", "double_solid"};
+    const char *const kMarkColorNames[] = {"white", "yellow"};
+}
+
+void EditApp::DrawRoadEditWindow()
+{
+    if (m_SelectedRoad < 0 || m_SelectedRoad >= (int)m_Roads.size())
+    {
+        m_Selection = Selection::None;
+        return;
+    }
+
+    EditRoad &road = m_Roads[m_SelectedRoad];
+    bool open = true;
+    if (ImGui::Begin("Road Edit", &open))
+    {
+        ImGui::Text("Road ID: %d", road.id);
+        ImGui::InputText("name", road.name, sizeof(road.name));
+        ImGui::InputInt("speed limit", &road.speedLimit);
+
+        // 마킹 편집 공통 위젯: 타입/색/폭.
+        auto editMark = [](const char *label, EditBoundaryMark &mk)
+        {
+            ImGui::PushID(label);
+            int typeIdx = (int)mk.type;
+            ImGui::SetNextItemWidth(120.0f);
+            if (ImGui::Combo("type", &typeIdx, kMarkTypeNames, IM_ARRAYSIZE(kMarkTypeNames)))
+                mk.type = (BoundaryMarkType)typeIdx;
+            ImGui::SameLine();
+            int colorIdx = (mk.color == MarkingColor::Yellow) ? 1 : 0;
+            ImGui::SetNextItemWidth(90.0f);
+            if (ImGui::Combo("color", &colorIdx, kMarkColorNames, IM_ARRAYSIZE(kMarkColorNames)))
+                mk.color = colorIdx == 1 ? MarkingColor::Yellow : MarkingColor::White;
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(70.0f);
+            ImGui::InputFloat("width", &mk.width, 0.0f, 0.0f, "%.2f");
+            ImGui::PopID();
+        };
+
+        ImGui::Separator();
+        ImGui::Text("Center mark");
+        ImGui::Checkbox("has center mark", &road.hasCenterMark);
+        if (road.hasCenterMark)
+            editMark("center", road.centerMark);
+
+        ImGui::Separator();
+        ImGui::Text("Reference line");
+        if (ImGui::Button("Add Ref Point"))
+        {
+            XMFLOAT3 p(0.0f, 0.0f, 0.0f);
+            if (!road.referenceLine.empty())
+            {
+                p = road.referenceLine.back();
+                p.z += 2.0f;
+            }
+            road.referenceLine.push_back(p);
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(need >= 4 for a spline)");
+        for (int i = 0; i < (int)road.referenceLine.size(); ++i)
+        {
+            XMFLOAT3 &p = road.referenceLine[i];
+            ImGui::PushID(1000 + i);
+            ImGui::Text("[%d]", i);
+            ImGui::SameLine();
+            float pos[3] = {p.x, p.y, p.z};
+            ImGui::SetNextItemWidth(180.0f);
+            if (ImGui::InputFloat3("##rp", pos))
+                p = XMFLOAT3(pos[0], pos[1], pos[2]);
+            ImGui::SameLine();
+            bool erased = ImGui::SmallButton("X");
+            ImGui::PopID();
+            if (erased)
+            {
+                road.referenceLine.erase(road.referenceLine.begin() + i);
+                break;
+            }
+        }
+
+        ImGui::Separator();
+        ImGui::Text("Lane bands");
+        // phase1: 섹션 하나로 운용. 없으면 즉석에서 하나 만든다.
+        if (road.laneSections.empty())
+            road.laneSections.emplace_back();
+        EditLaneSection &sec = road.laneSections[0];
+
+        if (ImGui::Button("Add Band"))
+        {
+            EditBand b;
+            if (!sec.bands.empty())
+                b.centerOffset = sec.bands.back().centerOffset + sec.bands.back().width;
+            sec.bands.push_back(b);
+        }
+        for (int i = 0; i < (int)sec.bands.size(); ++i)
+        {
+            EditBand &b = sec.bands[i];
+            ImGui::PushID(2000 + i);
+            ImGui::Text("Band %d", i);
+            ImGui::SameLine();
+            bool erased = ImGui::SmallButton("X");
+            if (!erased)
+            {
+                ImGui::SetNextItemWidth(90.0f);
+                ImGui::InputFloat("offset", &b.centerOffset, 0.0f, 0.0f, "%.2f");
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(80.0f);
+                ImGui::InputFloat("width##b", &b.width, 0.0f, 0.0f, "%.2f");
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(90.0f);
+                ImGui::InputInt("spd", &b.speedLimit);
+                ImGui::InputText("type##b", b.type, sizeof(b.type));
+                editMark("bandmark", b.boundaryMark);
+            }
+            ImGui::Separator();
+            ImGui::PopID();
+            if (erased)
+            {
+                sec.bands.erase(sec.bands.begin() + i);
+                break;
+            }
+        }
+
+        ImGui::Separator();
+        ImGui::Text("Links");
+        ImGui::InputInt("junction (-1=none)", &road.junction);
+        auto editLink = [](const char *label, EditRoadLink &lk)
+        {
+            ImGui::PushID(label);
+            ImGui::Checkbox(label, &lk.valid);
+            if (lk.valid)
+            {
+                const char *types[] = {"road", "junction"};
+                int typeIdx = lk.type == EditElementType::Junction ? 1 : 0;
+                ImGui::SetNextItemWidth(90.0f);
+                if (ImGui::Combo("target", &typeIdx, types, 2))
+                    lk.type = typeIdx == 1 ? EditElementType::Junction : EditElementType::Road;
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(70.0f);
+                ImGui::InputInt("id##lk", &lk.elementId, 0, 0);
+                ImGui::SameLine();
+                const char *contacts[] = {"start", "end"};
+                int contactIdx = lk.contact == EditContactPoint::End ? 1 : 0;
+                ImGui::SetNextItemWidth(80.0f);
+                if (ImGui::Combo("contact", &contactIdx, contacts, 2))
+                    lk.contact = contactIdx == 1 ? EditContactPoint::End : EditContactPoint::Start;
+            }
+            ImGui::PopID();
+        };
+        editLink("predecessor", road.predecessor);
+        editLink("successor", road.successor);
+    }
+    ImGui::End();
+
+    if (!open)
+        m_Selection = Selection::None;
+}
+
+void EditApp::DrawJunctionListWindow()
+{
+    if (ImGui::Begin("Junctions"))
+    {
+        if (ImGui::Button("Add Junction"))
+        {
+            EditJunction j;
+            j.id = m_NextJunctionId++;
+            m_Junctions.push_back(j);
+        }
+
+        ImGui::Separator();
+
+        const char *contacts[] = {"start", "end"};
+        for (int i = 0; i < (int)m_Junctions.size(); ++i)
+        {
+            EditJunction &j = m_Junctions[i];
+            ImGui::PushID(i);
+            ImGui::Text("Junction %d", j.id);
+            ImGui::SameLine();
+            bool erased = ImGui::SmallButton("Delete");
+            if (!erased)
+            {
+                if (ImGui::SmallButton("Add Connection"))
+                    j.connections.emplace_back();
+                for (int ci = 0; ci < (int)j.connections.size(); ++ci)
+                {
+                    EditConnection &c = j.connections[ci];
+                    ImGui::PushID(ci);
+                    ImGui::SetNextItemWidth(70.0f);
+                    ImGui::InputInt("in", &c.incomingRoad, 0, 0);
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(70.0f);
+                    ImGui::InputInt("conn", &c.connectingRoad, 0, 0);
+                    ImGui::SameLine();
+                    int contactIdx = c.contact == EditContactPoint::End ? 1 : 0;
+                    ImGui::SetNextItemWidth(70.0f);
+                    if (ImGui::Combo("ct", &contactIdx, contacts, 2))
+                        c.contact = contactIdx == 1 ? EditContactPoint::End : EditContactPoint::Start;
+                    ImGui::SameLine();
+                    bool connErased = ImGui::SmallButton("X");
+
+                    if (ImGui::SmallButton("Add LaneLink"))
+                        c.laneLinks.push_back({});
+                    for (int li = 0; li < (int)c.laneLinks.size(); ++li)
+                    {
+                        EditLaneLink &ll = c.laneLinks[li];
+                        ImGui::PushID(li);
+                        ImGui::SetNextItemWidth(60.0f);
+                        ImGui::InputInt("from", &ll.from, 0, 0);
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(60.0f);
+                        ImGui::InputInt("to", &ll.to, 0, 0);
+                        ImGui::SameLine();
+                        bool llErased = ImGui::SmallButton("x");
+                        ImGui::PopID();
+                        if (llErased)
+                        {
+                            c.laneLinks.erase(c.laneLinks.begin() + li);
+                            break;
+                        }
+                    }
+                    ImGui::Separator();
+                    ImGui::PopID();
+                    if (connErased)
+                    {
+                        j.connections.erase(j.connections.begin() + ci);
+                        break;
+                    }
+                }
+            }
+            ImGui::Separator();
+            ImGui::PopID();
+            if (erased)
+            {
+                m_Junctions.erase(m_Junctions.begin() + i);
                 break;
             }
         }
@@ -1224,22 +1817,22 @@ void EditApp::DrawNodeEditWindow()
             node.children.push_back(0);
 
         ImGui::Separator();
-        ImGui::Text("Governed Lanes (traffic_light only)");
-        int eraseLaneIdx = -1;
-        for (int i = 0; i < (int)node.lanes.size(); ++i)
+        ImGui::Text("Governed Roads (traffic_light only)");
+        int eraseRoadIdx = -1;
+        for (int i = 0; i < (int)node.roads.size(); ++i)
         {
             ImGui::PushID(i);
             ImGui::SetNextItemWidth(100.0f);
-            ImGui::InputInt("##lane", &node.lanes[i]);
+            ImGui::InputInt("##road", &node.roads[i]);
             ImGui::SameLine();
             if (ImGui::SmallButton("X"))
-                eraseLaneIdx = i;
+                eraseRoadIdx = i;
             ImGui::PopID();
         }
-        if (eraseLaneIdx >= 0)
-            node.lanes.erase(node.lanes.begin() + eraseLaneIdx);
-        if (ImGui::Button("Add Lane"))
-            node.lanes.push_back(0);
+        if (eraseRoadIdx >= 0)
+            node.roads.erase(node.roads.begin() + eraseRoadIdx);
+        if (ImGui::Button("Add Road##signal"))
+            node.roads.push_back(0);
 
         ImGui::Separator();
         ImGui::DragFloat("Phase Offset (traffic_light only)", &node.phaseOffset, 0.5f, 0.0f, 0.0f, "%.1f");
@@ -1488,6 +2081,8 @@ void EditApp::DrawScene()
     for (auto &ro : m_PointRenders)
         ro.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     for (auto &ro : m_MarkingRenders)
+        ro.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
+    for (auto &ro : m_RoadRenders)
         ro.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     for (auto &obstacle : m_ObstacleRenders)
         obstacle.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);

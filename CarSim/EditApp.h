@@ -23,6 +23,7 @@ private:
     {
         None,
         Lane,
+        Road,
         Node,
         Marking,
         Obstacle
@@ -54,11 +55,93 @@ private:
         std::vector<DirectX::XMFLOAT3> points;
     };
 
+    enum class BoundaryMarkType
+    {
+        None,
+        Solid,
+        Broken,
+        DoubleSolid
+    };
+
+    // 밴드 바깥쪽 경계 / 중앙선 마킹. RoadDataManager::BoundaryMark와 필드를 맞췄다.
+    struct EditBoundaryMark
+    {
+        BoundaryMarkType type = BoundaryMarkType::None;
+        MarkingColor color = MarkingColor::White;
+        float width = 0.15f;
+    };
+
+    // s의 함수로 본 도로 횡단면의 한 띠(차로 하나). RoadDataManager::LaneBand와 매칭.
+    struct EditBand
+    {
+        float centerOffset = 1.75f; // 참조선 기준 d (+오른쪽, -왼쪽)
+        float width = 3.5f;
+        char type[16] = "driving"; // "driving" | "none"
+        int speedLimit = 40;
+        EditBoundaryMark boundaryMark; // 바깥쪽 경계(|d| 큰 쪽)에 그려지는 마킹
+    };
+
+    // OpenDRIVE laneSection 대응. RoadDataManager::LaneSection과 매칭.
+    struct EditLaneSection
+    {
+        float sStart = 0.0f;
+        std::vector<EditBand> bands;
+    };
+
+    enum class EditElementType
+    {
+        Road,
+        Junction
+    };
+
+    enum class EditContactPoint
+    {
+        Start,
+        End
+    };
+
+    // OpenDRIVE <link>의 predecessor/successor 하나. RoadDataManager::RoadLink와 매칭.
+    struct EditRoadLink
+    {
+        bool valid = false;
+        EditElementType type = EditElementType::Road;
+        int elementId = -1;
+        EditContactPoint contact = EditContactPoint::Start;
+    };
+
     struct EditRoad
     {
         int id = -1;
         char name[64] = "road";
         int speedLimit = 40;
+        std::vector<DirectX::XMFLOAT3> referenceLine; // 도로 중앙 참조선 control points
+        bool hasCenterMark = false;
+        EditBoundaryMark centerMark; // 참조선 위 중앙선 마킹
+        std::vector<EditLaneSection> laneSections;
+        int junction = -1; // -1=일반 도로, 아니면 소속 junction(내부 연결도로)
+        EditRoadLink predecessor;
+        EditRoadLink successor;
+    };
+
+    // 교차로 연결의 진입밴드 -> 연결밴드 매핑.
+    struct EditLaneLink
+    {
+        int from = 0;
+        int to = 0;
+    };
+
+    struct EditConnection
+    {
+        int incomingRoad = -1;
+        int connectingRoad = -1;
+        EditContactPoint contact = EditContactPoint::Start;
+        std::vector<EditLaneLink> laneLinks;
+    };
+
+    struct EditJunction
+    {
+        int id = -1;
+        std::vector<EditConnection> connections;
     };
 
     struct EditNode
@@ -71,8 +154,8 @@ private:
         char type[32] = "unknown"; // "unknown" | "park" | "park_spot" | "traffic_light" (RoadNodeType과 매칭)
         // 예: Park 노드가 자기 소유의 ParkSpot 노드 id들을 참조 (RoadNode::children과 같은 개념).
         std::vector<int> children;
-        // traffic_light 노드 전용: 이 신호가 걸린 레인 id들 (RoadDataManager가 Lane::SetSignalNode로 역연결).
-        std::vector<int> lanes;
+        // traffic_light 노드 전용: 이 신호가 걸린 road id들 (RoadDataManager가 m_roadSignals로 역참조).
+        std::vector<int> roads;
         // traffic_light 노드 전용: TrafficSignal::GetColor의 phaseOffset. 신호마다 다르게 둬서
         // 교차로 안 서로 다른 방향끼리 엇갈리게(또는 여러 교차로를 동기화) 할 때 쓴다.
         float phaseOffset = 0.0f;
@@ -107,6 +190,8 @@ private:
     void DrawLaneListWindow();
     void DrawLaneEditWindow();
     void DrawRoadListWindow();
+    void DrawRoadEditWindow();
+    void DrawJunctionListWindow();
     void DrawNodeListWindow();
     void DrawNodeEditWindow();
     void DrawMarkingListWindow();
@@ -127,17 +212,21 @@ private:
 
     std::vector<EditLane> m_Lanes;
     std::vector<EditRoad> m_Roads;
+    std::vector<EditJunction> m_Junctions;
     std::vector<EditNode> m_Nodes;
     std::vector<EditMarking> m_Markings;
     std::vector<EditObstacle> m_Obstacles;
     int m_NextLaneId = 1;
     int m_NextRoadId = 1;
+    int m_NextJunctionId = 1;
     int m_NextNodeId = 1;
     int m_NextMarkingId = 1;
     int m_NextObstacleId = 1;
 
     Selection m_Selection = Selection::None;
     int m_SelectedLane = -1;     // index into m_Lanes when m_Selection == Lane
+    int m_SelectedRoad = -1;     // index into m_Roads when m_Selection == Road
+    int m_SelectedBand = -1;     // index into selected road's section 0 bands (Road edit)
     int m_SelectedNode = -1;     // index into m_Nodes when m_Selection == Node
     int m_SelectedMarking = -1;  // index into m_Markings when m_Selection == Marking
     int m_SelectedObstacle = -1; // index into m_Obstacles when m_Selection == Obstacle
@@ -148,6 +237,7 @@ private:
 
     std::vector<RenderObject> m_PointRenders;    // control-point & node spheres
     std::vector<RenderObject> m_SplineRenders;   // red spline polylines (one per lane, always shown)
+    std::vector<RenderObject> m_RoadRenders;     // reference lines (green) + band marks (ribbons), always shown
     std::vector<RenderObject> m_MarkingRenders;  // marking-line ribbons (solid/dashed), always shown
     std::vector<RenderObject> m_ObstacleRenders; // blue obstacle rectangle outlines, always shown
 

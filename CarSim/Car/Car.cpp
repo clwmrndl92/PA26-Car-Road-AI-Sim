@@ -246,22 +246,26 @@ void Car::Destroy()
     GameObject::Destroy();
 }
 
-void Car::SetCurrentLane(const shared_ptr<Lane> &lane)
+void Car::SetCurrentRoad(const shared_ptr<Road> &road, float offset)
 {
-    if (m_currentLane == lane)
+    if (m_currentRoad == road && m_currentOffset == offset)
         return;
-    m_currentLane = lane;
+    m_currentRoad = road;
+    m_currentOffset = offset;
+    m_currentSpline = RoadDataManager::Get().BuildOffsetSpline(road, offset);
 
     RebuildSplineRender();
 }
 
-bool Car::ShouldStopForSignal(const shared_ptr<Lane> &lane) const
+bool Car::ShouldStopForSignal(const shared_ptr<Road> &road) const
 {
-    shared_ptr<RoadNode> signalNode = lane->GetSignalNode();
+    if (!road)
+        return false;
+    shared_ptr<RoadNode> signalNode = RoadDataManager::Get().GetSignalNodeForRoad(road->GetId());
     if (!signalNode)
         return false;
 
-    const Spline &spline = lane->GetSpline();
+    const Spline &spline = road->GetReferenceLine();
     float nodeT = spline.GetSplinePosition(signalNode->position);
     float myT = spline.GetSplinePosition(GetPosition());
     if (myT > nodeT)
@@ -431,16 +435,16 @@ float Car::Stanley(const Spline &spline)
 
 void Car::SetDestination(const shared_ptr<RoadNode> &destNode)
 {
-    m_destLane = RoadDataManager::Get().GetClosestLaneEnd(destNode->position);
+    m_destRoad = RoadDataManager::Get().GetClosestRoad(destNode->position).road;
     DebugConsole::Log(GetName() + ": SetDestination -> node " + std::to_string(destNode->id) +
-                      " (lane " + std::to_string(m_destLane ? m_destLane->GetId() : -1) + ")");
+                      " (road " + std::to_string(m_destRoad ? m_destRoad->GetId() : -1) + ")");
     if (destNode->nodeType == RoadNodeType::Park)
     {
         m_pendingParkNode = destNode;
     }
 
-    if (m_currentLane != nullptr)
-        TryFindPathAndSetLane();
+    if (m_currentRoad != nullptr)
+        TryFindPathAndSetRoad();
 }
 
 void Car::UpdateHorn(float dt)
@@ -476,15 +480,15 @@ bool Car::KnowsRedSignalAhead() const
 {
     for (size_t i = m_pathIndex; i < m_path.size(); ++i)
     {
-        const shared_ptr<Lane> &lane = m_path[i].lane;
-        shared_ptr<RoadNode> signalNode = lane->GetSignalNode();
+        const shared_ptr<Road> &road = m_path[i];
+        shared_ptr<RoadNode> signalNode = RoadDataManager::Get().GetSignalNodeForRoad(road->GetId());
         if (signalNode == nullptr)
             continue;
 
-        // 현재 레인의 신호는 이미 정지선을 지났으면 건너뛴다(지난 신호엔 안 걸린다).
+        // 현재 road의 신호는 이미 정지선을 지났으면 건너뛴다(지난 신호엔 안 걸린다).
         if (i == m_pathIndex)
         {
-            const Spline &spline = lane->GetSpline();
+            const Spline &spline = road->GetReferenceLine();
             if (spline.GetSplinePosition(GetPosition()) > spline.GetSplinePosition(signalNode->position))
                 continue;
         }
@@ -594,13 +598,13 @@ void Car::RebuildTrailRender(RenderObject &render, const std::deque<DirectX::XMF
 
 void Car::RebuildSplineRender()
 {
-    if (m_currentLane == nullptr)
+    if (m_currentRoad == nullptr)
     {
         m_splineRender.SetModel(nullptr);
         return;
     }
 
-    const std::vector<Vec3> &splinePoints = m_currentLane->GetSpline().GetSplinePoints();
+    const std::vector<Vec3> &splinePoints = m_currentSpline.GetSplinePoints();
     if (splinePoints.size() < 2)
     {
         m_splineRender.SetModel(nullptr);

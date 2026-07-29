@@ -27,6 +27,40 @@ namespace
         }
         return controlPoints;
     }
+
+    // {type,color,width} 오브젝트를 BoundaryMark로. 키 없으면 기본값(None/White/0).
+    BoundaryMark ParseBoundaryMark(const nlohmann::json &markJson)
+    {
+        BoundaryMark mark;
+        const auto &typeByName = GetBoundaryMarkTypeByName();
+        auto typeIt = typeByName.find(markJson.value("type", "none"));
+        if (typeIt != typeByName.end())
+            mark.type = typeIt->second;
+
+        const auto &colorByName = GetBoundaryMarkColorByName();
+        auto colorIt = colorByName.find(markJson.value("color", "white"));
+        if (colorIt != colorByName.end())
+            mark.color = colorIt->second;
+
+        mark.width = markJson.value("width", 0.0f);
+        return mark;
+    }
+
+    ContactPoint ParseContactPoint(const string &s)
+    {
+        return s == "end" ? ContactPoint::End : ContactPoint::Start;
+    }
+
+    // {type,id,contact} 오브젝트를 RoadLink로. valid=true로 표시.
+    RoadLink ParseRoadLink(const nlohmann::json &linkJson)
+    {
+        RoadLink link;
+        link.type = linkJson.value("type", string("road")) == "junction" ? ElementType::Junction : ElementType::Road;
+        link.elementId = linkJson.value("id", -1);
+        link.contact = ParseContactPoint(linkJson.value("contact", string("start")));
+        link.valid = true;
+        return link;
+    }
 }
 
 RoadDataManager::RoadDataManager()
@@ -61,12 +95,14 @@ void RoadDataManager::BuildRoadData(const string &filePath)
         return;
 
     m_roads.clear();
-    m_lanes.clear();
+    m_roadById.clear();
     m_nodes.clear();
     m_obstacles.clear();
-    m_parkingLanes.clear();
+    m_laneSections.clear();
+    m_centerMarks.clear();
+    m_junctions.clear();
+    m_roadSignals.clear();
 
-    map<int, shared_ptr<Road>> roadById;
     for (const nlohmann::json &roadJson : root.value("roads", nlohmann::json::array()))
     {
         int id = roadJson.value("id", 0);
@@ -74,47 +110,60 @@ void RoadDataManager::BuildRoadData(const string &filePath)
 
         auto road = make_shared<Road>(id, speedLimit);
         m_roads.push_back(road);
-        roadById[id] = road;
-    }
+        m_roadById[id] = road;
 
-    map<int, shared_ptr<Lane>> laneById;
-    for (const nlohmann::json &laneJson : root.value("lanes", nlohmann::json::array()))
-    {
-        int id = laneJson.value("id", 0);
-        int roadId = laneJson.value("road", 0);
+        // junction(optional): 이 도로가 소속된 교차로 id(내부 연결도로). 없으면 -1.
+        road->SetJunctionId(roadJson.value("junction", -1));
 
-        shared_ptr<Road> road;
-        auto roadIt = roadById.find(roadId);
-        if (roadIt != roadById.end())
-            road = roadIt->second;
-
-        vector<Vec3> controlPoints = ParseControlPoints(laneJson.value("control_points", nlohmann::json::array()));
-
-        // Catmull-Rom 스플라인은 컨트롤 포인트가 4개 미만이면 빈 스플라인이 되어 이 레인이 통째로 무효화된다.
-        Assert(controlPoints.size() >= 4);
-        auto lane = make_shared<Lane>(id, Spline(controlPoints), road);
-        m_lanes.push_back(lane);
-        laneById[id] = lane;
-    }
-
-    // left/right 인접 레인(optional): 전방 참조가 있을 수 있어 모든 레인 생성 후 해석한다.
-    for (const nlohmann::json &laneJson : root.value("lanes", nlohmann::json::array()))
-    {
-        auto laneIt = laneById.find(laneJson.value("id", 0));
-        if (laneIt == laneById.end())
-            continue;
-
-        if (laneJson.contains("left"))
+        // link(optional): predecessor/successor 명시 링크(track A).
+        if (roadJson.contains("link"))
         {
-            auto leftIt = laneById.find(laneJson.value("left", 0));
-            if (leftIt != laneById.end())
-                laneIt->second->SetLeft(leftIt->second);
+            const nlohmann::json &linkJson = roadJson["link"];
+            if (linkJson.contains("predecessor"))
+                road->SetPredecessor(ParseRoadLink(linkJson["predecessor"]));
+            if (linkJson.contains("successor"))
+                road->SetSuccessor(ParseRoadLink(linkJson["successor"]));
         }
-        if (laneJson.contains("right"))
+
+        // 참조선(optional): 도로 중앙선 control_points. Catmull-Rom은 4점 이상 필요.
+        vector<Vec3> refPoints = ParseControlPoints(roadJson.value("reference_line", nlohmann::json::array()));
+        if (refPoints.size() >= 4)
+            road->SetReferenceLine(Spline(refPoints));
+
+        // 중앙선 마킹(optional): 참조선 위 마킹.
+        if (roadJson.contains("center_mark"))
+            m_centerMarks[id] = ParseBoundaryMark(roadJson["center_mark"]);
+
+        // 횡단면(optional): laneSection별 밴드들. sStart 오름차순 정렬해 GetLateralProfile이 이진탐색 없이 뒤에서 스캔.
+        vector<LaneSection> sections;
+        for (const nlohmann::json &sectionJson : roadJson.value("lane_sections", nlohmann::json::array()))
         {
-            auto rightIt = laneById.find(laneJson.value("right", 0));
-            if (rightIt != laneById.end())
-                laneIt->second->SetRight(rightIt->second);
+            LaneSection section;
+            section.sStart = sectionJson.value("s_start", 0.0f);
+            for (const nlohmann::json &bandJson : sectionJson.value("bands", nlohmann::json::array()))
+            {
+                LaneBand band;
+                band.centerOffset = bandJson.value("center_offset", 0.0f);
+                band.width = bandJson.value("width", 0.0f);
+                band.speedLimit = bandJson.value("speed_limit", 0.0f) / 3.6f;
+
+                const auto &laneTypeByName = GetLaneTypeByName();
+                auto typeIt = laneTypeByName.find(bandJson.value("type", "driving"));
+                band.type = typeIt != laneTypeByName.end() ? typeIt->second : LaneType::Driving;
+
+                if (bandJson.contains("boundary_mark"))
+                    band.boundaryMark = ParseBoundaryMark(bandJson["boundary_mark"]);
+
+                section.bands.push_back(band);
+            }
+            sections.push_back(section);
+        }
+        if (!sections.empty())
+        {
+            sort(sections.begin(), sections.end(),
+                 [](const LaneSection &a, const LaneSection &b)
+                 { return a.sStart < b.sStart; });
+            m_laneSections[id] = std::move(sections);
         }
     }
 
@@ -164,35 +213,15 @@ void RoadDataManager::BuildRoadData(const string &filePath)
         }
     }
 
-    // lanes(optional, traffic_light 전용): 역방향(레인->노드)으로 세팅해 Lane에서 O(1) 조회하게 한다.
+    // roads(optional, traffic_light 전용): 신호가 걸린 road id들 -> 노드 역참조 맵.
     for (const nlohmann::json &nodeJson : root.value("nodes", nlohmann::json::array()))
     {
         auto nodeIt = m_nodes.find(nodeJson.value("id", 0));
         if (nodeIt == m_nodes.end() || nodeIt->second->nodeType != RoadNodeType::TrafficLight)
             continue;
 
-        for (const nlohmann::json &laneIdJson : nodeJson.value("lanes", nlohmann::json::array()))
-        {
-            auto laneIt = laneById.find(laneIdJson.get<int>());
-            if (laneIt != laneById.end())
-                laneIt->second->SetSignalNode(nodeIt->second);
-        }
-    }
-
-    // parking_lanes(optional): Park 노드 밑의 주차 스플라인 망. 메인 레인과 분리 보관하며, 같은
-    // park 안에서만 끝점 연결(successors)을 구성한다(Park 노드가 메인망<->주차망 handoff 지점).
-    for (const nlohmann::json &parkingJson : root.value("parking_lanes", nlohmann::json::array()))
-    {
-        int id = parkingJson.value("id", 0);
-        int parkId = parkingJson.value("park", 0);
-
-        vector<Vec3> controlPoints = ParseControlPoints(parkingJson.value("control_points", nlohmann::json::array()));
-        // 레인과 동일하게 Catmull-Rom 4점 이상 필요.
-        Assert(controlPoints.size() >= 4);
-
-        // 주차레인은 소속 도로가 없다(Lane은 road==null이면 제한속도 기본값으로 처리).
-        auto lane = make_shared<Lane>(id, Spline(controlPoints), nullptr);
-        m_parkingLanes[parkId].push_back(lane);
+        for (const nlohmann::json &roadIdJson : nodeJson.value("roads", nlohmann::json::array()))
+            m_roadSignals[roadIdJson.get<int>()] = nodeIt->second;
     }
 
     // obstacles(임시): 실제 인식 파이프라인이 들어오기 전까지, 손으로 채운 사각형 장애물 목록.
@@ -213,164 +242,221 @@ void RoadDataManager::BuildRoadData(const string &filePath)
         m_obstacles.push_back(obstacle);
     }
 
-    // 메인 레인망과 각 Park의 주차레인망을 각각 따로 연결(집합 간 연결 없음 = Park 노드 handoff).
-    BuildSuccessors(m_lanes);
-    for (auto &entry : m_parkingLanes)
-        BuildSuccessors(entry.second);
+    // junctions(optional, track A): 다갈래 교차로. 스키마만 읽어 저장(라우팅 확장은 이후 단계).
+    for (const nlohmann::json &junctionJson : root.value("junctions", nlohmann::json::array()))
+    {
+        Junction junction;
+        junction.id = junctionJson.value("id", -1);
+        for (const nlohmann::json &connJson : junctionJson.value("connections", nlohmann::json::array()))
+        {
+            Connection conn;
+            conn.incomingRoad = connJson.value("incoming_road", -1);
+            conn.connectingRoad = connJson.value("connecting_road", -1);
+            conn.contact = ParseContactPoint(connJson.value("contact", string("start")));
+            for (const nlohmann::json &linkJson : connJson.value("lane_links", nlohmann::json::array()))
+                conn.laneLinks.push_back({linkJson.value("from", 0), linkJson.value("to", 0)});
+            junction.connections.push_back(conn);
+        }
+        m_junctions[junction.id] = std::move(junction);
+    }
+
+    BuildRoadSuccessors();
 }
 
-void RoadDataManager::BuildSuccessors(const vector<shared_ptr<Lane>> &lanes)
+void RoadDataManager::BuildRoadSuccessors()
 {
-    // 매 빌드마다 레인은 새로 생성되므로 successors는 비어 있는 상태에서 시작한다.
-    for (const shared_ptr<Lane> &from : lanes)
+    // 명시 링크(track A)로 successor 그래프를 구성한다. successor가 road면 그 road,
+    // junction이면 그 junction의 connection 중 incomingRoad==현재인 connectingRoad들로 팬아웃.
+    m_roadSuccessors.clear();
+    for (const shared_ptr<Road> &road : m_roads)
     {
-        const Vec3 &fromEnd = from->GetEndPoint();
-        Vec3 fromDir = from->GetSpline().GetDirectionAt(1.0f);
+        const RoadLink &succ = road->GetSuccessor();
+        if (!succ.valid)
+            continue;
 
-        for (const shared_ptr<Lane> &to : lanes)
+        if (succ.type == ElementType::Road)
         {
-            if (from == to)
-                continue;
-
-            // from의 끝점이 to의 시작점과 일치할 때만 진행 방향으로 이어붙인다.
-            if ((to->GetStartPoint() - fromEnd).Length() > CONNECT_EPSILON)
-                continue;
-
-            constexpr float MAX_CONNECT_ANGLE_COS = -0.5f; // cos(120°)
-            Vec3 toDir = to->GetSpline().GetDirectionAt(0.0f);
-            if (fromDir.Dot(toDir) <= MAX_CONNECT_ANGLE_COS)
-                continue;
-
-            from->AddSuccessor(to);
-            to->AddPredecessor(from);
+            if (shared_ptr<Road> next = GetRoad(succ.elementId))
+                m_roadSuccessors[road->GetId()].push_back(next);
+        }
+        else if (const Junction *junction = GetJunction(succ.elementId))
+        {
+            for (const Connection &conn : junction->connections)
+                if (conn.incomingRoad == road->GetId())
+                    if (shared_ptr<Road> connecting = GetRoad(conn.connectingRoad))
+                        m_roadSuccessors[road->GetId()].push_back(connecting);
         }
     }
 }
 
-shared_ptr<Lane> RoadDataManager::GetClosestLane(const Vec3 &position) const
+const vector<shared_ptr<Road>> &RoadDataManager::GetRoadSuccessors(int roadId) const
 {
-    shared_ptr<Lane> closestLane;
-    float closestDistance = numeric_limits<float>::max();
-    for (const shared_ptr<Lane> &lane : m_lanes)
+    static const vector<shared_ptr<Road>> empty;
+    auto it = m_roadSuccessors.find(roadId);
+    return it != m_roadSuccessors.end() ? it->second : empty;
+}
+
+shared_ptr<Road> RoadDataManager::GetRoad(int roadId) const
+{
+    auto it = m_roadById.find(roadId);
+    return it != m_roadById.end() ? it->second : nullptr;
+}
+
+shared_ptr<RoadNode> RoadDataManager::GetSignalNodeForRoad(int roadId) const
+{
+    auto it = m_roadSignals.find(roadId);
+    return it != m_roadSignals.end() ? it->second : nullptr;
+}
+
+RoadPose RoadDataManager::GetClosestRoad(const Vec3 &position) const
+{
+    RoadPose best;
+    best.dist = numeric_limits<float>::max();
+    for (const shared_ptr<Road> &road : m_roads)
     {
-        float distance = (lane->GetStartPoint() - position).Length();
-        if (distance < closestDistance)
+        const Spline &ref = road->GetReferenceLine();
+        if (ref.GetSplinePoints().size() < 2)
+            continue;
+        float t = ref.GetSplinePosition(position);
+        Vec3 onRef = ref.GetPositionAt(t);
+        float dist = (onRef - position).Length();
+        if (dist < best.dist)
         {
-            closestDistance = distance;
-            closestLane = lane;
+            best.dist = dist;
+            best.road = road;
+            best.t = t;
+            // d 부호: 진행방향 오른쪽(+). right=(dir.z,0,-dir.x).
+            Vec3 dir = ref.GetDirectionAt(t);
+            Vec3 rightN(dir.GetZ(), 0.0f, -dir.GetX());
+            best.d = (position - onRef).Dot(rightN);
         }
     }
-    return closestLane;
+    if (best.dist == numeric_limits<float>::max())
+        best = RoadPose{};
+    return best;
 }
-shared_ptr<Lane> RoadDataManager::GetClosestParkLane(const Vec3 &position, int parkId) const
+
+Spline RoadDataManager::BuildOffsetSpline(const shared_ptr<Road> &road, float d) const
 {
-    shared_ptr<Lane> closestLane;
-    float closestDistance = numeric_limits<float>::max();
+    if (road == nullptr)
+        return Spline();
 
-    auto it = m_parkingLanes.find(parkId);
-    if (it == m_parkingLanes.end())
-        return closestLane;
+    const Spline &ref = road->GetReferenceLine();
+    if (std::abs(d) < 1e-3f)
+        return ref; // 오프셋 0이면 참조선 그대로(data2가 이 경우 = 정확)
 
-    for (const shared_ptr<Lane> &lane : it->second)
+    const vector<Vec3> &controlPoints = ref.GetControlPoints();
+    if (controlPoints.size() < 2)
+        return ref;
+
+    // 각 샘플을 진행방향 오른쪽 법선으로 d만큼 민다(EditApp OffsetReferencePolyline과 동일 규약).
+    vector<Vec3> offset;
+    offset.reserve(controlPoints.size());
+    const size_t n = controlPoints.size();
+    for (size_t i = 0; i < n; ++i)
     {
-        float distanceEnd = (lane->GetEndPoint() - position).Length();
-        float distanceStart = (lane->GetStartPoint() - position).Length();
-        float distance = min(distanceEnd, distanceStart);
-        if (distance < closestDistance)
-        {
-            closestDistance = distance;
-            closestLane = lane;
-        }
+        const Vec3 &next = controlPoints[i + 1 < n ? i + 1 : i];
+        const Vec3 &prev = controlPoints[i > 0 ? i - 1 : i];
+        float tx = next.GetX() - prev.GetX();
+        float tz = next.GetZ() - prev.GetZ();
+        float len = std::sqrt(tx * tx + tz * tz);
+        float rx = len > 1e-5f ? tz / len : 0.0f;
+        float rz = len > 1e-5f ? -tx / len : 0.0f;
+        offset.push_back(Vec3(controlPoints[i].GetX() + rx * d, controlPoints[i].GetY(), controlPoints[i].GetZ() + rz * d));
     }
-    return closestLane;
+    return Spline(offset);
 }
 
-shared_ptr<Lane> RoadDataManager::GetClosestLaneEnd(const Vec3 &position) const
+const LaneSection *RoadDataManager::GetLateralProfile(const shared_ptr<Road> &road, float s) const
 {
-    shared_ptr<Lane> closestLane;
-    float closestDistance = numeric_limits<float>::max();
-    for (const shared_ptr<Lane> &lane : m_lanes)
+    if (road == nullptr)
+        return nullptr;
+
+    auto it = m_laneSections.find(road->GetId());
+    if (it == m_laneSections.end() || it->second.empty())
+        return nullptr;
+
+    // sStart 오름차순이므로 s 이하인 마지막 구간이 담당 구간. s가 첫 구간보다 앞이면 첫 구간으로 클램프.
+    const vector<LaneSection> &sections = it->second;
+    const LaneSection *result = &sections.front();
+    for (const LaneSection &section : sections)
     {
-        float distance = (lane->GetEndPoint() - position).Length();
-        if (distance < closestDistance)
-        {
-            closestDistance = distance;
-            closestLane = lane;
-        }
+        if (section.sStart > s)
+            break;
+        result = &section;
     }
-    return closestLane;
+    return result;
 }
 
-const vector<shared_ptr<Lane>> *RoadDataManager::GetParkingLanes(int parkNodeId) const
+const BoundaryMark *RoadDataManager::GetCenterMark(const shared_ptr<Road> &road) const
 {
-    auto it = m_parkingLanes.find(parkNodeId);
-    return it != m_parkingLanes.end() ? &it->second : nullptr;
+    if (road == nullptr)
+        return nullptr;
+
+    auto it = m_centerMarks.find(road->GetId());
+    return it != m_centerMarks.end() ? &it->second : nullptr;
 }
 
-vector<LaneStep> RoadDataManager::FindPath(const shared_ptr<Lane> &startLane, const shared_ptr<Lane> &destLane) const
+const Junction *RoadDataManager::GetJunction(int junctionId) const
 {
-    if (startLane == nullptr || destLane == nullptr)
+    auto it = m_junctions.find(junctionId);
+    return it != m_junctions.end() ? &it->second : nullptr;
+}
+
+vector<shared_ptr<Road>> RoadDataManager::FindPath(const shared_ptr<Road> &startRoad, const shared_ptr<Road> &destRoad) const
+{
+    if (startRoad == nullptr || destRoad == nullptr)
         return {};
+    if (startRoad->GetId() == destRoad->GetId())
+        return {startRoad};
 
-    // 어디서 왔는지 + 그 진입이 차선변경이었는지 기록해 경로를 되짚는다.
-    struct Came
-    {
-        shared_ptr<Lane> from;
-        bool viaLaneChange = false;
-    };
+    priority_queue<pair<float, shared_ptr<Road>>, vector<pair<float, shared_ptr<Road>>>, greater<pair<float, shared_ptr<Road>>>> openList;
+    openList.emplace(0.0f, startRoad);
 
-    priority_queue<pair<float, shared_ptr<Lane>>, vector<pair<float, shared_ptr<Lane>>>, greater<pair<float, shared_ptr<Lane>>>> openList;
-    openList.emplace(0.0f, startLane);
-
-    map<int, float> gScore = {{startLane->GetId(), 0.0f}};
-    map<int, Came> cameFrom = {{startLane->GetId(), {nullptr, false}}};
+    map<int, float> gScore = {{startRoad->GetId(), 0.0f}};
+    map<int, shared_ptr<Road>> cameFrom = {{startRoad->GetId(), nullptr}};
     unordered_set<int> visited;
 
-    const Vec3 goal = destLane->GetEndPoint();
+    const vector<Vec3> &destPts = destRoad->GetReferenceLine().GetSplinePoints();
+    const Vec3 goal = destPts.empty() ? Vec3::sZero() : destPts.back();
 
     while (!openList.empty())
     {
-        shared_ptr<Lane> current = openList.top().second;
+        shared_ptr<Road> current = openList.top().second;
         openList.pop();
 
         if (visited.count(current->GetId()))
             continue;
         visited.insert(current->GetId());
 
-        if (current->GetId() == destLane->GetId())
+        if (current->GetId() == destRoad->GetId())
         {
-            vector<LaneStep> path;
-            for (shared_ptr<Lane> lane = current; lane;)
+            vector<shared_ptr<Road>> path;
+            for (shared_ptr<Road> road = current; road;)
             {
-                const Came &came = cameFrom[lane->GetId()];
-                path.push_back({lane, came.viaLaneChange});
-                lane = came.from;
+                path.push_back(road);
+                road = cameFrom[road->GetId()];
             }
             reverse(path.begin(), path.end());
             return path;
         }
 
-        auto relax = [&](const shared_ptr<Lane> &neighbor, float cost, bool laneChange)
+        // 진행: 현재 road를 끝까지 달려(참조선 길이만큼 비용) 후속 road로.
+        for (const shared_ptr<Road> &neighbor : GetRoadSuccessors(current->GetId()))
         {
             if (!neighbor)
-                return;
-            float tentative = gScore[current->GetId()] + cost;
+                continue;
+            float tentative = gScore[current->GetId()] + current->GetLength();
             float known = gScore.count(neighbor->GetId()) ? gScore[neighbor->GetId()] : INFINITY;
             if (tentative < known)
             {
                 gScore[neighbor->GetId()] = tentative;
-                cameFrom[neighbor->GetId()] = {current, laneChange};
-                float fScore = tentative + (neighbor->GetEndPoint() - goal).Length();
-                openList.emplace(fScore, neighbor);
+                cameFrom[neighbor->GetId()] = current;
+                const vector<Vec3> &nbPts = neighbor->GetReferenceLine().GetSplinePoints();
+                float h = nbPts.empty() ? 0.0f : (nbPts.back() - goal).Length();
+                openList.emplace(tentative + h, neighbor);
             }
-        };
-
-        // 진행: 현재 레인을 끝까지 달려(길이만큼 비용) 다음 레인으로.
-        for (const weak_ptr<Lane> &weak : current->GetSuccessors())
-            relax(weak.lock(), current->GetLength(), false);
-        // 차선변경: 좌/우 인접 레인으로 페널티 비용으로 이동.
-        relax(current->GetLeft().lock(), LANE_CHANGE_COST, true);
-        relax(current->GetRight().lock(), LANE_CHANGE_COST, true);
+        }
     }
     return {};
 }
@@ -394,4 +480,3 @@ shared_ptr<RoadNode> RoadDataManager::GetRandomDestNode() const
 
     return candidates[rand() % candidates.size()];
 }
-

@@ -6,6 +6,7 @@
 #include "Utill/DebugConsole.h"
 #include "Nav/Spline.h"
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <cstdlib>
 
@@ -421,6 +422,107 @@ void CarSim::InitRoadRenderer()
 
     m_RoadRenders.clear();
 
+    // 각 road의 아스팔트(회색, 밴드 전체 d범위) + 차선 마킹(중앙선/밴드 바깥경계) 렌더.
+    // EditApp::RebuildRenderObjects의 addMark/아스팔트 로직과 동일 규약(참조선 기준 오프셋 리본).
+    auto roadMarkColor = [](BoundaryMark::Color c) -> XMFLOAT4
+    {
+        return c == BoundaryMark::Color::Yellow ? XMFLOAT4(1.0f, 0.85f, 0.0f, 1.0f) : XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+    };
+    for (const auto &road : m_RoadDataManager.GetRoads())
+    {
+        const std::vector<Vec3> &refPts = road->GetReferenceLine().GetSplinePoints();
+        if (refPts.size() < 2)
+            continue;
+
+        const LaneSection *section = m_RoadDataManager.GetLateralProfile(road, 0.0f);
+
+        // 아스팔트: 밴드 전체 d범위를 덮는 리본.
+        if (section != nullptr && !section->bands.empty())
+        {
+            float dMin = FLT_MAX, dMax = -FLT_MAX;
+            for (const LaneBand &b : section->bands)
+            {
+                dMin = std::min(dMin, b.centerOffset - b.width * 0.5f);
+                dMax = std::max(dMax, b.centerOffset + b.width * 0.5f);
+            }
+            if (dMax > dMin)
+            {
+                Spline asphaltSpline = m_RoadDataManager.BuildOffsetSpline(road, (dMin + dMax) * 0.5f);
+                std::vector<XMFLOAT3> asphaltLine;
+                for (const Vec3 &p : asphaltSpline.GetSplinePoints())
+                {
+                    XMFLOAT3 f = ToXMFLOAT3(p);
+                    f.y += 0.02f;
+                    asphaltLine.push_back(f);
+                }
+                if (asphaltLine.size() >= 2)
+                {
+                    GeometryData geo = Geometry::CreateRibbon(asphaltLine, dMax - dMin);
+                    if (!geo.vertices.empty())
+                    {
+                        Model *pAsphalt = m_ModelManager.CreateFromGeometry("road_asphalt_" + std::to_string(road->GetId()), geo);
+                        pAsphalt->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.18f, 0.18f, 0.18f, 1.0f));
+                        pAsphalt->materials[0].Set<float>("$Opacity", 1.0f);
+                        RenderObject &ro = m_RoadRenders.emplace_back();
+                        ro.SetModel(pAsphalt);
+                    }
+                }
+            }
+        }
+
+        // 마킹 리본(참조선 기준 오프셋 d, 복선이면 두 줄).
+        auto addMark = [&](float d, const BoundaryMark &mk, const std::string &tag)
+        {
+            if (mk.type == BoundaryMark::Type::None)
+                return;
+            auto ribbon = [&](float dd, const std::string &name)
+            {
+                Spline markSpline = m_RoadDataManager.BuildOffsetSpline(road, dd);
+                std::vector<XMFLOAT3> poly;
+                for (const Vec3 &p : markSpline.GetSplinePoints())
+                {
+                    XMFLOAT3 f = ToXMFLOAT3(p);
+                    f.y += 0.06f;
+                    poly.push_back(f);
+                }
+                if (poly.size() < 2)
+                    return;
+                GeometryData geo = mk.type == BoundaryMark::Type::Broken
+                                       ? Geometry::CreateDashedRibbon(poly, mk.width, 3.0f, 5.0f)
+                                       : Geometry::CreateRibbon(poly, mk.width);
+                if (geo.vertices.empty())
+                    return;
+                Model *pm = m_ModelManager.CreateFromGeometry(name, geo);
+                pm->materials[0].Set<XMFLOAT4>("$DiffuseColor", roadMarkColor(mk.color));
+                pm->materials[0].Set<float>("$Opacity", 1.0f);
+                RenderObject &ro = m_RoadRenders.emplace_back();
+                ro.SetModel(pm);
+            };
+            if (mk.type == BoundaryMark::Type::DoubleSolid)
+            {
+                ribbon(d - 0.12f, tag + "_a");
+                ribbon(d + 0.12f, tag + "_b");
+            }
+            else
+            {
+                ribbon(d, tag);
+            }
+        };
+
+        if (const BoundaryMark *centerMark = m_RoadDataManager.GetCenterMark(road))
+            addMark(0.0f, *centerMark, "road_centermark_" + std::to_string(road->GetId()));
+
+        if (section != nullptr)
+        {
+            for (int bi = 0; bi < (int)section->bands.size(); ++bi)
+            {
+                const LaneBand &b = section->bands[bi];
+                float outer = b.centerOffset + (b.centerOffset >= 0.0f ? 1.0f : -1.0f) * b.width * 0.5f;
+                addMark(outer, b.boundaryMark, "road_bandmark_" + std::to_string(road->GetId()) + "_" + std::to_string(bi));
+            }
+        }
+    }
+
     for (const auto &[id, node] : m_RoadDataManager.GetNodes())
     {
         Model *pMarker = m_ModelManager.CreateFromGeometry("node_marker" + std::to_string(node->id), Geometry::CreateSphere(NODE_MARKER_RADIUS));
@@ -461,19 +563,21 @@ void CarSim::InitRoadRenderer()
         }
     }
 
-    // 레인 그래프의 successor 연결(레인 끝 -> 다음 레인 시작)을 노란 선으로 시각화한다.
+    // road 그래프의 successor 연결(road 참조선 끝 -> 다음 road 시작)을 노란 선으로 시각화한다.
     m_RoadEdgeRenders.clear();
     int linkIndex = 0;
-    for (const auto &lane : m_RoadDataManager.GetLanes())
+    for (const auto &road : m_RoadDataManager.GetRoads())
     {
-        Vec3 from = lane->GetEndPoint() + Vec3(0.0f, EDGE_LINE_HEIGHT, 0.0f);
-        for (const auto &weakSucc : lane->GetSuccessors())
+        const std::vector<Vec3> &fromPts = road->GetReferenceLine().GetSplinePoints();
+        if (fromPts.size() < 2)
+            continue;
+        Vec3 from = fromPts.back() + Vec3(0.0f, EDGE_LINE_HEIGHT, 0.0f);
+        for (const auto &succ : m_RoadDataManager.GetRoadSuccessors(road->GetId()))
         {
-            auto succ = weakSucc.lock();
-            if (!succ)
+            const std::vector<Vec3> &toPts = succ->GetReferenceLine().GetSplinePoints();
+            if (toPts.size() < 2)
                 continue;
-
-            Vec3 to = succ->GetStartPoint() + Vec3(0.0f, EDGE_LINE_HEIGHT, 0.0f);
+            Vec3 to = toPts.front() + Vec3(0.0f, EDGE_LINE_HEIGHT, 0.0f);
 
             Model *pLine = m_ModelManager.CreateFromGeometry("edge_line" + std::to_string(linkIndex++), Geometry::CreateLine(ToXMFLOAT3(from), ToXMFLOAT3(to)));
             pLine->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f));
@@ -567,22 +671,43 @@ void CarSim::InitMarkingRenderer()
 
 void CarSim::InitRoadColliders()
 {
-    constexpr float ROAD_WIDTH = RoadDataManager::ROAD_WIDTH;
+    constexpr float FALLBACK_ROAD_WIDTH = RoadDataManager::ROAD_WIDTH; // 밴드 정보 없는 road용 폴백
     constexpr float ROAD_THICKNESS = 0.2f; // 도로 판 두께
     constexpr float SEGMENT_LENGTH = 1.0f; // 콜라이더 박스 하나가 덮는 목표 길이(짧을수록 경사 이음새 각이 작아 튐이 준다)
 
     int segIndex = 0;
-    for (const auto &lane : m_RoadDataManager.GetLanes())
+    for (const auto &roadData : m_RoadDataManager.GetRoads())
     {
-        // 컨트롤 포인트 y가 전부 0.01 이하인 지면 레인은 ground plane이 이미 받쳐주므로 만들지 않는다.
-        const std::vector<Vec3> &ctrl = lane->GetSpline().GetControlPoints();
+        // 컨트롤 포인트 y가 전부 0.01 이하인 지면 도로는 ground plane이 이미 받쳐주므로 만들지 않는다.
+        const std::vector<Vec3> &ctrl = roadData->GetReferenceLine().GetControlPoints();
         bool elevated = std::any_of(ctrl.begin(), ctrl.end(),
                                     [](const Vec3 &p)
                                     { return std::fabs(p.GetY()) > 0.01f; });
         if (!elevated)
             continue;
 
-        const std::vector<Vec3> &pts = lane->GetSpline().GetSplinePoints();
+        // 밴드 전체 d범위(InitRoadRenderer의 아스팔트 리본과 동일 규약)로 폭/중심오프셋을 구해,
+        // 콜라이더가 회색 아스팔트와 정확히 같은 폭/위치를 덮게 한다. 밴드 없으면 참조선 폭 폴백.
+        const LaneSection *section = m_RoadDataManager.GetLateralProfile(roadData, 0.0f);
+        float roadWidth = FALLBACK_ROAD_WIDTH;
+        float centerOffset = 0.0f;
+        if (section != nullptr && !section->bands.empty())
+        {
+            float dMin = FLT_MAX, dMax = -FLT_MAX;
+            for (const LaneBand &b : section->bands)
+            {
+                dMin = std::min(dMin, b.centerOffset - b.width * 0.5f);
+                dMax = std::max(dMax, b.centerOffset + b.width * 0.5f);
+            }
+            if (dMax > dMin)
+            {
+                roadWidth = dMax - dMin;
+                centerOffset = (dMin + dMax) * 0.5f;
+            }
+        }
+
+        Spline colliderSpline = m_RoadDataManager.BuildOffsetSpline(roadData, centerOffset);
+        const std::vector<Vec3> &pts = colliderSpline.GetSplinePoints();
         if (pts.size() < 2)
             continue;
 
@@ -609,15 +734,15 @@ void CarSim::InitRoadColliders()
 
             Model *pRoad = m_ModelManager.CreateFromGeometry(
                 "road_seg" + std::to_string(segIndex++),
-                Geometry::CreateBox(ROAD_WIDTH, ROAD_THICKNESS, length));
+                Geometry::CreateBox(roadWidth, ROAD_THICKNESS, length));
             pRoad->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.25f, 0.25f, 0.27f, 1.0f));
             pRoad->materials[0].Set<float>("$Opacity", 1.0f);
 
             auto road = std::make_shared<GameObject>();
-            road->SetName("Road_L" + std::to_string(lane->GetId()));
+            road->SetName("Road_L" + std::to_string(roadData->GetId()));
             road->SetModel(pRoad);
             road->SetPosition(mid);
-            road->Init(JPH::Vec3(ROAD_WIDTH * 0.5f, ROAD_THICKNESS * 0.5f, length * 0.5f), Rigidbody::Type::Static);
+            road->Init(JPH::Vec3(roadWidth * 0.5f, ROAD_THICKNESS * 0.5f, length * 0.5f), Rigidbody::Type::Static);
             road->SetRotation(QuatFromForward(delta));
             m_GameObjects.push_back(road);
         }
