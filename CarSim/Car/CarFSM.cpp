@@ -55,7 +55,7 @@ namespace
         float dd = dTarget - dStart;
         if (slope0 * dd > 1e-4f) // 이미 목표 쪽으로 횡이동 중
         {
-            constexpr float DECEL_FACTOR = 1.5f; // 작을수록 J가 급함(오버슈트↓), 클수록 완만(오버슈트↑)
+            constexpr float DECEL_FACTOR = 1.0f; // 작을수록 J가 급함(오버슈트↓), 클수록 완만(오버슈트↑)
             float lGeo = DECEL_FACTOR * std::fabs(dd) / std::fabs(slope0);
             L = std::max(1.0f, std::min(L, lGeo)); // lMin보다 작아도 됨(막판 미세 정착)
         }
@@ -611,9 +611,6 @@ std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistan
     Vec3 calPosition = GetPosition();
     const std::vector<VehicleCollision::Obstacle> &obstacles = RoadDataManager::Get().GetObstacles();
 
-    // m_currentLane->GetSpline() -> (필요시) path상의 다음 노드들의 lane spline 순으로 lookDistance까지 훑으며
-    // 커브 지점(로컬 곡률 기반 최대속도)과 노드 지점(제한속도)의 샘플을 모은다. 각 샘플이 곧
-    // ComputeSpeedCapFromSamples가 쓰는 "가상 리더"의 (위치, 거리, 요구 속도) 후보가 된다.
     std::vector<RoadSpeedSample> samples;
     samples.reserve(static_cast<size_t>(lookDistance / ROAD_SAMPLE_SPACING) + 4);
     auto splineEnd = [](const Spline *sp) -> Vec3
@@ -654,7 +651,6 @@ std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistan
                         float nodeDistance = (segmentRoad == m_currentRoad)
                                                  ? (signalNode->position - calPosition).Length()
                                                  : traveledDistance + (nodeT - startT) * splineLength;
-                        // 정지선 앞 MIN_SAFE_GAP만큼 여유를 두고 선다 (거리<0이면 캡이 0으로 내려가 정지선을 넘어 크리핑하지 않는다).
                         samples.push_back({signalNode->position, nodeDistance - MIN_SAFE_GAP, 0.0f});
                     }
                 }
@@ -732,10 +728,7 @@ std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistan
     return samples;
 }
 
-// samples 각각을, distanceOffset만큼 이미 다가간 지점 기준으로 다시 평가한다 -- distanceOffset=0이면
-// "지금 이 순간" 기준(=예전 ComputeDesiredCruiseSpeed)과 같고, distanceOffset>0이면 궤적을 따라 그만큼
-// 전진한 미래 시점 기준의 국소 안전속도 상한이 된다 (desiredSpeed는 계속 낮아지는데 그 사실을
-// "지금 시점 값 하나"로만 비교하면 접근 구간에서 감속 판단이 늦어지는 문제를 피하기 위함).
+// samples 각각을, distanceOffset만큼 이미 다가간 지점 기준으로 다시 평가
 float Car::ComputeSpeedCapFromSamples(const std::vector<RoadSpeedSample> &samples, float distanceOffset,
                                       const RoadSpeedSample **binding) const
 {
@@ -761,9 +754,6 @@ float Car::ComputeSpeedCapFromSamples(const std::vector<RoadSpeedSample> &sample
     return speedCap;
 }
 
-// 레인 등록 없이 위치만으로 주변 차를 모은다. 컬링 반경은 "3초(BEHAVIOR_SAFETY_HORIZON) 동안
-// 나와 상대가 정면으로 마주 달려도 닿을 수 없는 거리"로 차마다 계산한다 -- 이 밖의 차는 어떤
-// 후보 궤적으로도 시뮬레이션 중 겹칠 수 없으므로 EvaluateTrajectorySafety에 넘길 필요가 없다.
 std::vector<Car::NearbyCar> Car::CollectNearbyCars() const
 {
     std::vector<NearbyCar> nearby;
@@ -775,7 +765,7 @@ std::vector<Car::NearbyCar> Car::CollectNearbyCars() const
     {
         if (other == this)
             continue;
-        // OBB 충돌검사가 x,z 평면뿐이라 머리 위/아래 차를 겹친 걸로 오판한다 -- 높이차로 먼저 거른다.
+        // 높이로 먼저 거르기
         if (std::fabs(other->GetPosition().GetY() - egoPosition.GetY()) > VERTICAL_SEPARATION)
             continue;
         // 가속 후보(+m_maxAccel)로 3초 내 더 갈 수 있는 거리(0.5*a*t^2)까지 더해 안전측으로 잡는다.
@@ -785,8 +775,8 @@ std::vector<Car::NearbyCar> Car::CollectNearbyCars() const
         if ((other->GetPosition() - egoPosition).Length() > reachDistance)
             continue;
 
-        // 교차/합류 방향(진행방향 차 45도 초과) 차 중 내가 우선권을 가진 차만 "양보 예정"으로 본다.
-        // 같은 방향 차(앞차/뒷차)는 우선순위 대상이 아니다 -- 코리도 리더 샘플로 차간을 유지한다.
+        // 교차/합류 방향(진행방향 차 45도 초과) 차에 대해 우선권을 가짐
+        // 같은 방향 차(앞차/뒷차)는 우선순위 대상 X
         bool crossing = egoFwd.Dot(other->GetForwardAxis()) < SAME_DIRECTION_COS;
         nearby.push_back({other, crossing && HasPriorityOver(other)});
     }
@@ -819,23 +809,16 @@ bool Car::IsTurningAhead() const
     return minRadius < TURN_RADIUS_THRESHOLD;
 }
 
-// 교차 상황의 통행 우선권: 직진 > 회전(우회전/좌회전 등 작은 곡률 매뉴버), 같으면 이름 비교로
-// 결정적 tie-break -- 규칙이 상보적(내가 우선이면 상대는 양보)이어야 교착이 안 생긴다.
+// 교차 상황의 통행 우선권: 직진 > 회전
 bool Car::HasPriorityOver(const Car *other) const
 {
     bool meTurning = IsTurningAhead();
     bool otherTurning = other->IsTurningAhead();
     if (meTurning != otherTurning)
         return !meTurning;
-    return GetName() < other->GetName();
+    return GetName() < other->GetName(); // todo : car ID 로 변경
 }
 
-// 내 예정 경로(현재 레인 -> path의 다음 레인들)를 걸으며, 각 차를 그 세그먼트 스플라인에 투영해
-// 횡 오프셋이 코리도 폭(차선폭/2 + 상대 반폭) 안이면 가상 리더 샘플로 추가한다.
-// - 속도는 내 경로 방향 성분만 쓴다(dot). 교차/역방향 차는 0으로 클램프되어 그 지점의 정지
-//   장애물처럼 취급되고, 코리도를 벗어나면 다음 플랜(0.2초)에서 샘플이 자연히 사라진다.
-// - 옆 차선을 평행하게 달리는 차는 코리도 밖이라 여기서 걸러진다 -- 그런 차와의 간섭(차선변경 등)은
-//   EvaluateTrajectorySafety의 OBB 시뮬이 담당한다.
 void Car::AppendCarConstraintSamples(std::vector<RoadSpeedSample> &samples,
                                      const std::vector<NearbyCar> &nearbyCars, float lookDistance) const
 {
@@ -921,10 +904,6 @@ std::vector<Car::TrajectorySample> Car::SimulateEgoTrajectory(const Spline &driv
         float nextSpeed = speed + simAccel * BEHAVIOR_SIM_STEP;
         if (simAccel > 0.0f)
         {
-            // 가속 후보는 국소 cap을 "추종"한다: cap 아래면 가속, cap을 넘으면 maxBrake 한도 내에서
-            // cap까지 감속 (실제 DriveControl이 하는 일과 같다). 이래야 정지 제약이 지평선 안에 있어도
-            // "다가가서 그 앞에 선다"가 가속 후보로 표현된다 -- 없으면 제약 앞 수십 m에서 얼어붙는다.
-            // cap이 maxBrake보다 빨리 떨어지면(진짜 못 멈추는 상황) 초과분이 남아 overshoot로 잡힌다.
             float localCap = ComputeSpeedCapFromSamples(roadSamples, distanceTraveled);
             if (nextSpeed > localCap)
                 nextSpeed = std::max(localCap, speed - m_maxBrake * BEHAVIOR_SIM_STEP);
@@ -1025,8 +1004,8 @@ void Car::PredictOtherPose(const OtherPrediction &pred, float distance, Vec3 &ou
     }
 }
 
-// others는 각자 자기 레인 스플라인을 따라 등속 전진한다고 예측해(BuildOtherPrediction), 매 스텝
-// ego 궤적과 겹치는지 OBB로 검사한다. 레인을 벗어난 차(주차 매뉴버 등)는 직진 외삽으로 폴백.
+// others는 각자 자기 스플라인을 따라 등속 전진한다고 예측해(BuildOtherPrediction), 매 스텝
+// ego 궤적과 겹치는지 OBB로 검사한다. 레인을 벗어난 차(주차 매뉴버 등)는 직진 취급.
 Car::TrajectorySafety Car::EvaluateTrajectorySafety(const std::vector<TrajectorySample> &trajectory,
                                                     const std::vector<NearbyCar> &others) const
 {
@@ -1250,9 +1229,8 @@ float Car::EvaluateCandidateCost(const BehaviorCandidate &candidate, float desir
     // 속도 오차 = 목표속도에 못 미친 만큼(1배, 그냥 아쉬운 정도) + BuildCandidate가 궤적 전체를 훑어
     // 계산해둔 maxSpeedOvershoot(4배) -- 궤적 중 어느 지점에서든 그 지점 기준 안전속도를 넘어섰다는
     // 뜻이라, 신호/커브/목적지를 못 멈추고 지나칠 뻔했다는 것이므로 훨씬 나쁘게 취급한다.
-    constexpr float OVERSHOOT_PENALTY = 4.0f;
     float undershoot = std::max(0.0f, desiredSpeed - candidate.horizonEndSpeed);
-    float speedCost = undershoot + candidate.maxSpeedOvershoot * OVERSHOOT_PENALTY;
+    float overshoot = candidate.maxSpeedOvershoot;
 
     // 차선유지 끌림: 목표 오프셋이 가장 가까운 밴드 중심에서 벗어난 거리(m). 별도 모드가 아니라 비용으로 표현.
     float laneKeepCost = std::fabs(candidate.targetOffset - NearestBandOffset(candidate.targetRoad, candidate.targetOffset));
@@ -1272,14 +1250,12 @@ float Car::EvaluateCandidateCost(const BehaviorCandidate &candidate, float desir
                                ? (DESIRED_HEADWAY - candidate.minTimeHeadway)
                                : 0.0f;
 
-    return m_behaviorWeights.speed * speedCost + m_behaviorWeights.laneKeep * laneKeepCost +
+    return m_behaviorWeights.speed_under * undershoot + m_behaviorWeights.speed_over * overshoot + m_behaviorWeights.laneKeep * laneKeepCost +
            m_behaviorWeights.lateralAccel * lateralAccelCost + m_behaviorWeights.inertia * inertiaCost +
            m_behaviorWeights.signalViolation * signalViolationCost + m_behaviorWeights.following * headwayDeficit;
 }
 
-// BEHAVIOR_PLAN_INTERVAL(0.2초)마다 (차선유지/좌변경/우변경) x (가속/유지/감속) 후보를 만들어 평가하고,
-// 가장 비용이 낮은 유효 후보를 채택한다. 차선변경 후보를 고르면 그 자리에서 바로 레인/경로를 전환하고,
-// 이후 BEHAVIOR_PLAN_INTERVAL 동안은 DriveControl이 그 결과(m_currentBehaviorPlan)를 그대로 따라간다.
+// BEHAVIOR_PLAN_INTERVAL(0.2초)마다 후보를 만들어 평가
 void Car::UpdateBehaviorPlan()
 {
     if (m_currentRoad == nullptr)

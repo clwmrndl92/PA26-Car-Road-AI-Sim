@@ -537,12 +537,13 @@ void Car::UpdateDebugWindow()
 
         ImGui::Separator();
         ImGui::Text("Behavior Plan Weights");
-        ImGui::SliderFloat("Speed Weight w1", &m_behaviorWeights.speed, 0.0f, 10.0f);
-        ImGui::SliderFloat("Lane Keep Weight w2", &m_behaviorWeights.laneKeep, 0.0f, 20.0f);
-        ImGui::SliderFloat("Lateral Accel Weight w3", &m_behaviorWeights.lateralAccel, 0.0f, 5.0f);
-        ImGui::SliderFloat("Inertia Weight w4", &m_behaviorWeights.inertia, 0.0f, 10.0f);
-        ImGui::SliderFloat("Signal Violation Weight w5", &m_behaviorWeights.signalViolation, 0.0f, 50.0f);
-        ImGui::SliderFloat("Following Weight w6", &m_behaviorWeights.following, 0.0f, 20.0f);
+        ImGui::SliderFloat("Speed Weight", &m_behaviorWeights.speed_under, 0.0f, 10.0f);
+        ImGui::SliderFloat("Speed Over Penalty", &m_behaviorWeights.speed_over, 0.0f, 10.0f);
+        ImGui::SliderFloat("Lane Keep Weight", &m_behaviorWeights.laneKeep, 0.0f, 20.0f);
+        ImGui::SliderFloat("Lateral Accel Penalty", &m_behaviorWeights.lateralAccel, 0.0f, 5.0f);
+        ImGui::SliderFloat("Inertia Weight", &m_behaviorWeights.inertia, 0.0f, 10.0f);
+        ImGui::SliderFloat("Signal Violation Penalty", &m_behaviorWeights.signalViolation, 0.0f, 50.0f);
+        ImGui::SliderFloat("Following Headway Weight", &m_behaviorWeights.following, 0.0f, 20.0f);
     }
     ImGui::End();
 }
