@@ -185,7 +185,8 @@ private:
         Vec3 position;
         float distance;
         float speed;
-        Car *leader = nullptr; // 이 샘플이 앞차(리더)면 그 차, 정적 제약(신호/커브/정지선 등)이면 nullptr
+        Car *leader = nullptr;            // 이 샘플이 앞차(리더)면 그 차, 정적 제약(신호/커브/정지선 등)이면 nullptr
+        float leaderLateralOffset = 0.0f; // road 참조선 기준 리더의 d(횡오프셋). leader!=nullptr일 때만 유효 -- 후보가 이 리더를 옆으로 피할 수 있는지 판단용
     };
 
     enum class SpeedAction
@@ -223,6 +224,8 @@ private:
         bool signalViolation = false;                             // 신호를 지켜야 하는데(ShouldStopForSignal) 못 멈추고 정지선을 넘는지
         float maxSpeedOvershoot = 0.0f;                           // 궤적 지점별 국소 안전속도 상한을 가장 크게 초과한 값(m/s)
         float maxLateralAccel = 0.0f;                             // 궤적 중 최대 |횡가속|(m/s^2) -- 커브/차선변경 승차감 비용(w3)용
+        float bigVehicleCost = 0.0f;                              // 대형차 옆을 지날 때 원하는 여유에 못 미친 만큼(m)
+        float edgeMarginCost = 0.0f;                              // 도로 가장자리에 원하는 여유에 못 미친 만큼(m)
     };
     // 후보 안전판정용으로 시뮬레이션한 미래 한 시점의 (위치, 진행방향, 속도, 지금까지 이동한 거리).
     struct TrajectorySample
@@ -284,6 +287,8 @@ private:
     // 정지선(신호 노드 위치)을 넘어버리는지 확인한다.
     bool ViolatesSignal(const shared_ptr<Road> &road, const std::vector<TrajectorySample> &trajectory) const;
     std::vector<RoadSpeedSample> ScanRoadSpeedConstraints(float lookDistance) const;
+    // road 횡단면(GetLateralProfile)에서 차체가 도로 밖으로 안 나가는 drivable d 범위. 밴드 없으면 참조선 중심 좁은 범위.
+    void ComputeDrivableRange(const shared_ptr<Road> &road, float &outMin, float &outMax) const;
 #pragma endregion
 
 public:

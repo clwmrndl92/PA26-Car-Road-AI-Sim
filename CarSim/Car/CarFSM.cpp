@@ -39,6 +39,16 @@ namespace
         return best;
     }
 
+    // 위치를 road 참조선에 투영해 얻는 signed lateral offset d(+오른쪽). RoadDataManager::GetClosestRoad와 같은 부호규약.
+    float ComputeReferenceOffset(const Spline &referenceLine, const Vec3 &position)
+    {
+        float t = referenceLine.GetSplinePosition(position);
+        Vec3 onRef = referenceLine.GetPositionAt(t);
+        Vec3 dir = referenceLine.GetDirectionAt(t);
+        Vec3 rightN(dir.GetZ(), 0.0f, -dir.GetX());
+        return (position - onRef).Dot(rightN);
+    }
+
     // 호길이 s의 함수 d(s). 시작 (d0, slope0, 0) -> 끝 (dTarget, 0, 0)의 min-jerk 5차 다항식.
     struct QuinticLateral
     {
@@ -823,6 +833,7 @@ void Car::AppendCarConstraintSamples(std::vector<RoadSpeedSample> &samples,
                                      const std::vector<NearbyCar> &nearbyCars, float lookDistance) const
 {
     const Spline *spline = &m_currentSpline;
+    shared_ptr<Road> segmentRoad = m_currentRoad; // leaderLateralOffset 계산용 -- spline은 첫 세그먼트에서 offset 주행경로라 참조선이 따로 필요
     size_t pathIndex = m_pathIndex;
     float baseDistance = 0.0f; // 내 위치에서 이 세그먼트 시작(startT)까지의 누적 경로거리
     float startT = spline->GetSplinePosition(GetPosition());
@@ -830,6 +841,7 @@ void Car::AppendCarConstraintSamples(std::vector<RoadSpeedSample> &samples,
     while (spline != nullptr && baseDistance <= lookDistance)
     {
         float splineLength = spline->GetLength();
+        const Spline &segRef = segmentRoad->GetReferenceLine();
         for (const NearbyCar &nearbyCar : nearbyCars)
         {
             // 나에게 양보할 차는 가상 리더로 세우지 않는다 -- 세우면 서로가 서로 앞에 정지선을
@@ -855,7 +867,9 @@ void Car::AppendCarConstraintSamples(std::vector<RoadSpeedSample> &samples,
             float worldGap = (other->GetPosition() - GetPosition()).Length() - other->GetLength() - MIN_SAFE_GAP;
             float gap = std::min(arcGap, worldGap); // gap<0(표준간격 침범)이면 캡이 0으로 내려가 크리핑/돌진 방지
 
-            samples.push_back({other->GetPosition(), gap, alongSpeed, other});
+            RoadSpeedSample sample{other->GetPosition(), gap, alongSpeed, other};
+            sample.leaderLateralOffset = ComputeReferenceOffset(segRef, other->GetPosition());
+            samples.push_back(sample);
         }
 
         baseDistance += (1.0f - startT) * splineLength;
@@ -863,6 +877,7 @@ void Car::AppendCarConstraintSamples(std::vector<RoadSpeedSample> &samples,
         if (nextRoad == nullptr)
             break;
         spline = &nextRoad->GetReferenceLine();
+        segmentRoad = nextRoad;
         startT = 0.0f;
         ++pathIndex;
     }
@@ -1137,6 +1152,28 @@ bool Car::ViolatesSignal(const shared_ptr<Road> &road, const std::vector<Traject
     return false;
 }
 
+void Car::ComputeDrivableRange(const shared_ptr<Road> &road, float &outMin, float &outMax) const
+{
+    float halfW = GetHalfWidth();
+    outMin = -halfW;
+    outMax = halfW; // 밴드 없으면 참조선 중심 좁은 범위
+    if (const LaneSection *sec = RoadDataManager::Get().GetLateralProfile(road, 0.0f);
+        sec != nullptr && !sec->bands.empty())
+    {
+        outMin = std::numeric_limits<float>::max();
+        outMax = -std::numeric_limits<float>::max();
+        for (const LaneBand &b : sec->bands)
+        {
+            outMin = std::min(outMin, b.centerOffset - b.width * 0.5f);
+            outMax = std::max(outMax, b.centerOffset + b.width * 0.5f);
+        }
+        outMin += halfW; // 차체가 도로 밖으로 안 나가게 안쪽으로 조인다
+        outMax -= halfW;
+        if (outMin > outMax)
+            outMin = outMax = (outMin + outMax) * 0.5f;
+    }
+}
+
 // targetOffset/speedAction 조합 하나를 5차 S커브 경로 생성 + 궤적 시뮬레이션까지 돌려 완전히 채운 후보로.
 // roadSamples는 UpdateBehaviorPlan이 한 번만 스캔해 넘긴 도로제약 샘플(제한속도/커브/신호) -- 후보마다
 // 다시 스캔할 필요 없이, 궤적의 각 지점에서 ComputeSpeedCapFromSamples로 국소 상한과 비교한다.
@@ -1160,13 +1197,57 @@ Car::BehaviorCandidate Car::BuildCandidate(SpeedAction speedAction,
     QuinticLateral quintic = SolveQuinticLateral(m_currentOffset, m_currentLateralSlope, targetOffset, L);
     candidate.drivingSpline = BuildLateralPath(ref, GetPosition(), quintic, L, targetOffset);
 
+    // 대형차 옆 여유: 자기보다 훨씬 넓은 차 옆을 지날 때 원하는 여유(폭 차이가 클수록 더 벌리고 싶다)에
+    // 못 미친 만큼을 비용으로 쌓는다. 실제 충돌 회피(OBB)와 별개로, 바짝 붙지 않으려는 "선호"에 가깝다.
+    constexpr float BIG_VEHICLE_WIDTH_MARGIN = 0.15f;   // 자기 차보다 이만큼 이상 넓으면 "대형차"로 취급
+    constexpr float BIG_VEHICLE_EXTRA_CLEARANCE = 0.5f; // 기본 여유 위에 추가로 벌리고 싶은 거리(m)
+    float bigVehicleCost = 0.0f;
+    for (const NearbyCar &nearbyCar : nearbyCars)
+    {
+        Car *other = nearbyCar.car;
+        float widthExcess = other->GetHalfWidth() - GetHalfWidth() - BIG_VEHICLE_WIDTH_MARGIN;
+        if (widthExcess <= 0.0f)
+            continue;
+        float otherOffset = ComputeReferenceOffset(ref, other->GetPosition());
+        float lateralGap = std::fabs(targetOffset - otherOffset) - (GetHalfWidth() + other->GetHalfWidth());
+        float desiredGap = BIG_VEHICLE_EXTRA_CLEARANCE + widthExcess;
+        bigVehicleCost += std::max(0.0f, desiredGap - lateralGap);
+    }
+    candidate.bigVehicleCost = bigVehicleCost;
+
+    // 가장자리 여유: 도로 drivable 범위(dMin~dMax) 끝에 바짝 붙는 후보에 소프트 비용. 추월 등으로 정말
+    // 필요하면 다른 비용(안전/속도)이 이를 압도해 그래도 선택될 수 있다.
+    constexpr float EDGE_MARGIN_DISTANCE = 0.5f;
+    float dMin, dMax;
+    ComputeDrivableRange(road, dMin, dMax);
+    float distToNearEdge = std::min(targetOffset - dMin, dMax - targetOffset);
+    candidate.edgeMarginCost = std::max(0.0f, EDGE_MARGIN_DISTANCE - distToNearEdge);
+
     float simAccel = 0.0f;
     if (speedAction == SpeedAction::Accelerate)
         simAccel = m_maxAccel;
     else if (speedAction == SpeedAction::Decelerate)
         simAccel = -m_maxBrake;
 
-    std::vector<TrajectorySample> trajectory = SimulateEgoTrajectory(candidate.drivingSpline, simAccel, roadSamples);
+    // 이 후보의 targetOffset이면 옆으로 완전히 피할 수 있는 리더(정지/서행 포함)는 도로제약 샘플에서 뺀다 --
+    // 그래야 그 후보의 시뮬레이션 속도가 리더에 안 눌려 우회/추월이 실제로 더 빨라 보이고, 비용비교가 그걸
+    // 선호할 수 있다(막힘 감지 -> 우회 시도). 실제 충돌 여부는 이후 EvaluateTrajectorySafety가 실제 기하로
+    // 별도 판정하므로 여기서 잘못 빼도 위험해지지 않는다.
+    constexpr float LATERAL_CLEARANCE_MARGIN = 0.3f;
+    std::vector<RoadSpeedSample> effectiveSamples;
+    effectiveSamples.reserve(roadSamples.size());
+    for (const RoadSpeedSample &sample : roadSamples)
+    {
+        if (sample.leader != nullptr)
+        {
+            float clearance = GetHalfWidth() + sample.leader->GetHalfWidth() + LATERAL_CLEARANCE_MARGIN;
+            if (std::fabs(targetOffset - sample.leaderLateralOffset) > clearance)
+                continue;
+        }
+        effectiveSamples.push_back(sample);
+    }
+
+    std::vector<TrajectorySample> trajectory = SimulateEgoTrajectory(candidate.drivingSpline, simAccel, effectiveSamples);
     if (trajectory.empty())
     {
         candidate.targetSpeed = m_speed;
@@ -1190,7 +1271,7 @@ Car::BehaviorCandidate Car::BuildCandidate(SpeedAction speedAction,
     for (size_t i = 0; i < trajectory.size(); ++i)
     {
         const TrajectorySample &sample = trajectory[i];
-        float localCap = ComputeSpeedCapFromSamples(roadSamples, sample.distanceTraveled);
+        float localCap = ComputeSpeedCapFromSamples(effectiveSamples, sample.distanceTraveled);
         maxOvershoot = std::max(maxOvershoot, sample.speed - localCap);
 
         if (i > 0)
@@ -1224,6 +1305,7 @@ bool Car::IsCandidateSafe(const BehaviorCandidate &candidate) const
 
 // cost = w1*(속도 오차) + w2*(목표오프셋이 밴드중심에서 벗어난 거리) + w3*(궤적 최대 횡가속)
 //      + w4*(직전 목표 오프셋/속도결정과 달라진 정도) + w5*(신호위반이면 고정값) + w6*(앞차 시간헤드웨이 부족분)
+//      + w7*(대형차 옆 여유 부족분) + w8*(도로 가장자리 여유 부족분)
 float Car::EvaluateCandidateCost(const BehaviorCandidate &candidate, float desiredSpeed) const
 {
     // 속도 오차 = 목표속도에 못 미친 만큼(1배, 그냥 아쉬운 정도) + BuildCandidate가 궤적 전체를 훑어
@@ -1252,7 +1334,8 @@ float Car::EvaluateCandidateCost(const BehaviorCandidate &candidate, float desir
 
     return m_behaviorWeights.speed_under * undershoot + m_behaviorWeights.speed_over * overshoot + m_behaviorWeights.laneKeep * laneKeepCost +
            m_behaviorWeights.lateralAccel * lateralAccelCost + m_behaviorWeights.inertia * inertiaCost +
-           m_behaviorWeights.signalViolation * signalViolationCost + m_behaviorWeights.following * headwayDeficit;
+           m_behaviorWeights.signalViolation * signalViolationCost + m_behaviorWeights.following * headwayDeficit +
+           m_behaviorWeights.bigVehicle * candidate.bigVehicleCost + m_behaviorWeights.edgeMargin * candidate.edgeMarginCost;
 }
 
 // BEHAVIOR_PLAN_INTERVAL(0.2초)마다 후보를 만들어 평가
@@ -1286,23 +1369,8 @@ void Car::UpdateBehaviorPlan()
         m_lastAccelFF = -m_planBrake;
 
     // 횡오프셋 후보: road 횡단면 drivable 범위에 균등 D_SAMPLE_COUNT개 + 현재 오프셋(유지 보장).
-    float halfW = GetHalfWidth();
-    float dMin = -halfW, dMax = halfW; // 밴드 없으면 참조선 중심 좁은 범위
-    if (const LaneSection *sec = RoadDataManager::Get().GetLateralProfile(m_currentRoad, 0.0f);
-        sec != nullptr && !sec->bands.empty())
-    {
-        dMin = std::numeric_limits<float>::max();
-        dMax = -std::numeric_limits<float>::max();
-        for (const LaneBand &b : sec->bands)
-        {
-            dMin = std::min(dMin, b.centerOffset - b.width * 0.5f);
-            dMax = std::max(dMax, b.centerOffset + b.width * 0.5f);
-        }
-        dMin += halfW; // 차체가 도로 밖으로 안 나가게 안쪽으로 조인다
-        dMax -= halfW;
-        if (dMin > dMax)
-            dMin = dMax = (dMin + dMax) * 0.5f;
-    }
+    float dMin, dMax;
+    ComputeDrivableRange(m_currentRoad, dMin, dMax);
 
     std::vector<float> dTargets;
     dTargets.reserve(D_SAMPLE_COUNT + 1);
