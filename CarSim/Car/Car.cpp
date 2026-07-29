@@ -524,12 +524,10 @@ void Car::UpdateDebugWindow()
 
         // 현재 채택된 행동계획(0.2초마다 UpdateBehaviorPlan이 갱신)과, 그때 계산된 지금 위치 기준 속도 캡.
         const BehaviorCandidate &plan = m_currentBehaviorPlan;
-        ImGui::Text("Plan: %s / %s (target %.1f, end %.1f km/h)",
-                    LaneChoiceToString(plan.laneChoice), SpeedActionToString(plan.speedAction),
-                    plan.targetSpeed * 3.6f, plan.horizonEndSpeed * 3.6f);
+        ImGui::Text("Plan: %s (d_target %.2f m, end %.1f km/h)",
+                    SpeedActionToString(plan.speedAction), plan.targetOffset, plan.horizonEndSpeed * 3.6f);
+        ImGui::Text("Cur offset d: %.2f m", m_currentOffset);
         ImGui::Text("Speed Cap: %.1f km/h", m_lastDesiredSpeed * 3.6f);
-        if (m_laneChangeActive)
-            ImGui::Text("Lane change: in progress");
         if (plan.minApproachGap < 1e6f)
             ImGui::Text("Lead gap: %.1f m  headway: %.2f s", plan.minApproachGap,
                         plan.minTimeHeadway < 1e6f ? plan.minTimeHeadway : 0.0f);
@@ -540,7 +538,7 @@ void Car::UpdateDebugWindow()
         ImGui::Separator();
         ImGui::Text("Behavior Plan Weights");
         ImGui::SliderFloat("Speed Weight w1", &m_behaviorWeights.speed, 0.0f, 10.0f);
-        ImGui::SliderFloat("Lane Change Weight w2", &m_behaviorWeights.laneChange, 0.0f, 20.0f);
+        ImGui::SliderFloat("Lane Keep Weight w2", &m_behaviorWeights.laneKeep, 0.0f, 20.0f);
         ImGui::SliderFloat("Lateral Accel Weight w3", &m_behaviorWeights.lateralAccel, 0.0f, 5.0f);
         ImGui::SliderFloat("Inertia Weight w4", &m_behaviorWeights.inertia, 0.0f, 10.0f);
         ImGui::SliderFloat("Signal Violation Weight w5", &m_behaviorWeights.signalViolation, 0.0f, 50.0f);

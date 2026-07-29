@@ -19,6 +19,19 @@ Spline::~Spline()
 {
 }
 
+Spline Spline::FromPoints(std::vector<Vec3> points)
+{
+    Spline s;
+    s.m_splinePoints = std::move(points);
+    // m_controlPoints는 비워둔다: GetDirectionAt/ComputeMinRadius가 컨트롤포인트가 없으면
+    // m_splinePoints 위 중앙차분으로 접선을 구하는 폴백을 타도록(재적합 없이 O(n)).
+    s.m_length = 0.0f;
+    for (size_t i = 1; i < s.m_splinePoints.size(); ++i)
+        s.m_length += (s.m_splinePoints[i] - s.m_splinePoints[i - 1]).Length();
+    s.ComputeMinRadius();
+    return s;
+}
+
 size_t Spline::GetControlPointCount() const
 {
     return m_controlPoints.size();
@@ -99,8 +112,11 @@ std::vector<Vec3> Spline::ComputeSplinePoints()
         {
             float t = static_cast<float>(j) / (CURVE_RESOLUTION - 1);
             Vec3 point = GetCatmullRomPoint(t, p0, p1, p2, p3);
+            float seg = (prevSplinePoint - point).Length();
+            if (!splinePoints.empty() && seg < MIN_POINT_SPACING)
+                continue;
             splinePoints.push_back(point);
-            m_length += (prevSplinePoint - point).Length();
+            m_length += seg;
             prevSplinePoint = point;
         }
     };
@@ -166,6 +182,18 @@ Vec3 Spline::GetPositionAt(float t) const
 
 Vec3 Spline::GetDirectionAt(float t) const
 {
+    // FromPoints로 만든 스플라인(컨트롤포인트 없음): m_splinePoints 위 중앙차분으로 접선 근사.
+    if (m_controlPoints.empty())
+    {
+        if (m_splinePoints.size() < 2)
+            return Vec3(0.0f, 0.0f, 0.0f);
+        size_t lastIndex = m_splinePoints.size() - 1;
+        size_t index = static_cast<size_t>(std::clamp(t, 0.0f, 1.0f) * lastIndex);
+        size_t prev = index > 0 ? index - 1 : index;
+        size_t next = index < lastIndex ? index + 1 : index;
+        return (m_splinePoints[next] - m_splinePoints[prev]).Normalized();
+    }
+
     int n = static_cast<int>(m_controlPoints.size());
     int segmentCount = n - 3;
     if (segmentCount < 1)
@@ -188,19 +216,22 @@ bool Spline::IsStraight() const
 {
     constexpr float STRAIGHT_EPSILON = 0.05f; // 양끝을 잇는 직선에서 이 거리(m) 안이면 일직선으로 본다
 
-    if (m_controlPoints.size() < 2)
+    // FromPoints로 만든 스플라인(컨트롤포인트 없음)은 m_splinePoints로 직접 판정한다.
+    const std::vector<Vec3> &points = m_controlPoints.empty() ? m_splinePoints : m_controlPoints;
+
+    if (points.size() < 2)
         return true;
 
-    Vec3 dir = m_controlPoints.back() - m_controlPoints.front();
+    Vec3 dir = points.back() - points.front();
     float dirLength = dir.Length();
     if (dirLength < 1e-4f)
         return false; // 시작/끝이 사실상 같은 점 -- 직선으로 판단할 기준선이 없으므로 곡률 스캔으로 폴백
 
     dir = dir / dirLength;
 
-    for (size_t i = 1; i + 1 < m_controlPoints.size(); ++i)
+    for (size_t i = 1; i + 1 < points.size(); ++i)
     {
-        Vec3 toPoint = m_controlPoints[i] - m_controlPoints.front();
+        Vec3 toPoint = points[i] - points.front();
         Vec3 alongDir = dir * toPoint.Dot(dir);
         float perpDistance = (toPoint - alongDir).Length();
         if (perpDistance > STRAIGHT_EPSILON)

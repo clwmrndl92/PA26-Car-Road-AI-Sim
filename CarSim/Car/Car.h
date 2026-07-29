@@ -188,50 +188,22 @@ private:
         Car *leader = nullptr; // 이 샘플이 앞차(리더)면 그 차, 정적 제약(신호/커브/정지선 등)이면 nullptr
     };
 
-    enum class LaneChoice
-    {
-        Keep,
-        ChangeLeft,
-        ChangeRight,
-        Abort // 차선변경 매뉴버 중, 원래 레인으로 복귀 (m_laneChangeActive일 때만 생성)
-    };
-
     enum class SpeedAction
     {
-        Accelerate,     // +m_maxAccel로 가정하고 시뮬레이션 (desiredSpeed를 넘지 않게 클램프)
-        AccelerateHalf, // +m_maxAccel*0.5
-        Maintain,       // 가속도 0으로 가정 (지금 속도 유지)
-        DecelerateHalf, // -m_maxBrake*0.5
-        Decelerate      // -m_maxBrake로 가정
+        Accelerate, // +m_maxAccel로 가정하고 시뮬레이션 (desiredSpeed를 넘지 않게 클램프)
+        Maintain,   // 가속도 0으로 가정 (지금 속도 유지)
+        Decelerate  // -m_maxBrake로 가정
     };
 
     // 디버그 로그/UI 공용 (UpdateBehaviorPlan의 진단 로그, UpdateDebugWindow의 상태 표시).
-    static const char *LaneChoiceToString(LaneChoice c)
-    {
-        switch (c)
-        {
-        case LaneChoice::Keep:
-            return "Keep";
-        case LaneChoice::ChangeLeft:
-            return "Left";
-        case LaneChoice::ChangeRight:
-            return "Right";
-        default:
-            return "Abort";
-        }
-    }
     static const char *SpeedActionToString(SpeedAction a)
     {
         switch (a)
         {
         case SpeedAction::Accelerate:
             return "Accel";
-        case SpeedAction::AccelerateHalf:
-            return "AccelH";
         case SpeedAction::Maintain:
             return "Maint";
-        case SpeedAction::DecelerateHalf:
-            return "DecelH";
         default:
             return "Decel";
         }
@@ -239,11 +211,10 @@ private:
 
     struct BehaviorCandidate
     {
-        LaneChoice laneChoice = LaneChoice::Keep;
         SpeedAction speedAction = SpeedAction::Maintain;
         shared_ptr<Road> targetRoad;                             // 후보가 향하는 road(보통 현재 road)
-        float targetOffset = 0.0f;                               // 목표 횡오프셋 d(Keep이면 현재, 차선변경이면 인접 밴드)
-        vector<shared_ptr<Road>> newPath;                        // 지금은 미사용(차선변경이 road 시퀀스를 안 바꿈)
+        float targetOffset = 0.0f;                               // 목표 횡오프셋 d
+        Spline drivingSpline;                                    // 이 후보의 quintic S커브 경로(채택 시 m_currentSpline이 됨)
         float targetSpeed = 0.0f;                                 // BEHAVIOR_PLAN_INTERVAL(0.2초) 뒤 예상 속도 -- DriveControl이 실제로 명령할 값
         float horizonEndSpeed = 0.0f;                             // BEHAVIOR_SAFETY_HORIZON(3초) 뒤 예상 속도 -- 목표속도 대비 비용평가용
         float minApproachGap = std::numeric_limits<float>::max(); // 앞차(전방 동방향 리더)와의 최소 범퍼 gap(m). 리더 없으면 max.
@@ -275,7 +246,7 @@ private:
     };
 
     void UpdateBehaviorPlan();
-    BehaviorCandidate BuildCandidate(LaneChoice laneChoice, SpeedAction speedAction, const shared_ptr<Road> &road, float targetOffset,
+    BehaviorCandidate BuildCandidate(SpeedAction speedAction, const shared_ptr<Road> &road, float targetOffset,
                                      const std::vector<RoadSpeedSample> &roadSamples,
                                      const std::vector<NearbyCar> &nearbyCars) const;
     bool IsCandidateSafe(const BehaviorCandidate &candidate) const;
@@ -357,8 +328,9 @@ private:
     VehicleController m_vehicleController; // DriveMode가 세운 계획(세그먼트)을 실제로 실행
     shared_ptr<Road> m_destRoad;
     shared_ptr<Road> m_currentRoad;
-    float m_currentOffset = 0.0f; // 현재 주행 밴드의 참조선 기준 d
-    Spline m_currentSpline;       // 현재 주행 스플라인(참조선 offset d) 캐시
+    float m_currentOffset = 0.0f;       // 계획된(committed) 횡오프셋 d -- 실측이 아니라 리플랜 기준 상태
+    float m_currentLateralSlope = 0.0f; // committed d'(s) (참조선 호길이 기준) -- 리플랜 C1 연속용
+    Spline m_currentSpline;             // 현재 주행 스플라인(참조선 offset d) 캐시
 
     shared_ptr<RoadNode> m_parkSpot;        // 예약된 목표 주차칸(있는 동안은 "이 자리에 주차 중/주차 예정")
     shared_ptr<RoadNode> m_pendingParkNode; // 예약 전, 도착하면 그때 주차칸을 예약할 목표 Park 노드
@@ -390,9 +362,14 @@ private:
     static constexpr float BEHAVIOR_PLAN_INTERVAL = 0.2f;   // 행동 후보 재판단 주기
     static constexpr float BEHAVIOR_SAFETY_HORIZON = 3.0f;  // 궤적 시뮬레이션으로 안전판정할 미래 시야(초, 사람의 3초 룰)
     static constexpr float BEHAVIOR_SIM_STEP = 0.1f;        // 궤적 시뮬레이션 적분 간격(초)
-    static constexpr float MIN_SAFE_GAP = 2.0f;             // 앞차/정지선과 유지할 표준 범퍼 gap(m). 오버슈트 흡수 여유 포함.
-    static constexpr float DESIRED_HEADWAY = 2.0f;          // 이보다 시간헤드웨이가 짧으면 부족분에 following 비용(w6).
-    static constexpr float LANE_CHANGE_DONE_LATERAL = 0.5f; // 목표 레인 중심에서 이 거리 안이면 차선변경 완료로 본다(m).
+    static constexpr float MIN_SAFE_GAP = 2.0f;    // 앞차/정지선과 유지할 표준 범퍼 gap(m). 오버슈트 흡수 여유 포함.
+    static constexpr float DESIRED_HEADWAY = 2.0f; // 이보다 시간헤드웨이가 짧으면 부족분에 following 비용(w6).
+
+    // 횡궤적(5차 S커브) 파라미터
+    static constexpr float LANE_CHANGE_TIME = 3.0f; // 목표 오프셋까지 도달 목표 시간(초). 변경거리 L = v*이 시간
+    static constexpr float LANE_CHANGE_L_MIN = 8.0f;  // 변경거리 하한(m) -- 저속에서도 최소 이만큼에 걸쳐 옮긴다
+    static constexpr float LANE_CHANGE_L_MAX = 60.0f; // 변경거리 상한(m)
+    static constexpr int D_SAMPLE_COUNT = 7;          // 횡오프셋 후보 샘플 수
 
     BehaviorWeights m_behaviorWeights;
     float m_lastBehaviorPlanTime = -1000.0f; // 처음 Drive 진입 시 바로 첫 판단이 돌도록 충분히 과거로 초기화
@@ -400,11 +377,6 @@ private:
     float m_lastDesiredSpeed = 0.0f; // UpdateBehaviorPlan이 마지막으로 계산한, 지금 위치 기준 속도 캡(디버그 UI 표시용)
     float m_lastAccelFF = 0.0f;      // UpdateBehaviorPlan이 계산한 종방향 피드포워드(Accelerate에 넘김)
     bool m_emergencyBrake = false;
-
-    // 차선변경 매뉴버 진행 상태: 커밋 순간부터 목표 레인 중심에 정착할 때까지 active. active 동안엔
-    // 원 레인 복귀(Abort) 후보를 함께 만들어, 목표 레인이 도중에 unsafe로 바뀌면 되돌아갈 수 있게 한다.
-    bool m_laneChangeActive = false;
-    float m_laneChangeFromOffset = 0.0f; // Abort 시 복귀할 원래 밴드 오프셋(같은 road 내)
 
     // 스폰 및 리셋 데이터 (Spawn / Reset Data)
     DirectX::XMFLOAT3 m_spawnPosition = {0.0f, 0.0f, 0.0f};

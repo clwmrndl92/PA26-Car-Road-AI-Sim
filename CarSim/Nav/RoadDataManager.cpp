@@ -345,26 +345,27 @@ Spline RoadDataManager::BuildOffsetSpline(const shared_ptr<Road> &road, float d)
     if (std::abs(d) < 1e-3f)
         return ref; // 오프셋 0이면 참조선 그대로(data2가 이 경우 = 정확)
 
-    const vector<Vec3> &controlPoints = ref.GetControlPoints();
-    if (controlPoints.size() < 2)
+    const vector<Vec3> &samples = ref.GetSplinePoints();
+    if (samples.size() < 2)
         return ref;
 
-    // 각 샘플을 진행방향 오른쪽 법선으로 d만큼 민다(EditApp OffsetReferencePolyline과 동일 규약).
+    // 참조선의 이미 계산된 샘플점을 진행방향 오른쪽 법선으로 d만큼 밀기만 한다(재적합 없음).
+    // Catmull-Rom을 다시 돌리지 않고 FromPoints로 그대로 감싸 O(n) — EditApp OffsetReferencePolyline과 동일 규약.
     vector<Vec3> offset;
-    offset.reserve(controlPoints.size());
-    const size_t n = controlPoints.size();
+    offset.reserve(samples.size());
+    const size_t n = samples.size();
     for (size_t i = 0; i < n; ++i)
     {
-        const Vec3 &next = controlPoints[i + 1 < n ? i + 1 : i];
-        const Vec3 &prev = controlPoints[i > 0 ? i - 1 : i];
+        const Vec3 &next = samples[i + 1 < n ? i + 1 : i];
+        const Vec3 &prev = samples[i > 0 ? i - 1 : i];
         float tx = next.GetX() - prev.GetX();
         float tz = next.GetZ() - prev.GetZ();
         float len = std::sqrt(tx * tx + tz * tz);
         float rx = len > 1e-5f ? tz / len : 0.0f;
         float rz = len > 1e-5f ? -tx / len : 0.0f;
-        offset.push_back(Vec3(controlPoints[i].GetX() + rx * d, controlPoints[i].GetY(), controlPoints[i].GetZ() + rz * d));
+        offset.push_back(Vec3(samples[i].GetX() + rx * d, samples[i].GetY(), samples[i].GetZ() + rz * d));
     }
-    return Spline(offset);
+    return Spline::FromPoints(std::move(offset));
 }
 
 const LaneSection *RoadDataManager::GetLateralProfile(const shared_ptr<Road> &road, float s) const

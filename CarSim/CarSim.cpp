@@ -44,7 +44,7 @@ bool CarSim::Init()
     if (!GameApp::Init())
         return false;
 
-    m_RoadDataManager.Init(NAV_DATA_DIR "/data2.json");
+    m_RoadDataManager.Init(NAV_DATA_DIR "/data.json");
     m_MarkingDataManager.Init(NAV_DATA_DIR "/marking2.json");
 
     if (!InitResource())
@@ -672,8 +672,8 @@ void CarSim::InitMarkingRenderer()
 void CarSim::InitRoadColliders()
 {
     constexpr float FALLBACK_ROAD_WIDTH = RoadDataManager::ROAD_WIDTH; // 밴드 정보 없는 road용 폴백
-    constexpr float ROAD_THICKNESS = 0.2f; // 도로 판 두께
-    constexpr float SEGMENT_LENGTH = 1.0f; // 콜라이더 박스 하나가 덮는 목표 길이(짧을수록 경사 이음새 각이 작아 튐이 준다)
+    constexpr float ROAD_THICKNESS = 0.2f;                             // 도로 판 두께
+    constexpr float SEGMENT_LENGTH = 1.0f;                             // 콜라이더 박스 하나가 덮는 목표 길이(짧을수록 경사 이음새 각이 작아 튐이 준다)
 
     int segIndex = 0;
     for (const auto &roadData : m_RoadDataManager.GetRoads())

@@ -39,6 +39,85 @@ namespace
         return best;
     }
 
+    // 호길이 s의 함수 d(s). 시작 (d0, slope0, 0) -> 끝 (dTarget, 0, 0)의 min-jerk 5차 다항식.
+    struct QuinticLateral
+    {
+        float a0 = 0, a1 = 0, a2 = 0, a3 = 0, a4 = 0, a5 = 0;
+        float Eval(float s) const { return a0 + s * (a1 + s * (a2 + s * (a3 + s * (a4 + s * a5)))); }
+        float EvalSlope(float s) const { return a1 + s * (2 * a2 + s * (3 * a3 + s * (4 * a4 + s * 5 * a5))); }
+    };
+    // 횡변경거리 L. 기본은 v·baseTime(느긋한 차선변경)이지만, 이미 목표 쪽으로 큰 횡모멘텀(slope0)으로
+    // 들어오는 중이면(합류 등) 모멘텀에 맞춰 짧게 잡아 목표를 지나치는 S 오버슈트를 막고 J자로 감속 진입시킨다.
+    float LateralChangeDistance(float dStart, float slope0, float dTarget, float speed,
+                                float baseTime, float lMin, float lMax)
+    {
+        float L = std::clamp(speed * baseTime, lMin, lMax);
+        float dd = dTarget - dStart;
+        if (slope0 * dd > 1e-4f) // 이미 목표 쪽으로 횡이동 중
+        {
+            constexpr float DECEL_FACTOR = 1.5f; // 작을수록 J가 급함(오버슈트↓), 클수록 완만(오버슈트↑)
+            float lGeo = DECEL_FACTOR * std::fabs(dd) / std::fabs(slope0);
+            L = std::max(1.0f, std::min(L, lGeo)); // lMin보다 작아도 됨(막판 미세 정착)
+        }
+        return L;
+    }
+
+    QuinticLateral SolveQuinticLateral(float d0, float slope0, float dTarget, float L)
+    {
+        QuinticLateral q;
+        q.a0 = d0;
+        q.a1 = slope0;
+        q.a2 = 0.0f;
+        float L2 = L * L, L3 = L2 * L, L4 = L3 * L, L5 = L4 * L;
+        float dd = dTarget - d0;
+        q.a3 = L3 > 1e-6f ? (20.0f * dd - 12.0f * slope0 * L) / (2.0f * L3) : 0.0f;
+        q.a4 = L4 > 1e-6f ? (-30.0f * dd + 16.0f * slope0 * L) / (2.0f * L4) : 0.0f;
+        q.a5 = L5 > 1e-6f ? (12.0f * dd - 6.0f * slope0 * L) / (2.0f * L5) : 0.0f;
+        return q;
+    }
+
+    // road 참조선을 차 위치부터 전방으로, 호거리 u에 대해 d(u)(u<L) 또는 dTarget만큼 우측법선으로 민
+    // 주행 경로. Catmull-Rom 재적합 없이 Spline::FromPoints로 감싼다.
+    Spline BuildLateralPath(const Spline &ref, const Vec3 &carPos, const QuinticLateral &q, float L, float dTarget)
+    {
+        const std::vector<Vec3> &pts = ref.GetSplinePoints();
+        if (pts.size() < 2)
+            return ref;
+
+        size_t startIdx = 0;
+        float bestDist = std::numeric_limits<float>::max();
+        for (size_t i = 0; i < pts.size(); ++i)
+        {
+            float dist = (pts[i] - carPos).Length();
+            if (dist < bestDist)
+            {
+                bestDist = dist;
+                startIdx = i;
+            }
+        }
+
+        std::vector<Vec3> out;
+        out.reserve(pts.size() - startIdx);
+        float u = 0.0f;
+        for (size_t i = startIdx; i < pts.size(); ++i)
+        {
+            if (i > startIdx)
+                u += (pts[i] - pts[i - 1]).Length();
+            float d = (u < L) ? q.Eval(u) : dTarget;
+            const Vec3 &next = pts[i + 1 < pts.size() ? i + 1 : i];
+            const Vec3 &prev = pts[i > 0 ? i - 1 : i];
+            float tx = next.GetX() - prev.GetX();
+            float tz = next.GetZ() - prev.GetZ();
+            float len = std::sqrt(tx * tx + tz * tz);
+            float rx = len > 1e-5f ? tz / len : 0.0f;
+            float rz = len > 1e-5f ? -tx / len : 0.0f;
+            out.push_back(Vec3(pts[i].GetX() + rx * d, pts[i].GetY(), pts[i].GetZ() + rz * d));
+        }
+        if (out.size() < 2)
+            return ref;
+        return Spline::FromPoints(std::move(out));
+    }
+
     std::vector<std::unique_ptr<VehicleSegment>> BuildReedSheppSegments(const ReedsShepp::Path &path, const Vec3 &startPos,
                                                                         float startAngleRad, float turningRadius)
     {
@@ -219,9 +298,8 @@ void Car::OnModeEnter(Mode prev)
     if (m_mode == Mode::Drive)
     {
         SetSubMode(SubMode::D_Normal);
-        m_emergencyBrake = false;   // 직전 Drive의 비상 상태가 새 주행에 새지 않게 리셋
-        m_laneChangeActive = false; // 새 주행 시작 -- 이전 차선변경 매뉴버 상태가 남지 않게 리셋
-        m_laneChangeFromOffset = 0.0f;
+        m_emergencyBrake = false;     // 직전 Drive의 비상 상태가 새 주행에 새지 않게 리셋
+        m_currentLateralSlope = 0.0f; // committed 횡상태 리셋(참조선과 평행하게 시작)
         std::vector<std::unique_ptr<VehicleSegment>> segments;
         segments.push_back(std::make_unique<SplineFollowSegment>());
         m_vehicleController.BeginPlan(std::move(segments));
@@ -409,7 +487,7 @@ void Car::UpdateStop()
     if (m_speed > 0.01f)
     {
         if (m_currentRoad != nullptr)
-            Steer(Stanley(m_currentSpline));
+            Steer(PurePursuit(m_currentSpline.GetLookaheadPoint(GetRigidbodyPosition(), ComputeLookaheadDistance())));
         Accelerate(0.0f);
         return;
     }
@@ -489,13 +567,15 @@ float Car::ComputeLookaheadDistance() const
 {
     float minSafeLookahead = 2.0f * m_wheelbase / tanf(m_maxSteerAngle);
     constexpr float LOOKAHEAD_TIME = 1.5f; // 몇 초 앞을 볼지
-    return max(m_speed * LOOKAHEAD_TIME, minSafeLookahead);
+    // return max(std::sqrt(m_speed) * LOOKAHEAD_TIME, minSafeLookahead);
+    return 5;
 }
 
 void Car::DriveControl()
 {
     const Spline &spline = m_currentSpline;
-    float targetSteer = Stanley(spline);
+    Vec3 target = spline.GetLookaheadPoint(GetRigidbodyPosition(), ComputeLookaheadDistance());
+    float targetSteer = PurePursuit(target);
     Steer(targetSteer);
 
     // speed control: 목표 속도는 행동 계획(UpdateBehaviorPlan, 0.2초 주기)이 정해두고, 여기선 이번
@@ -514,9 +594,8 @@ void Car::DriveControl()
         Accelerate(std::min(steerSpeedCap, m_lastDesiredSpeed), m_lastAccelFF);
     }
 
-    // Debug: 스탠리 기준점(경로 최근접점) 표시
-    Vec3 pathPoint = spline.GetPositionAt(spline.GetSplinePosition(GetPosition()));
-    DirectX::XMFLOAT3 targetMarkerPos = ToXMFLOAT3(pathPoint);
+    // Debug: Pure Pursuit 목표점(전방주시 지점) 표시
+    DirectX::XMFLOAT3 targetMarkerPos = ToXMFLOAT3(target);
     targetMarkerPos.y = GetPosition().GetY() + 0.2f;
     m_targetMarker.GetTransform().SetPosition(targetMarkerPos);
 }
@@ -1079,46 +1158,36 @@ bool Car::ViolatesSignal(const shared_ptr<Road> &road, const std::vector<Traject
     return false;
 }
 
-// laneChoice/speedAction 조합 하나를 궤적 시뮬레이션까지 돌려 완전히 채운 후보로 만든다. 차선변경
-// 후보는 목적지까지의 새 경로도 같이 탐색해두고(newPath), 못 찾으면 targetLane을 비워 무효 후보로
-// 표시한다. roadSamples는 UpdateBehaviorPlan이 한 번만 스캔해 넘긴 도로제약 샘플(제한속도/커브/신호) --
-// 후보마다 다시 스캔할 필요 없이, 궤적의 각 지점에서 ComputeSpeedCapFromSamples로 국소 상한과 비교한다.
-Car::BehaviorCandidate Car::BuildCandidate(LaneChoice laneChoice, SpeedAction speedAction,
+// targetOffset/speedAction 조합 하나를 5차 S커브 경로 생성 + 궤적 시뮬레이션까지 돌려 완전히 채운 후보로.
+// roadSamples는 UpdateBehaviorPlan이 한 번만 스캔해 넘긴 도로제약 샘플(제한속도/커브/신호) -- 후보마다
+// 다시 스캔할 필요 없이, 궤적의 각 지점에서 ComputeSpeedCapFromSamples로 국소 상한과 비교한다.
+Car::BehaviorCandidate Car::BuildCandidate(SpeedAction speedAction,
                                            const shared_ptr<Road> &road, float targetOffset,
                                            const std::vector<RoadSpeedSample> &roadSamples,
                                            const std::vector<NearbyCar> &nearbyCars) const
 {
     BehaviorCandidate candidate;
-    candidate.laneChoice = laneChoice;
     candidate.speedAction = speedAction;
     candidate.targetRoad = road;
     candidate.targetOffset = targetOffset;
     if (road == nullptr)
         return candidate;
 
-    // 차선변경은 road 시퀀스를 안 바꾸고 같은 road 내 오프셋만 옮긴다(경로 재탐색 불필요).
-    Spline drivingSpline = RoadDataManager::Get().BuildOffsetSpline(road, targetOffset);
+    // 계획 상태(committed 오프셋/slope)에서 targetOffset까지 가는 5차 S커브 경로 생성. 실측 횡위치가
+    // 아니라 committed 상태에서 시작해야 리플랜이 차의 tracking 오차를 경로에 baking하지 않는다(커브 발산 방지).
+    const Spline &ref = road->GetReferenceLine();
+    float L = LateralChangeDistance(m_currentOffset, m_currentLateralSlope, targetOffset, m_speed,
+                                    LANE_CHANGE_TIME, LANE_CHANGE_L_MIN, LANE_CHANGE_L_MAX);
+    QuinticLateral quintic = SolveQuinticLateral(m_currentOffset, m_currentLateralSlope, targetOffset, L);
+    candidate.drivingSpline = BuildLateralPath(ref, GetPosition(), quintic, L, targetOffset);
 
     float simAccel = 0.0f;
-    switch (speedAction)
-    {
-    case SpeedAction::Accelerate:
+    if (speedAction == SpeedAction::Accelerate)
         simAccel = m_maxAccel;
-        break;
-    case SpeedAction::AccelerateHalf:
-        simAccel = m_maxAccel * 0.5f;
-        break;
-    case SpeedAction::Maintain:
-        simAccel = 0.0f;
-        break;
-    case SpeedAction::DecelerateHalf:
-        simAccel = -m_maxBrake * 0.5f;
-        break;
-    case SpeedAction::Decelerate:
+    else if (speedAction == SpeedAction::Decelerate)
         simAccel = -m_maxBrake;
-        break;
-    }
-    std::vector<TrajectorySample> trajectory = SimulateEgoTrajectory(drivingSpline, simAccel, roadSamples);
+
+    std::vector<TrajectorySample> trajectory = SimulateEgoTrajectory(candidate.drivingSpline, simAccel, roadSamples);
     if (trajectory.empty())
     {
         candidate.targetSpeed = m_speed;
@@ -1174,9 +1243,8 @@ bool Car::IsCandidateSafe(const BehaviorCandidate &candidate) const
     return candidate.collisionFree;
 }
 
-// cost = w1*(속도 오차) + w2*(차선변경했으면 고정값) + w3*(궤적 최대 횡가속)
-//      + w4*(직전에 고른 후보와 차선/속도결정이 달라졌으면 고정값) + w5*(신호위반이면 고정값)
-//      + w6*(앞차 시간헤드웨이 부족분)
+// cost = w1*(속도 오차) + w2*(목표오프셋이 밴드중심에서 벗어난 거리) + w3*(궤적 최대 횡가속)
+//      + w4*(직전 목표 오프셋/속도결정과 달라진 정도) + w5*(신호위반이면 고정값) + w6*(앞차 시간헤드웨이 부족분)
 float Car::EvaluateCandidateCost(const BehaviorCandidate &candidate, float desiredSpeed) const
 {
     // 속도 오차 = 목표속도에 못 미친 만큼(1배, 그냥 아쉬운 정도) + BuildCandidate가 궤적 전체를 훑어
@@ -1185,11 +1253,12 @@ float Car::EvaluateCandidateCost(const BehaviorCandidate &candidate, float desir
     constexpr float OVERSHOOT_PENALTY = 4.0f;
     float undershoot = std::max(0.0f, desiredSpeed - candidate.horizonEndSpeed);
     float speedCost = undershoot + candidate.maxSpeedOvershoot * OVERSHOOT_PENALTY;
-    float laneChangeCost = (candidate.laneChoice != LaneChoice::Keep) ? 1.0f : 0.0f;
 
-    // 관성: 직전 틱에 고른 후보(m_currentBehaviorPlan)와 차선 결정 또는 속도 결정이 달라졌으면 물어서,
-    // 매 0.2초 후보 간 근소한 비용 차이로 결정이 왔다갔다(플립플롭)하는 걸 억제한다.
-    float inertiaCost = (candidate.laneChoice != m_currentBehaviorPlan.laneChoice ? 1.0f : 0.0f) +
+    // 차선유지 끌림: 목표 오프셋이 가장 가까운 밴드 중심에서 벗어난 거리(m). 별도 모드가 아니라 비용으로 표현.
+    float laneKeepCost = std::fabs(candidate.targetOffset - NearestBandOffset(candidate.targetRoad, candidate.targetOffset));
+
+    // 관성: 직전 틱에 고른 목표 오프셋(연속)/속도 결정과 달라진 정도. 매 0.2초 결정이 왔다갔다(플립플롭)하는 걸 억제.
+    float inertiaCost = std::fabs(candidate.targetOffset - m_currentBehaviorPlan.targetOffset) +
                         (candidate.speedAction != m_currentBehaviorPlan.speedAction ? 1.0f : 0.0f);
 
     float signalViolationCost = candidate.signalViolation ? 1.0f : 0.0f;
@@ -1203,7 +1272,7 @@ float Car::EvaluateCandidateCost(const BehaviorCandidate &candidate, float desir
                                ? (DESIRED_HEADWAY - candidate.minTimeHeadway)
                                : 0.0f;
 
-    return m_behaviorWeights.speed * speedCost + m_behaviorWeights.laneChange * laneChangeCost +
+    return m_behaviorWeights.speed * speedCost + m_behaviorWeights.laneKeep * laneKeepCost +
            m_behaviorWeights.lateralAccel * lateralAccelCost + m_behaviorWeights.inertia * inertiaCost +
            m_behaviorWeights.signalViolation * signalViolationCost + m_behaviorWeights.following * headwayDeficit;
 }
@@ -1218,19 +1287,6 @@ void Car::UpdateBehaviorPlan()
     if (m_currentTime - m_lastBehaviorPlanTime < BEHAVIOR_PLAN_INTERVAL)
         return;
     m_lastBehaviorPlanTime = m_currentTime;
-
-    // 차선변경 완료 판정: 목표(=현재) 밴드 중심에 충분히 정착했으면 매뉴버 종료(복귀 후보 생성 중단).
-    if (m_laneChangeActive)
-    {
-        const Spline &laneSpline = m_currentSpline;
-        float t = laneSpline.GetSplinePosition(GetPosition());
-        float lateral = (GetPosition() - laneSpline.GetPositionAt(t)).Length();
-        if (lateral < LANE_CHANGE_DONE_LATERAL)
-        {
-            m_laneChangeActive = false;
-            m_laneChangeFromOffset = m_currentOffset;
-        }
-    }
 
     constexpr float MIN_LOOK_DISTANCE = 20.0f; // 정지 상태에서도 바로 앞 신호/제한속도는 보이게 하는 최소치
 
@@ -1253,57 +1309,42 @@ void Car::UpdateBehaviorPlan()
     else
         m_lastAccelFF = -m_planBrake;
 
-    constexpr LaneChoice laneChoices[] = {LaneChoice::Keep, LaneChoice::ChangeLeft, LaneChoice::ChangeRight};
-    constexpr SpeedAction speedActions[] = {SpeedAction::Accelerate, SpeedAction::AccelerateHalf, SpeedAction::Maintain,
-                                            SpeedAction::DecelerateHalf, SpeedAction::Decelerate};
-
-    // 현재 밴드 기준 좌/우 인접 밴드의 오프셋. 없으면 false(그 후보는 skip).
-    auto adjacentBandOffset = [&](int dirSign, float &out) -> bool
+    // 횡오프셋 후보: road 횡단면 drivable 범위에 균등 D_SAMPLE_COUNT개 + 현재 오프셋(유지 보장).
+    float halfW = GetHalfWidth();
+    float dMin = -halfW, dMax = halfW; // 밴드 없으면 참조선 중심 좁은 범위
+    if (const LaneSection *sec = RoadDataManager::Get().GetLateralProfile(m_currentRoad, 0.0f);
+        sec != nullptr && !sec->bands.empty())
     {
-        const LaneSection *sec = RoadDataManager::Get().GetLateralProfile(m_currentRoad, 0.0f);
-        if (sec == nullptr)
-            return false;
-        bool found = false;
-        float best = 0.0f;
+        dMin = std::numeric_limits<float>::max();
+        dMax = -std::numeric_limits<float>::max();
         for (const LaneBand &b : sec->bands)
         {
-            if (dirSign < 0 && b.centerOffset < m_currentOffset - 1e-3f) // 왼쪽 = 더 작은 d
-            {
-                if (!found || b.centerOffset > best)
-                    best = b.centerOffset, found = true;
-            }
-            else if (dirSign > 0 && b.centerOffset > m_currentOffset + 1e-3f) // 오른쪽 = 더 큰 d
-            {
-                if (!found || b.centerOffset < best)
-                    best = b.centerOffset, found = true;
-            }
+            dMin = std::min(dMin, b.centerOffset - b.width * 0.5f);
+            dMax = std::max(dMax, b.centerOffset + b.width * 0.5f);
         }
-        if (found)
-            out = best;
-        return found;
-    };
+        dMin += halfW; // 차체가 도로 밖으로 안 나가게 안쪽으로 조인다
+        dMax -= halfW;
+        if (dMin > dMax)
+            dMin = dMax = (dMin + dMax) * 0.5f;
+    }
+
+    std::vector<float> dTargets;
+    dTargets.reserve(D_SAMPLE_COUNT + 1);
+    for (int i = 0; i < D_SAMPLE_COUNT; ++i)
+    {
+        float f = (D_SAMPLE_COUNT > 1) ? static_cast<float>(i) / (D_SAMPLE_COUNT - 1) : 0.5f;
+        dTargets.push_back(dMin + (dMax - dMin) * f);
+    }
+    dTargets.push_back(m_currentOffset); // 현재 유지 후보 보장
+
+    constexpr SpeedAction speedActions[] = {SpeedAction::Accelerate, SpeedAction::Maintain, SpeedAction::Decelerate};
 
     auto buildStart = std::chrono::steady_clock::now();
     std::vector<BehaviorCandidate> candidates;
-    for (LaneChoice laneChoice : laneChoices)
-    {
-        float targetOffset = m_currentOffset;
-        if (laneChoice == LaneChoice::ChangeLeft && !adjacentBandOffset(-1, targetOffset))
-            continue;
-        if (laneChoice == LaneChoice::ChangeRight && !adjacentBandOffset(+1, targetOffset))
-            continue;
-
+    candidates.reserve(dTargets.size() * 3);
+    for (float dTarget : dTargets)
         for (SpeedAction speedAction : speedActions)
-            candidates.push_back(BuildCandidate(laneChoice, speedAction, m_currentRoad, targetOffset, roadSamples, nearbyCars));
-    }
-
-    // 차선변경 매뉴버 중이면 원 밴드 복귀(Abort) 후보도 만든다. 목표 밴드가 도중에 unsafe로 바뀌면
-    // 위 Keep 후보들이 전부 걸러지고 이 후보들만 safe로 남아 채택된다.
-    if (m_laneChangeActive && m_laneChangeFromOffset != m_currentOffset)
-    {
-        for (SpeedAction speedAction : speedActions)
-            candidates.push_back(BuildCandidate(LaneChoice::Abort, speedAction, m_currentRoad, m_laneChangeFromOffset, roadSamples, nearbyCars));
-    }
+            candidates.push_back(BuildCandidate(speedAction, m_currentRoad, dTarget, roadSamples, nearbyCars));
 
     [[maybe_unused]] double buildMs = MsSince(buildStart);
 
@@ -1331,21 +1372,20 @@ void Car::UpdateBehaviorPlan()
         DebugConsole::Log(GetName() + ": [plan] no safe candidate -> EMERGENCY BRAKE");
     BehaviorCandidate chosen = (best != nullptr)
                                    ? *best
-                                   : BuildCandidate(LaneChoice::Keep, SpeedAction::Decelerate, m_currentRoad, m_currentOffset,
+                                   : BuildCandidate(SpeedAction::Decelerate, m_currentRoad, m_currentOffset,
                                                     roadSamples, nearbyCars);
 
-    if (chosen.laneChoice != LaneChoice::Keep && chosen.targetRoad != nullptr)
-    {
-        // 차선변경/복귀 커밋: 지금 밴드 오프셋을 복귀 지점으로 저장하고 매뉴버 진행 상태로 들어간다.
-        m_laneChangeFromOffset = m_currentOffset;
-        m_laneChangeActive = true;
+    // 커밋: 채택 후보의 quintic S커브 경로를 따라가고, committed 횡상태를 그 quintic 위에서 "한 리플랜만큼"
+    // 전진시킨다(실측 위치로 재앵커링하지 않음 → 커브에서 tracking 오차가 누적 발산하지 않는다).
+    m_currentSpline = chosen.drivingSpline;
+    RebuildSplineRender();
 
-        // road 시퀀스(m_path)는 그대로 -- 차선변경은 같은 road 내 오프셋 이동일 뿐이다.
-        SetCurrentRoad(chosen.targetRoad, chosen.targetOffset); // 내부에서 RebuildSplineRender()까지 처리한다.
-
-        // 다음 틱의 관성 기준선은 "새 밴드 유지".
-        chosen.laneChoice = LaneChoice::Keep;
-    }
+    float L = LateralChangeDistance(m_currentOffset, m_currentLateralSlope, chosen.targetOffset, m_speed,
+                                    LANE_CHANGE_TIME, LANE_CHANGE_L_MIN, LANE_CHANGE_L_MAX);
+    QuinticLateral committed = SolveQuinticLateral(m_currentOffset, m_currentLateralSlope, chosen.targetOffset, L);
+    float ds = std::min(m_speed * BEHAVIOR_PLAN_INTERVAL, L); // 다음 리플랜까지 나아갈 호거리(L 넘으면 매뉴버 완료)
+    m_currentOffset = committed.Eval(ds);
+    m_currentLateralSlope = (ds < L) ? committed.EvalSlope(ds) : 0.0f;
 
     m_currentBehaviorPlan = std::move(chosen);
 }

@@ -10,6 +10,11 @@ public:
     Spline(const std::vector<Vec3> &points);
     ~Spline();
 
+    // points를 컨트롤포인트로 Catmull-Rom 재적합하지 않고, 그대로 최종 샘플점으로 써서 Spline을 만든다.
+    // 이미 샘플링된 곡선(예: 참조선을 옆으로 민 오프셋 곡선)을 값싸게 감쌀 때 쓴다 -- O(n) vs 일반
+    // 생성자의 O(n·CURVE_RESOLUTION) 재적합.
+    static Spline FromPoints(std::vector<Vec3> points);
+
     size_t GetControlPointCount() const;
     const std::vector<Vec3> &GetControlPoints() const { return m_controlPoints; }
     const std::vector<Vec3> &GetSplinePoints() const { return m_splinePoints; }
@@ -33,6 +38,7 @@ private:
     float m_apexT = 1.0f;
     std::vector<float> m_radii; // 스플라인 점별 국소 곡률반경 (GetRadiusAt용)
     static constexpr int CURVE_RESOLUTION = 50;
+    static constexpr float MIN_POINT_SPACING = 0.1f; // 직전 유지점과 이보다 가까운 샘플점은 생략(중복 축소)
 
     Vec3 GetCatmullRomPoint(float t, const Vec3 &p0, const Vec3 &p1, const Vec3 &p2, const Vec3 &p3) const;
     Vec3 GetCatmullRomTangent(float t, const Vec3 &p0, const Vec3 &p1, const Vec3 &p2, const Vec3 &p3) const;

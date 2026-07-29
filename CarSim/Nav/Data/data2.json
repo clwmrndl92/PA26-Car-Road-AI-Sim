@@ -15,8 +15,8 @@
       "reference_line": [
         [0.0, 0.0, -151.0],
         [0.0, 0.0, -150.0],
-        [0.0, 0.0, 150.0],
-        [0.0, 0.0, 151.0]
+        [0.0, 0.0, 240.0],
+        [0.0, 0.0, 241.0]
       ],
       "center_mark": { "type": "solid", "color": "white", "width": 0.15 },
       "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 100, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }] }],
@@ -42,7 +42,6 @@
       "speed_limit": 50,
       "reference_line": [
         [0.0, 0.0, 149.0],
-        [0.0, 0.0, 150.0],
         [0.0, 0.0, 240.0],
         [26.36, 1.6, 303.64],
         [90.0, 3.3, 330.0],
@@ -71,8 +70,7 @@
         [240.0, 3.3, 180.0],
         [176.36, 1.6, 153.64],
         [150.0, 0.0, 90.0],
-        [150.0, 0.0, 0.0],
-        [150.0, 0.0, -1.0]
+        [150.0, 0.0, 0.0]
       ],
       "center_mark": { "type": "solid", "color": "white", "width": 0.15 },
       "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 50, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }] }],
@@ -143,8 +141,8 @@
       "name": "road",
       "speed_limit": 100,
       "reference_line": [
-        [150.0, 0.0, -1.0],
-        [150.0, 0.0, 0.0],
+        [150.0, 0.0, 91.0],
+        [150.0, 0.0, 90.0],
         [150.0, 0.0, -150.0],
         [150.0, 0.0, -151.0]
       ],
