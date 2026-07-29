@@ -908,12 +908,11 @@ std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistan
                     float t = startT + localDistance / splineLength;
                     size_t index = static_cast<size_t>(std::clamp(t, 0.0f, 1.0f) * lastIndex);
 
+                    // apex 이전은 정점 반경으로 캡(정점 대비 감속), apex 통과 후엔 그 위치 국소 곡률로 캡(코너 탈출 가속)
                     float maxSpeed = m_maxSpeed;
-                    if (apexRadius < std::numeric_limits<float>::max())
-                    {
-                        float apexSpeed = CURVE_SPEED_COEFF * std::sqrt(apexRadius);
-                        maxSpeed = apexSpeed;
-                    }
+                    float curveRadius = (t <= apexT) ? apexRadius : spline->GetRadiusAt(t);
+                    if (curveRadius < std::numeric_limits<float>::max())
+                        maxSpeed = CURVE_SPEED_COEFF * std::sqrt(curveRadius);
                     samples.push_back({points[index], traveledDistance + localDistance, maxSpeed});
 
                     // 경로 박스와 겹치는 정적 장애물이 있으면 그 앞에 0속도 샘플(가상 정지선)을 세운다
@@ -1524,6 +1523,8 @@ float Car::EvaluateCandidateCost(const BehaviorCandidate &candidate, float desir
                                ? (DESIRED_HEADWAY - candidate.minTimeHeadway)
                                : 0.0f;
 
+    DebugConsole::Log(ToString(desiredSpeed) + " " + SpeedActionToString(candidate.speedAction) + ": EvaluateCandidateCost " +
+                      " | w1*(속도 오차)" + ToString(m_behaviorWeights.speed * speedCost) + " | w2*(차선변경했으면 고정값)" + ToString(m_behaviorWeights.laneChange * laneChangeCost) + " | w3*(궤적 최대 횡가속)" + ToString(m_behaviorWeights.lateralAccel) + " | w4*(직전에 고른 후보와 차선/속도결정이 달라졌으면 고정값)" + ToString(m_behaviorWeights.inertia * inertiaCost) + " | w5*(신호위반이면 고정값)" + ToString(m_behaviorWeights.signalViolation * signalViolationCost) + " | w6*(앞차 시간헤드웨이 부족분)" + ToString(m_behaviorWeights.following * headwayDeficit));
     return m_behaviorWeights.speed * speedCost + m_behaviorWeights.laneChange * laneChangeCost +
            m_behaviorWeights.lateralAccel * lateralAccelCost + m_behaviorWeights.inertia * inertiaCost +
            m_behaviorWeights.signalViolation * signalViolationCost + m_behaviorWeights.following * headwayDeficit;

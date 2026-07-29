@@ -213,6 +213,7 @@ void Spline::ComputeMinRadius()
 {
     m_minRadius = std::numeric_limits<float>::max();
     m_apexT = 1.0f;
+    m_radii.assign(m_splinePoints.size(), std::numeric_limits<float>::max());
 
     if (IsStraight())
         return; // 직선, 곡률 없음
@@ -236,6 +237,7 @@ void Spline::ComputeMinRadius()
             if (deltaAngle > 1e-6f)
             {
                 float radius = segmentLength / deltaAngle;
+                m_radii[index] = radius;
                 if (radius < m_minRadius)
                 {
                     m_minRadius = radius;
@@ -246,6 +248,15 @@ void Spline::ComputeMinRadius()
 
         prevTangent = tangent;
     }
+    m_radii[lastIndex] = m_radii[lastIndex - 1]; // 마지막 점은 직전 세그먼트 곡률을 승계
+}
+
+float Spline::GetRadiusAt(float t) const
+{
+    if (m_radii.empty())
+        return std::numeric_limits<float>::max();
+    size_t index = static_cast<size_t>(std::clamp(t, 0.0f, 1.0f) * (m_radii.size() - 1));
+    return m_radii[index];
 }
 
 /// @param position

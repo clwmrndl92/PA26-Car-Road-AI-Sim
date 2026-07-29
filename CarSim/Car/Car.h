@@ -434,6 +434,6 @@ static float CalcMaxSteerAngle(float speed)
 static float CalcMaxSpeed(float targetAngle)
 {
     constexpr float MAX_STEER_ANGLE = ToRadians(45.0f); // 45 degree
-    targetAngle = std::clamp(std::abs(targetAngle), 0.15f, MAX_STEER_ANGLE);
+    targetAngle = std::clamp(std::abs(targetAngle), 0.0005f, MAX_STEER_ANGLE);
     return std::sqrt(20.2f / targetAngle);
 }

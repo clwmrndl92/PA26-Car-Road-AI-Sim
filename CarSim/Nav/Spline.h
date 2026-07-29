@@ -23,6 +23,7 @@ public:
     // 스플라인 전체에서 가장 급한 커브(정점)의 반경/위치. 생성자에서 미리 계산해 캐싱한다.
     float GetMinRadiusAhead() const { return m_minRadius; }
     float GetApexT() const { return m_apexT; }
+    float GetRadiusAt(float t) const; // t 위치의 국소 곡률반경 (직선/무곡률이면 FLT_MAX)
 
 private:
     float m_length = 0.0f;
@@ -30,6 +31,7 @@ private:
     std::vector<Vec3> m_splinePoints;  // Catmull-Rom 샘플 점들
     float m_minRadius = std::numeric_limits<float>::max();
     float m_apexT = 1.0f;
+    std::vector<float> m_radii; // 스플라인 점별 국소 곡률반경 (GetRadiusAt용)
     static constexpr int CURVE_RESOLUTION = 50;
 
     Vec3 GetCatmullRomPoint(float t, const Vec3 &p0, const Vec3 &p1, const Vec3 &p2, const Vec3 &p3) const;
