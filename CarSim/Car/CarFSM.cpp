@@ -5,7 +5,9 @@
 #include "Nav/VehicleCollision.h"
 #include "Nav/SimulationState.h"
 #include "Utill/Assert.h"
+#include "Utill/PerfLog.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -50,6 +52,49 @@ namespace
     float DirectionToAngleRad(const Vec3 &direction)
     {
         return atan2f(direction.GetZ(), direction.GetX());
+    }
+
+    // 후보 선택(BehaviorPlan) 구간 성능 계측. 끄려면 false로. 모든 차의 plan을 합산해 EMIT_EVERY plan마다 평균/최대를 찍는다.
+    constexpr bool BEHAVIOR_PLAN_PERF = true;
+    constexpr int BEHAVIOR_PLAN_PERF_EMIT_EVERY = 200;
+
+    struct BehaviorPlanPerf
+    {
+        int plans = 0;
+        long long candidateSum = 0;
+        double buildMsSum = 0.0, buildMsMax = 0.0;   // 후보 생성(BuildCandidate 루프)
+        double selectMsSum = 0.0, selectMsMax = 0.0; // 안전판정+비용평가로 best 고르는 루프
+        double planMsMax = 0.0;                      // 한 plan의 후보 선택 전체(build+select) 최대
+
+        void Record(int candidates, double buildMs, double selectMs)
+        {
+            ++plans;
+            candidateSum += candidates;
+            buildMsSum += buildMs;
+            buildMsMax = std::max(buildMsMax, buildMs);
+            selectMsSum += selectMs;
+            selectMsMax = std::max(selectMsMax, selectMs);
+            planMsMax = std::max(planMsMax, buildMs + selectMs);
+            if (plans >= BEHAVIOR_PLAN_PERF_EMIT_EVERY)
+                Emit();
+        }
+
+        void Emit()
+        {
+            char buf[256];
+            std::snprintf(buf, sizeof(buf),
+                          "[perf] behaviorPlan plans=%d candAvg=%.1f | total avg=%.3fms max=%.3fms | build avg=%.3fms max=%.3fms | select avg=%.3fms max=%.3fms",
+                          plans, static_cast<double>(candidateSum) / plans, (buildMsSum + selectMsSum) / plans, planMsMax,
+                          buildMsSum / plans, buildMsMax, selectMsSum / plans, selectMsMax);
+            PerfLog::Emit(buf);
+            *this = BehaviorPlanPerf{};
+        }
+    };
+    BehaviorPlanPerf g_behaviorPlanPerf;
+
+    inline double MsSince(std::chrono::steady_clock::time_point start)
+    {
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     }
 }
 
@@ -1523,8 +1568,6 @@ float Car::EvaluateCandidateCost(const BehaviorCandidate &candidate, float desir
                                ? (DESIRED_HEADWAY - candidate.minTimeHeadway)
                                : 0.0f;
 
-    DebugConsole::Log(ToString(desiredSpeed) + " " + SpeedActionToString(candidate.speedAction) + ": EvaluateCandidateCost " +
-                      " | w1*(속도 오차)" + ToString(m_behaviorWeights.speed * speedCost) + " | w2*(차선변경했으면 고정값)" + ToString(m_behaviorWeights.laneChange * laneChangeCost) + " | w3*(궤적 최대 횡가속)" + ToString(m_behaviorWeights.lateralAccel) + " | w4*(직전에 고른 후보와 차선/속도결정이 달라졌으면 고정값)" + ToString(m_behaviorWeights.inertia * inertiaCost) + " | w5*(신호위반이면 고정값)" + ToString(m_behaviorWeights.signalViolation * signalViolationCost) + " | w6*(앞차 시간헤드웨이 부족분)" + ToString(m_behaviorWeights.following * headwayDeficit));
     return m_behaviorWeights.speed * speedCost + m_behaviorWeights.laneChange * laneChangeCost +
            m_behaviorWeights.lateralAccel * lateralAccelCost + m_behaviorWeights.inertia * inertiaCost +
            m_behaviorWeights.signalViolation * signalViolationCost + m_behaviorWeights.following * headwayDeficit;
@@ -1579,6 +1622,7 @@ void Car::UpdateBehaviorPlan()
     constexpr SpeedAction speedActions[] = {SpeedAction::Accelerate, SpeedAction::AccelerateHalf, SpeedAction::Maintain,
                                             SpeedAction::DecelerateHalf, SpeedAction::Decelerate};
 
+    auto buildStart = std::chrono::steady_clock::now();
     std::vector<BehaviorCandidate> candidates;
     for (LaneChoice laneChoice : laneChoices)
     {
@@ -1605,6 +1649,9 @@ void Car::UpdateBehaviorPlan()
             candidates.push_back(BuildCandidate(LaneChoice::Abort, speedAction, m_laneChangeFromLane, roadSamples, nearbyCars));
     }
 
+    [[maybe_unused]] double buildMs = MsSince(buildStart);
+
+    [[maybe_unused]] auto selectStart = std::chrono::steady_clock::now();
     const BehaviorCandidate *best = nullptr;
     float bestCost = std::numeric_limits<float>::max();
     for (const BehaviorCandidate &candidate : candidates)
@@ -1618,6 +1665,8 @@ void Car::UpdateBehaviorPlan()
             best = &candidate;
         }
     }
+    if constexpr (BEHAVIOR_PLAN_PERF)
+        g_behaviorPlanPerf.Record(static_cast<int>(candidates.size()), buildMs, MsSince(selectStart));
 
     // 안전한 후보가 하나도 없으면(주변이 꽉 막힌 극단적 상황) 차선유지 + 감속으로 되돌아가되,
     // 일반 제동으론 못 피한다는 뜻이므로 다음 플랜까지 DriveControl이 비상 제동을 밟게 한다.
