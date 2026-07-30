@@ -129,7 +129,7 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
     }
 
     if ((m_rearTrailRender.GetModel() || m_frontTrailRender.GetModel() || m_splineRender.GetModel() ||
-         m_parkPathRender.GetModel() || m_parkTargetLine.GetModel()))
+         m_sensorRender.GetModel() || m_parkPathRender.GetModel() || m_parkTargetLine.GetModel()))
     {
         if (auto *pBasic = dynamic_cast<BasicEffect *>(&effect))
         {
@@ -140,6 +140,8 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
                 m_frontTrailRender.Draw(context, effect);
             if (m_splineRender.GetModel())
                 m_splineRender.Draw(context, effect);
+            if (m_sensorRender.GetModel())
+                m_sensorRender.Draw(context, effect);
             if (m_parkPathRender.GetModel())
                 m_parkPathRender.Draw(context, effect);
             if (m_parkTargetLine.GetModel())
@@ -383,6 +385,9 @@ void Car::ApplyMotion()
         m_rigidbody.SetAngularVelocity(JPH::Vec3::sZero());
         m_acceleration = 0.0f;
         m_speed = 0.0f;
+        // 회피 상태머신(UpdateAvoidance)이 다음 Update에서 소비한다. 레이가 못 본 각도로 꼭짓점을 박은
+        // 경우, 계획상으론 아직 '진행 중'이라 그대로 두면 계속 밀어붙이기 때문.
+        m_contactPending = true;
         DebugConsole::Log("CRASH!!");
         return;
     }
@@ -538,6 +543,19 @@ void Car::UpdateDebugWindow()
         ImGui::Text("Plan accel(IDM): %.2f m/s^2", m_planAccel);
         ImGui::Text("Cur offset d: %.2f m", m_currentOffset);
 
+        // 회피(레이 스캔 + Avoid 상태)
+        ImGui::Text("Ray front: %.1f m %s", m_sensor.frontDistance, m_sensor.frontBlocked ? "(blocked)" : "");
+        ImGui::Text("Ray side: %s%s | rear %.1f m", m_sensor.leftBlocked ? "L" : "-",
+                    m_sensor.rightBlocked ? "R" : "-", m_sensor.rearDistance);
+        ImGui::Text("Body sweep: %.1f m", m_sensor.bodyContactDistance);
+        if (m_avoid.backingUp)
+            ImGui::Text("Avoid: backing up");
+        else if (m_avoid.active)
+            ImGui::Text("Avoid: %s d %.2f -> %.2f", m_avoid.returning ? "returning" : "shifted",
+                        m_avoid.laneOffset, m_avoid.avoidOffset);
+        else if (m_avoid.stuck)
+            ImGui::Text("Avoid: stuck (no gap)");
+
         ImGui::Separator();
         ImGui::Text("Personality (notes/accel.txt A~D)");
         ImGui::SliderFloat("Speed Factor", &m_personality.speedFactor, 0.5f, 1.3f);
@@ -628,6 +646,42 @@ void Car::RebuildSplineRender()
     pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f));
     pModel->materials[0].Set<float>("$Opacity", 1.0f);
     m_splineRender.SetModel(pModel);
+}
+
+void Car::RebuildSensorRender()
+{
+    if (!m_drawCollider || m_sensor.rays.empty())
+    {
+        m_sensorRender.SetModel(nullptr);
+        return;
+    }
+
+    constexpr float SENSOR_LINE_HEIGHT = 0.3f; // 스플라인/트레일 선(0.15f)보다 위로 띄운다
+
+    // 서로 떨어진 레이 여러 개를 폴리라인 하나로 그린다: origin -> end -> origin 으로 되돌아온 뒤 다음
+    // 레이로 넘어가므로, 되돌아오는 선은 원래 선과 겹치고 레이 사이를 잇는 선은 차체 외곽을 따라간다.
+    std::vector<DirectX::XMFLOAT3> points;
+    points.reserve(m_sensor.rays.size() * 3);
+    bool anyHit = false;
+    for (const SensorRay &ray : m_sensor.rays)
+    {
+        DirectX::XMFLOAT3 origin = ToXMFLOAT3(ray.origin);
+        DirectX::XMFLOAT3 end = ToXMFLOAT3(ray.end);
+        origin.y += SENSOR_LINE_HEIGHT;
+        end.y += SENSOR_LINE_HEIGHT;
+        points.push_back(origin);
+        points.push_back(end);
+        points.push_back(origin);
+        anyHit = anyHit || ray.hitDistance >= 0.0f;
+    }
+
+    Model *pModel = ModelManager::Get().CreateFromGeometry("__sensor_rays__:" + GetName(),
+                                                           Geometry::CreatePolyline(points));
+    pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor",
+                                                anyHit ? DirectX::XMFLOAT4(1.0f, 0.5f, 0.0f, 1.0f)
+                                                       : DirectX::XMFLOAT4(0.0f, 1.0f, 1.0f, 1.0f));
+    pModel->materials[0].Set<float>("$Opacity", 1.0f);
+    m_sensorRender.SetModel(pModel);
 }
 
 void Car::RebuildRSDebugRender(const ReedsShepp::Path &path, const Vec3 &startPos, float startAngleRad,

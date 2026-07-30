@@ -36,4 +36,10 @@ namespace VehicleCollision
     // 가장 가까운 거리(0 이상)를 반환한다. maxDistance 안에 아무것도 안 맞으면 -1.
     float RaycastObstacles(const Vec3 &origin, float directionRad, float maxDistance,
                            const std::vector<Obstacle> &obstacles);
+
+    // RaycastObstacles와 같은 판정이지만, 가장 가까이 맞은 obstacle을 직접 가리키는 포인터를 반환한다
+    // (아무것도 못 맞히면 nullptr). outDistance가 nullptr이 아니면 그 지점까지의 거리를 써준다.
+    // 무엇에 맞았는지(그리고 그 obstacle.speed)를 알아야 하는 호출부용.
+    const Obstacle *RaycastObstaclesHit(const Vec3 &origin, float directionRad, float maxDistance,
+                                        const std::vector<Obstacle> &obstacles, float *outDistance);
 }

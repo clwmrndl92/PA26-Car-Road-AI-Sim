@@ -108,19 +108,33 @@ namespace VehicleCollision
         return FindColliding(position, headingRad, obstacles, shape) != nullptr;
     }
 
-    float RaycastObstacles(const Vec3 &origin, float directionRad, float maxDistance,
-                           const std::vector<Obstacle> &obstacles)
+    const Obstacle *RaycastObstaclesHit(const Vec3 &origin, float directionRad, float maxDistance,
+                                        const std::vector<Obstacle> &obstacles, float *outDistance)
     {
         Vec3 dir(std::cos(directionRad), 0.0f, std::sin(directionRad));
-        float best = -1.0f;
+        const Obstacle *best = nullptr;
+        float bestDistance = -1.0f;
 
         for (const Obstacle &obstacle : obstacles)
         {
             auto [hit, distance] = RaySlabIntersect(origin, dir, maxDistance, obstacle);
-            if (hit && (best < 0.0f || distance < best))
-                best = distance;
+            if (hit && (best == nullptr || distance < bestDistance))
+            {
+                best = &obstacle;
+                bestDistance = distance;
+            }
         }
 
+        if (outDistance != nullptr)
+            *outDistance = bestDistance;
         return best;
+    }
+
+    float RaycastObstacles(const Vec3 &origin, float directionRad, float maxDistance,
+                           const std::vector<Obstacle> &obstacles)
+    {
+        float distance = -1.0f;
+        RaycastObstaclesHit(origin, directionRad, maxDistance, obstacles, &distance);
+        return distance;
     }
 }

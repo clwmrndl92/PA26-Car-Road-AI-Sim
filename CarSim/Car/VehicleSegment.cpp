@@ -120,6 +120,23 @@ void RSExactSegment::Tick(Car &car)
     m_traveled += car.GetSpeed() * car.GetDeltaTime();
 }
 
+void ReverseSegment::Tick(Car &car)
+{
+    float remaining = m_distance - m_traveled;
+    if (remaining <= FINISH_DISTANCE)
+    {
+        car.Accelerate(0.0f);
+        if (car.GetSpeed() <= STOP_SPEED)
+            m_done = true;
+        return;
+    }
+
+    car.Steer(0.0f, REVERSE_STEER_RAMP_RATE);
+    float targetSpeed = std::min(REVERSE_SPEED, std::sqrt(2.0f * DECEL_ESTIMATE * remaining));
+    car.Accelerate(targetSpeed);
+    m_traveled += car.GetSpeed() * car.GetDeltaTime();
+}
+
 void SplineFollowSegment::Tick(Car &car)
 {
     car.DriveControl();

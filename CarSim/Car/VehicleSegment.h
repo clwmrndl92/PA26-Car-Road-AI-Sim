@@ -117,6 +117,31 @@ public:
     bool IsDone() const override { return false; }
 };
 
+// 회피(Avoid)가 좌우 어느 쪽으로도 불가능할 때, 뒤로 조금 물러나 회피를 재시도하기 위한 후진 매뉴버.
+// 조향을 중앙(0)에 고정한 채 목표 거리만큼 저속으로 후진하고 완전히 멈추면 끝난다.
+class ReverseSegment : public VehicleSegment
+{
+public:
+    explicit ReverseSegment(float distance) : m_distance(distance) {}
+
+    void Tick(Car &car) override;
+    bool IsDone() const override { return m_done; }
+    ReedsShepp::Gear GetRequiredGear() const override { return ReedsShepp::Gear::Backward; }
+    // 조향 0을 요구해두면 VehicleController가 정렬될 때까지 차를 못 움직이게 잡아준다(직선으로만 물러난다).
+    std::optional<float> GetRequiredSteerAngle() const override { return 0.0f; }
+
+private:
+    static constexpr float REVERSE_STEER_RAMP_RATE = 1.0f;
+    static constexpr float REVERSE_SPEED = 1.5f;   // 저속 후진 속도 (m/s)
+    static constexpr float DECEL_ESTIMATE = 0.4f;  // 남은 거리 기준 감속 프로파일에 쓰는 가정 감속도 (m/s^2)
+    static constexpr float FINISH_DISTANCE = 0.1f; // 목표 거리 도달 판정 (m)
+    static constexpr float STOP_SPEED = 0.05f;     // 이 이하면 완전히 멈췄다고 보고 완료 처리 (m/s)
+
+    float m_distance;
+    float m_traveled = 0.0f;
+    bool m_done = false;
+};
+
 // 출차(Park) 매뉴버가 꺾어놓은 조향각을 중앙(0)으로 되돌린다. 정렬될 때까지는 제자리에서
 // 대기하고(가속 0), 정렬되면 끝난다.
 class CenterSteerSegment : public VehicleSegment
