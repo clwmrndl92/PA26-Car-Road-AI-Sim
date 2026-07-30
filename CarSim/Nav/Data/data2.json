@@ -93,7 +93,7 @@
     {
       "id": 106,
       "name": "road",
-      "speed_limit": 100,
+      "speed_limit": 30,
       "reference_line": [
         [-149.0, 10.0, 150.0],
         [-150.0, 10.0, 150.0],
@@ -123,7 +123,7 @@
     {
       "id": 108,
       "name": "road",
-      "speed_limit": 100,
+      "speed_limit": 30,
       "reference_line": [
         [-160.0, 10.0, 11.0],
         [-160.0, 10.0, 10.0],
@@ -153,7 +153,7 @@
     {
       "id": 110,
       "name": "road",
-      "speed_limit": 100,
+      "speed_limit": 30,
       "reference_line": [
         [150.0, 0.0, -149.0],
         [150.0, 0.0, -150.0],
@@ -183,7 +183,7 @@
     {
       "id": 112,
       "name": "road",
-      "speed_limit": 100,
+      "speed_limit": 30,
       "reference_line": [
         [11.0, 0.0, -160.0],
         [10.0, 0.0, -160.0],

@@ -11,6 +11,8 @@
 #include <Nav/RoadDataManager.h>
 #include "Nav/ReedsShepp.h"
 #include "Nav/VehicleCollision.h"
+#include "Nav/IDM.h"
+#include "Nav/Mobil.h"
 
 class SimulationState;
 class Spline;
@@ -51,6 +53,7 @@ public:
 
     // 조작 및 제어 인터페이스 (Control Interface)
     void Accelerate(float desiredVelocity, float aFF = 0.0f); // aFF: 계획감속 피드포워드(리더면 앞차 가속도=CAH, 정적이면 −planBrake)
+    void CommandAcceleration(float aTarget);                  // 목표 가속도를 저크제한으로 수렴(IDM 출력용)
     void EmergBrake();
     void Steer(float desiredRadian, float steerRamp = 1.0f);
     void ChangeGear(); // 속도가 낮을 때 전진/후진 기어 토글
@@ -145,13 +148,13 @@ private:
     VehicleCollision::VehicleShape BuildVehicleShape() const;
     void UpdateFindPath();
     void SetCurrentRoad(const shared_ptr<Road> &road, float offset); // m_currentRoad/Offset/Spline을 항상 이 함수로 세팅.
-    bool ShouldStopForSignal(const shared_ptr<Road> &road) const;    // CheckPath(Drive)와 ScanRoadSpeedConstraints/ViolatesSignal(BehaviorPlan)이 공유.
+    bool ShouldStopForSignal(const shared_ptr<Road> &road) const;    // CheckPath(Drive)와 ScanRoadSpeedConstraints(BehaviorPlan)이 공유.
     bool TryFindPathAndSetRoad();
 
     // 배회(roaming) 모드: 목적지 없이 랜덤 후속 road로 계속 주행. m_path를 랜덤 successor로 채워 유지한다.
-    void EnsureRoamingPath();                                                        // currentRoad/초기 path 세팅 + 유지
-    void MaintainRoamingPath();                                                      // 지나온 앞부분 트림 + 앞쪽 버퍼 채우기
-    shared_ptr<Road> PickRandomSuccessor(const shared_ptr<Road> &road) const;        // successor 중 랜덤(없으면 nullptr)
+    void EnsureRoamingPath();                                                           // currentRoad/초기 path 세팅 + 유지
+    void MaintainRoamingPath();                                                         // 지나온 앞부분 트림 + 앞쪽 버퍼 채우기
+    shared_ptr<Road> PickRandomSuccessor(const shared_ptr<Road> &road) const;           // successor 중 랜덤(없으면 nullptr)
     vector<shared_ptr<Road>> BuildRoamingPath(const shared_ptr<Road> &startRoad) const; // startRoad + 랜덤 후속 몇 개
 
     void UpdatePark();
@@ -189,103 +192,44 @@ private:
         float leaderLateralOffset = 0.0f; // road 참조선 기준 리더의 d(횡오프셋). leader!=nullptr일 때만 유효 -- 후보가 이 리더를 옆으로 피할 수 있는지 판단용
     };
 
-    enum class SpeedAction
-    {
-        Accelerate, // +m_maxAccel로 가정하고 시뮬레이션 (desiredSpeed를 넘지 않게 클램프)
-        Maintain,   // 가속도 0으로 가정 (지금 속도 유지)
-        Decelerate  // -m_maxBrake로 가정
-    };
-
-    // 디버그 로그/UI 공용 (UpdateBehaviorPlan의 진단 로그, UpdateDebugWindow의 상태 표시).
-    static const char *SpeedActionToString(SpeedAction a)
-    {
-        switch (a)
-        {
-        case SpeedAction::Accelerate:
-            return "Accel";
-        case SpeedAction::Maintain:
-            return "Maint";
-        default:
-            return "Decel";
-        }
-    }
-
-    struct BehaviorCandidate
-    {
-        SpeedAction speedAction = SpeedAction::Maintain;
-        shared_ptr<Road> targetRoad;                             // 후보가 향하는 road(보통 현재 road)
-        float targetOffset = 0.0f;                               // 목표 횡오프셋 d
-        Spline drivingSpline;                                    // 이 후보의 quintic S커브 경로(채택 시 m_currentSpline이 됨)
-        float targetSpeed = 0.0f;                                 // BEHAVIOR_PLAN_INTERVAL(0.2초) 뒤 예상 속도 -- DriveControl이 실제로 명령할 값
-        float horizonEndSpeed = 0.0f;                             // BEHAVIOR_SAFETY_HORIZON(3초) 뒤 예상 속도 -- 목표속도 대비 비용평가용
-        float minApproachGap = std::numeric_limits<float>::max(); // 앞차(전방 동방향 리더)와의 최소 범퍼 gap(m). 리더 없으면 max.
-        float minTimeHeadway = std::numeric_limits<float>::max(); // 앞차와의 최소 시간헤드웨이(s) = 범퍼gap/자기속도. 짧을수록 바짝 붙음.
-        bool collisionFree = true;                                // 시뮬레이션한 3초 동안 한 번도 겹치지 않았는지
-        bool signalViolation = false;                             // 신호를 지켜야 하는데(ShouldStopForSignal) 못 멈추고 정지선을 넘는지
-        float maxSpeedOvershoot = 0.0f;                           // 궤적 지점별 국소 안전속도 상한을 가장 크게 초과한 값(m/s)
-        float maxLateralAccel = 0.0f;                             // 궤적 중 최대 |횡가속|(m/s^2) -- 커브/차선변경 승차감 비용(w3)용
-        float bigVehicleCost = 0.0f;                              // 대형차 옆을 지날 때 원하는 여유에 못 미친 만큼(m)
-        float edgeMarginCost = 0.0f;                              // 도로 가장자리에 원하는 여유에 못 미친 만큼(m)
-    };
-    // 후보 안전판정용으로 시뮬레이션한 미래 한 시점의 (위치, 진행방향, 속도, 지금까지 이동한 거리).
-    struct TrajectorySample
-    {
-        Vec3 position;
-        Vec3 direction;
-        float speed = 0.0f;
-        float distanceTraveled = 0.0f; // t=0(지금)부터 이 샘플까지 이동한 거리(m) -- 도로제약 샘플과 대조할 때 씀
-    };
-    struct TrajectorySafety
-    {
-        bool collisionFree = true;
-        float minGap = std::numeric_limits<float>::max();         // 리더와의 최소 범퍼 gap(m)
-        float minTimeHeadway = std::numeric_limits<float>::max(); // 리더와의 최소 시간헤드웨이(s)
-    };
-
     struct NearbyCar
     {
         Car *car = nullptr;
         bool yieldsToMe = false;
     };
 
+    // 한 밴드(centerOffset)에서 ego 앞/뒤로 가장 가까운 차를 MOBIL 판정용 상태로 뽑은 것.
+    struct LaneNeighbors
+    {
+        bool hasLeader = false;
+        bool hasFollower = false;
+        Mobil::VehicleState leader;
+        Mobil::VehicleState follower;
+    };
+
     void UpdateBehaviorPlan();
-    BehaviorCandidate BuildCandidate(SpeedAction speedAction, const shared_ptr<Road> &road, float targetOffset,
-                                     const std::vector<RoadSpeedSample> &roadSamples,
-                                     const std::vector<NearbyCar> &nearbyCars) const;
-    bool IsCandidateSafe(const BehaviorCandidate &candidate) const;
-    float EvaluateCandidateCost(const BehaviorCandidate &candidate, float desiredSpeed) const;
-    float ComputeSpeedCapFromSamples(const std::vector<RoadSpeedSample> &samples, float distanceOffset,
-                                     const RoadSpeedSample **binding = nullptr) const; // 안전속도 상한(binding: 상한을 묶은 샘플)
+    IDM::Params BuildIdmParams(const shared_ptr<Road> &road) const; // road 제한속도를 v0로 반영한 IDM 파라미터
+    // samples를 IDM 가상 리더로 보고 각각의 IDM 가속도 중 최솟값을 반환(매프레임 호출 가능). 실제 앞차(leader!=nullptr)는
+    // 그 차의 현재 속도/가속도/거리를 매번 새로 읽고, 정적 제약(신호/커브 등)은 distanceOffset(스캔 이후 이동거리)만큼
+    // gap을 보정한다 -- samples 자체(리더가 '누구인지')는 0.2초 스캔 결과를 재사용해도 된다.
+    float ComputeIdmAcceleration(const std::vector<RoadSpeedSample> &samples, const IDM::Params &params,
+                                 float distanceOffset) const;
+    // road의 targetOffset 근처 밴드로 진입해도 뒤차에게 안전한지 MOBIL 안전기준(강제 차선변경)으로 판정.
+    // 도로 밖에서 처음 진입(UpdateFindPath/EnsureRoamingPath)과 다음 road로 합류(ShouldHoldForMerge)가 공유.
+    bool IsSafeLaneEntry(const shared_ptr<Road> &road, float targetOffset, const std::vector<NearbyCar> &nearby) const;
+    // nextRoad 진입(합류)이 지금 뒤차에게 안전한지 판정(IsSafeLaneEntry + m_lastNearbyCars).
+    // CheckPath(Drive)와 ScanRoadSpeedConstraints(BehaviorPlan)이 공유.
+    bool ShouldHoldForMerge(const shared_ptr<Road> &nextRoad) const;
     std::vector<NearbyCar> CollectNearbyCars() const;
     bool IsTurningAhead() const;                  // 교차로 우선순위: 직진 > 회전 판정용
     bool HasPriorityOver(const Car *other) const; // 우선순위 직진 > 회전, 동급이면 이름 비교
     void AppendCarConstraintSamples(std::vector<RoadSpeedSample> &samples,
                                     const std::vector<NearbyCar> &nearbyCars, float lookDistance) const; // nearbyCars 중 내 예정 경로 코리도 안의 차를 도로제약 샘플(가상 리더)로 변환해 추가
-    std::vector<TrajectorySample> SimulateEgoTrajectory(const Spline &drivingSpline, float simAccel,
-                                                        const std::vector<RoadSpeedSample> &roadSamples) const; // 주행 스플라인을 따라 Pure Pursuit + 자전거 모델로 시뮬레이션한 궤적
-    // 상대 차 미래 pose 예측용
-    struct OtherPrediction
-    {
-        struct Segment
-        {
-            const Spline *spline;
-            float startT;
-            float arcLength; // startT부터 이 세그먼트 끝까지의 호길이
-        };
-        std::vector<Segment> segments; // 비어 있으면 직진 폴백
-        Vec3 basePos = Vec3::sZero();  // 예측 시작점(뒷축)
-        Vec3 baseFwd = Vec3::sZero();  // 시작 진행방향
-        float lateralOffset = 0.0f;    // 레인 중심선 기준 횡 오프셋(부호 포함) -- 예측 내내 유지
-    };
-    OtherPrediction BuildOtherPrediction(const Car *other) const;
-    static void PredictOtherPose(const OtherPrediction &pred, float distance, Vec3 &outPos, Vec3 &outFwd);
-    // others는 각자 자기 레인 스플라인을 따라 등속 전진한다고 예측해 매 스텝 ego 궤적과 겹치는지
-    // 본다. 실제로 겹친 적이 있으면 collisionFree=false, 그와 별개로 전 구간 최소 중심간 거리도 반환.
-    TrajectorySafety EvaluateTrajectorySafety(const std::vector<TrajectorySample> &trajectory,
-                                              const std::vector<NearbyCar> &others) const;
-    // lane에 신호가 있고 지금 서야 하는 상황(ShouldStopForSignal)인데, trajectory가 멈추지 못하고
-    // 정지선(신호 노드 위치)을 넘어버리는지 확인한다.
-    bool ViolatesSignal(const shared_ptr<Road> &road, const std::vector<TrajectorySample> &trajectory) const;
+    // nearby 중 refLine 기준 bandCenter 밴드에 속한 차들에서 egoS 앞/뒤 가장 가까운 leader/follower를 MOBIL 상태로.
+    LaneNeighbors GatherLaneNeighbors(const std::vector<NearbyCar> &nearby, const Spline &refLine,
+                                      float bandCenter, float bandHalfWidth, float egoS) const;
+    // 현재 밴드 유지 vs MOBIL 판정 인접 밴드로 변경 -> 목표 횡오프셋 d.
+    float ComputeLateralTarget(const std::vector<NearbyCar> &nearbyCars, const IDM::Params &idm) const;
     std::vector<RoadSpeedSample> ScanRoadSpeedConstraints(float lookDistance) const;
     // road 횡단면(GetLateralProfile)에서 차체가 도로 밖으로 안 나가는 drivable d 범위. 밴드 없으면 참조선 중심 좁은 범위.
     void ComputeDrivableRange(const shared_ptr<Road> &road, float &outMin, float &outMax) const;
@@ -301,11 +245,11 @@ private:
     const float m_maxSpeed = 200.0f / 3.6f;               // 200 km/h
     const float m_maxAccel = (100.0f / 3.6f) / 14.0f;     // 0-100 km/h in 14s
     const float m_maxBrake = (100.0f / 3.6f) / 6.0f;      // 0-100 km/h in 6s (~4.6 m/s², 현실적 상용제동)
-    const float m_planBrake = m_maxBrake * 0.5f;          // 계획감속(캡/FF). maxBrake보다 낮게 잡아 접근을 완만히 -> 저크지연 오버슈트 축소
     const float m_maxEmergBrake = (100.0f / 3.6f) / 3.0f; // 100-0 km/h in 3s
     float m_speedGain = 2.0f;                             // 속도오차 -> 목표가속 비례게인
-    float m_jerkUp = 4.0f;                                // 가속 방향 저크 상한 (m/s^3)
-    float m_jerkDown = 15.0f;                             // 제동 방향 저크 상한
+    float m_jerkUp = 4.0f;                                // 가속 방향 저크 상한 (m/s^3). Init에서 m_personality로 덮어씀
+    float m_jerkDown = 15.0f;                             // 제동 방향 저크 상한. Init에서 m_personality로 덮어씀
+    CarPersonality m_personality;                         // 운전자 성격(CarSpec::personality) -- IDM/MOBIL 파라미터에 반영, 디버그 UI로 조절
 
     float m_wheelbase = 0.0f;
     float m_mass = 1.0f;
@@ -333,9 +277,8 @@ private:
     VehicleController m_vehicleController; // DriveMode가 세운 계획(세그먼트)을 실제로 실행
     shared_ptr<Road> m_destRoad;
     shared_ptr<Road> m_currentRoad;
-    float m_currentOffset = 0.0f;       // 계획된(committed) 횡오프셋 d -- 실측이 아니라 리플랜 기준 상태
-    float m_currentLateralSlope = 0.0f; // committed d'(s) (참조선 호길이 기준) -- 리플랜 C1 연속용
-    Spline m_currentSpline;             // 현재 주행 스플라인(참조선 offset d) 캐시
+    float m_currentOffset = 0.0f; // 계획된(committed) 횡오프셋 d -- 실측이 아니라 리플랜 기준 상태
+    Spline m_currentSpline;       // 현재 주행 스플라인(참조선 offset d) 캐시
 
     shared_ptr<RoadNode> m_parkSpot;        // 예약된 목표 주차칸(있는 동안은 "이 자리에 주차 중/주차 예정")
     shared_ptr<RoadNode> m_pendingParkNode; // 예약 전, 도착하면 그때 주차칸을 예약할 목표 Park 노드
@@ -364,24 +307,24 @@ private:
     Model *m_carModel = nullptr;                               // 차체 모델(경적 시 재질 색을 잠깐 빨갛게 바꾼다)
 
     // 행동 계획(Behavior Plan) 상태
-    static constexpr float BEHAVIOR_PLAN_INTERVAL = 0.2f;   // 행동 후보 재판단 주기
-    static constexpr float BEHAVIOR_SAFETY_HORIZON = 3.0f;  // 궤적 시뮬레이션으로 안전판정할 미래 시야(초, 사람의 3초 룰)
-    static constexpr float BEHAVIOR_SIM_STEP = 0.1f;        // 궤적 시뮬레이션 적분 간격(초)
-    static constexpr float MIN_SAFE_GAP = 2.0f;    // 앞차/정지선과 유지할 표준 범퍼 gap(m). 오버슈트 흡수 여유 포함.
-    static constexpr float DESIRED_HEADWAY = 2.0f; // 이보다 시간헤드웨이가 짧으면 부족분에 following 비용(w6).
+    static constexpr float BEHAVIOR_PLAN_INTERVAL = 0.2f;  // 행동 후보 재판단 주기
+    static constexpr float BEHAVIOR_SAFETY_HORIZON = 3.0f; // 주변 차 수집 반경 산정용 미래 시야(초, 사람의 3초 룰)
+    static constexpr float MIN_SAFE_GAP = 2.0f;            // 앞차/정지선과 유지할 표준 범퍼 gap(m). IDM s0로도 쓴다.
+    static constexpr float DESIRED_HEADWAY = 2.0f;         // 디버그 표시용 목표 시간헤드웨이(s).
 
-    // 횡궤적(5차 S커브) 파라미터
-    static constexpr float LANE_CHANGE_TIME = 3.0f; // 목표 오프셋까지 도달 목표 시간(초). 변경거리 L = v*이 시간
-    static constexpr float LANE_CHANGE_L_MIN = 8.0f;  // 변경거리 하한(m) -- 저속에서도 최소 이만큼에 걸쳐 옮긴다
-    static constexpr float LANE_CHANGE_L_MAX = 60.0f; // 변경거리 상한(m)
-    static constexpr int D_SAMPLE_COUNT = 7;          // 횡오프셋 후보 샘플 수
+    // IDM(종방향) / MOBIL(차선변경) 파라미터. 이타성(politeness)은 m_personality에서 옴(D. 양보).
+    static constexpr float IDM_TIME_HEADWAY = 1.5f; // IDM T 기본값: 앞차와 원하는 시간 간격(s). m_personality.headwayFactor를 곱해 씀.
+    static constexpr float MOBIL_B_SAFE = 3.0f;     // 뒤차에 강제 가능한 최대 안전 감속도(m/s^2)
+    static constexpr float MOBIL_A_THR = 0.2f;      // 차선변경 최소 진입 장벽(m/s^2)
+    // 횡오프셋을 목표(밴드 중심)로 당기는 Lerp 비율. 리플랜(0.2초)마다 이만큼 목표 쪽으로 이동.
+    static constexpr float LATERAL_LERP_ALPHA = 0.2f;
 
-    BehaviorWeights m_behaviorWeights;
-    float m_lastBehaviorPlanTime = -1000.0f; // 처음 Drive 진입 시 바로 첫 판단이 돌도록 충분히 과거로 초기화
-    BehaviorCandidate m_currentBehaviorPlan;
-    float m_lastDesiredSpeed = 0.0f; // UpdateBehaviorPlan이 마지막으로 계산한, 지금 위치 기준 속도 캡(디버그 UI 표시용)
-    float m_lastAccelFF = 0.0f;      // UpdateBehaviorPlan이 계산한 종방향 피드포워드(Accelerate에 넘김)
-    bool m_emergencyBrake = false;
+    float m_lastBehaviorPlanTime = -1000.0f;        // 처음 Drive 진입 시 바로 첫 판단이 돌도록 충분히 과거로 초기화
+    float m_planAccel = 0.0f;                       // DriveControl이 매프레임 계산한 IDM 목표가속도(디버그 UI 표시용 캐시)
+    std::vector<NearbyCar> m_lastNearbyCars;        // UpdateBehaviorPlan이 마지막으로 수집한 주변 차 목록 -- ShouldHoldForMerge가 매 프레임 재사용(재수집 비용 회피)
+    std::vector<RoadSpeedSample> m_lastRoadSamples; // UpdateBehaviorPlan이 마지막으로 스캔한 리더/제약 목록 -- DriveControl이 매프레임 IDM 가속도 재계산에 재사용
+    IDM::Params m_lastIdmParams;                    // 위 스캔 시점의 IDM 파라미터(v0 등) 캐시
+    Vec3 m_planScanPosition = Vec3::sZero();        // 위 스캔 시점의 ego 위치 -- 정적 제약 gap을 매프레임 보정(distanceOffset)하는 기준
 
     // 스폰 및 리셋 데이터 (Spawn / Reset Data)
     DirectX::XMFLOAT3 m_spawnPosition = {0.0f, 0.0f, 0.0f};

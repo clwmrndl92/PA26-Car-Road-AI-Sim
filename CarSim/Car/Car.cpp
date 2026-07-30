@@ -19,7 +19,9 @@ void Car::Init(const CarSpec &spec, SimulationState *simState, JPH::Vec3 positio
     SetRenderOffset(ToXMFLOAT3(spec.renderOffset));
     m_wheelbase = spec.wheelbase;
     m_halfExtents = spec.halfExtents;
-    m_behaviorWeights = spec.behaviorWeights;
+    m_personality = spec.personality;
+    m_jerkUp = m_personality.jerkUp;
+    m_jerkDown = m_personality.jerkDown;
 
     DirectX::XMFLOAT3 fwd = m_transform.GetForwardAxis();
     m_transform.SetPosition(position.GetX() - fwd.x * m_wheelbase,
@@ -213,6 +215,16 @@ void Car::Accelerate(float desiredVelocity, float aFF)
     // 계획감속 피드포워드(접근 중일 때만) + 속도오차 비례 피드백. FF가 기준 감속을 미리 넣어 접근 시 P제어 lag를 없앤다.
     float ff = (desiredVelocity < m_speed) ? aFF : 0.0f; // vRef 도달 순간 FF를 꺼 아래로 오버슈트 방지
     float aTarget = std::clamp(ff + m_speedGain * (desiredVelocity - m_speed), -m_maxBrake, m_maxAccel);
+    float jerkLimit = (aTarget > m_acceleration) ? m_jerkUp : m_jerkDown;
+    float maxStep = jerkLimit * m_deltaTime;
+    m_acceleration += std::clamp(aTarget - m_acceleration, -maxStep, maxStep);
+}
+
+void Car::CommandAcceleration(float aTarget)
+{
+    // IDM이 뱉은 목표가속도를 저크제한으로만 수렴시킨다. (비상 제동은 IDM의 gap<=0 케이스가 -4b로 내므로
+    // 하한을 비상제동까지 열어둔다.)
+    aTarget = std::clamp(aTarget, -m_maxEmergBrake, m_maxAccel);
     float jerkLimit = (aTarget > m_acceleration) ? m_jerkUp : m_jerkDown;
     float maxStep = jerkLimit * m_deltaTime;
     m_acceleration += std::clamp(aTarget - m_acceleration, -maxStep, maxStep);
@@ -522,28 +534,18 @@ void Car::UpdateDebugWindow()
         else
             ImGui::Text("Mode: %s", StateToString(m_mode));
 
-        // 현재 채택된 행동계획(0.2초마다 UpdateBehaviorPlan이 갱신)과, 그때 계산된 지금 위치 기준 속도 캡.
-        const BehaviorCandidate &plan = m_currentBehaviorPlan;
-        ImGui::Text("Plan: %s (d_target %.2f m, end %.1f km/h)",
-                    SpeedActionToString(plan.speedAction), plan.targetOffset, plan.horizonEndSpeed * 3.6f);
+        // 행동계획(0.2초마다 UpdateBehaviorPlan이 갱신): IDM 목표가속도, 속도 캡, 현재 횡오프셋.
+        ImGui::Text("Plan accel(IDM): %.2f m/s^2", m_planAccel);
         ImGui::Text("Cur offset d: %.2f m", m_currentOffset);
-        ImGui::Text("Speed Cap: %.1f km/h", m_lastDesiredSpeed * 3.6f);
-        if (plan.minApproachGap < 1e6f)
-            ImGui::Text("Lead gap: %.1f m  headway: %.2f s", plan.minApproachGap,
-                        plan.minTimeHeadway < 1e6f ? plan.minTimeHeadway : 0.0f);
-        else
-            ImGui::Text("Lead: none");
-        ImGui::Text("Max lat accel: %.2f m/s^2", plan.maxLateralAccel);
 
         ImGui::Separator();
-        ImGui::Text("Behavior Plan Weights");
-        ImGui::SliderFloat("Speed Weight", &m_behaviorWeights.speed_under, 0.0f, 10.0f);
-        ImGui::SliderFloat("Speed Over Penalty", &m_behaviorWeights.speed_over, 0.0f, 10.0f);
-        ImGui::SliderFloat("Lane Keep Weight", &m_behaviorWeights.laneKeep, 0.0f, 20.0f);
-        ImGui::SliderFloat("Lateral Accel Penalty", &m_behaviorWeights.lateralAccel, 0.0f, 5.0f);
-        ImGui::SliderFloat("Inertia Weight", &m_behaviorWeights.inertia, 0.0f, 10.0f);
-        ImGui::SliderFloat("Signal Violation Penalty", &m_behaviorWeights.signalViolation, 0.0f, 50.0f);
-        ImGui::SliderFloat("Following Headway Weight", &m_behaviorWeights.following, 0.0f, 20.0f);
+        ImGui::Text("Personality (notes/accel.txt A~D)");
+        ImGui::SliderFloat("Speed Factor", &m_personality.speedFactor, 0.5f, 1.3f);
+        ImGui::SliderFloat("Headway Factor", &m_personality.headwayFactor, 0.5f, 2.0f);
+        ImGui::SliderFloat("Jerk Up Max", &m_jerkUp, 0.5f, 10.0f);
+        ImGui::SliderFloat("Jerk Down Max", &m_jerkDown, 1.0f, 30.0f);
+        ImGui::SliderFloat("Brake Factor", &m_personality.brakeFactor, 0.3f, 2.0f);
+        ImGui::SliderFloat("Politeness", &m_personality.politeness, 0.0f, 0.5f);
     }
     ImGui::End();
 }

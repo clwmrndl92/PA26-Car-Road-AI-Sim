@@ -29,6 +29,8 @@ public:
     float GetMinRadiusAhead() const { return m_minRadius; }
     float GetApexT() const { return m_apexT; }
     float GetRadiusAt(float t) const; // t 위치의 국소 곡률반경 (직선/무곡률이면 FLT_MAX)
+    // 컨트롤 포인트가 전부 한 직선 위에 있는지. 생성자에서 미리 계산해 캐싱한다(ComputeMinRadius가 스캔 생략 여부 판단에 씀).
+    bool IsStraight() const { return m_isStraight; }
 
 private:
     float m_length = 0.0f;
@@ -36,6 +38,7 @@ private:
     std::vector<Vec3> m_splinePoints;  // Catmull-Rom 샘플 점들
     float m_minRadius = std::numeric_limits<float>::max();
     float m_apexT = 1.0f;
+    bool m_isStraight = true;
     std::vector<float> m_radii; // 스플라인 점별 국소 곡률반경 (GetRadiusAt용)
     static constexpr int CURVE_RESOLUTION = 50;
     static constexpr float MIN_POINT_SPACING = 0.1f; // 직전 유지점과 이보다 가까운 샘플점은 생략(중복 축소)
@@ -44,5 +47,5 @@ private:
     Vec3 GetCatmullRomTangent(float t, const Vec3 &p0, const Vec3 &p1, const Vec3 &p2, const Vec3 &p3) const;
     std::vector<Vec3> ComputeSplinePoints();
     void ComputeMinRadius();
-    bool IsStraight() const; // 컨트롤 포인트가 전부 한 직선 위에 있는지 (ComputeMinRadius가 스캔 생략 여부 판단에 씀)
+    bool ComputeIsStraight() const;
 };

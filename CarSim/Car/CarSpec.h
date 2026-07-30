@@ -3,26 +3,23 @@
 #include <Jolt/Jolt.h>
 #include <Jolt/Math/Vec3.h>
 
-// 행동 계획 비용 가중치
-struct BehaviorWeights
+// 운전자 성격 파라미터. IDM/MOBIL 기본값에 곱/치환되며, Car 디버그 UI 창에서 실시간 조절 가능.
+struct CarPersonality
 {
-    float speed_under = 1.0f;      // 목표속도 대비 도달속도(3초 뒤 예상속도) 부족분에 대한 가중치
-    float speed_over = 4.0f;       // 과속 페널티
-    float laneKeep = 5.0f;         // 목표 오프셋이 가장 가까운 밴드 중심에서 벗어난 거리(m)에 물리는 차선유지 끌림
-    float lateralAccel = 0.5f;     // 궤적 중 최대 횡가속(m/s^2)에 물리는 승차감 가중치 (커브/차선변경)
-    float inertia = 1.0f;          // 직전에 고른 목표(오프셋/속도)와 달라졌을 때 물리는 가중치
-    float signalViolation = 20.0f; // 신호를 지켜야 하는데 못 멈추고 통과하는 후보에 물리는 가중치
-    float following = 3.0f;        // 앞차와의 시간헤드웨이가 목표(1.5s)보다 짧을 때 부족분에 물리는 가중치
-    float bigVehicle = 2.0f;       // 대형차(자기보다 훨씬 넓은 차) 옆을 지날 때 원하는 여유 부족분에 물리는 가중치
-    float edgeMargin = 1.0f;       // 도로 가장자리에 바짝 붙는(원하는 여유 부족) 정도에 물리는 가중치
+    float speedFactor = 1.0f;   // 목표속도 = 도로 제한속도 * speedFactor (작을수록 신중, 커질수록 과감)
+    float headwayFactor = 1.0f; // IDM 안전거리(s0)·시간간격(T)에 곱하는 계수 (작을수록 바짝 붙음)
+    float jerkUp = 4.0f;        // 가속 방향 저크 상한 (m/s^3)
+    float jerkDown = 15.0f;     // 제동 방향 저크 상한 (m/s^3)
+    float brakeFactor = 1.0f;   // IDM 쾌적감속(b)에 곱하는 계수 (클수록 더 세게 감속)
+    float politeness = 0.2f;    // MOBIL 이타성 계수 (0=완전 이기주의 ~ 0.5=현실적 양보)
 };
 
 struct CarSpec
 {
     CarSpec(const char *name, const char *modelPath, JPH::Vec3 halfExtents, JPH::Vec3 renderOffset,
-            JPH::Vec3 colliderOffset, float wheelbase, float mass, BehaviorWeights behaviorWeights = {})
+            JPH::Vec3 colliderOffset, float wheelbase, float mass, CarPersonality personality = {})
         : name(name), modelPath(modelPath), halfExtents(halfExtents), renderOffset(renderOffset),
-          colliderOffset(colliderOffset), wheelbase(wheelbase), mass(mass), behaviorWeights(behaviorWeights)
+          colliderOffset(colliderOffset), wheelbase(wheelbase), mass(mass), personality(personality)
     {
     }
 
@@ -33,8 +30,7 @@ struct CarSpec
     JPH::Vec3 colliderOffset;
     float wheelbase;
     float mass;
-
-    BehaviorWeights behaviorWeights;
+    CarPersonality personality;
 };
 
 enum class CarType

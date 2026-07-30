@@ -212,7 +212,7 @@ Vec3 Spline::GetDirectionAt(float t) const
     return GetCatmullRomTangent(localT, p0, p1, p2, p3).Normalized();
 }
 
-bool Spline::IsStraight() const
+bool Spline::ComputeIsStraight() const
 {
     constexpr float STRAIGHT_EPSILON = 0.05f; // 양끝을 잇는 직선에서 이 거리(m) 안이면 일직선으로 본다
 
@@ -246,7 +246,8 @@ void Spline::ComputeMinRadius()
     m_apexT = 1.0f;
     m_radii.assign(m_splinePoints.size(), std::numeric_limits<float>::max());
 
-    if (IsStraight())
+    m_isStraight = ComputeIsStraight();
+    if (m_isStraight)
         return; // 직선, 곡률 없음
 
     if (m_splinePoints.size() < 2)
