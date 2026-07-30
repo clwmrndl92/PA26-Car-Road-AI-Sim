@@ -12,6 +12,7 @@ struct CarPersonality
     float jerkDown = 15.0f;     // 제동 방향 저크 상한 (m/s^3)
     float brakeFactor = 1.0f;   // IDM 쾌적감속(b)에 곱하는 계수 (클수록 더 세게 감속)
     float politeness = 0.2f;    // MOBIL 이타성 계수 (0=완전 이기주의 ~ 0.5=현실적 양보)
+    float laneChangeLerpAlpha = 0.2f; // 차선변경 횡오프셋 Lerp 비율 (리플랜 주기마다 목표로 이만큼 이동, 클수록 급하게 붙음)
 };
 
 struct CarSpec

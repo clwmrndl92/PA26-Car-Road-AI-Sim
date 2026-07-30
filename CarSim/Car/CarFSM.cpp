@@ -887,7 +887,7 @@ void Car::UpdateBehaviorPlan()
     // ---- 횡방향: MOBIL 차선변경 판정 + Lerp ----
     // (실제 종방향 IDM 가속도는 DriveControl이 위 캐시로 매프레임 다시 계산한다.)
     float targetOffset = ComputeLateralTarget(m_lastNearbyCars, m_lastIdmParams);
-    m_currentOffset += (targetOffset - m_currentOffset) * LATERAL_LERP_ALPHA;
+    m_currentOffset += (targetOffset - m_currentOffset) * m_personality.laneChangeLerpAlpha;
     m_currentSpline = RoadDataManager::Get().BuildOffsetSpline(m_currentRoad, m_currentOffset);
     RebuildSplineRender();
 }

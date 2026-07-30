@@ -316,8 +316,7 @@ private:
     static constexpr float IDM_TIME_HEADWAY = 1.5f; // IDM T 기본값: 앞차와 원하는 시간 간격(s). m_personality.headwayFactor를 곱해 씀.
     static constexpr float MOBIL_B_SAFE = 3.0f;     // 뒤차에 강제 가능한 최대 안전 감속도(m/s^2)
     static constexpr float MOBIL_A_THR = 0.2f;      // 차선변경 최소 진입 장벽(m/s^2)
-    // 횡오프셋을 목표(밴드 중심)로 당기는 Lerp 비율. 리플랜(0.2초)마다 이만큼 목표 쪽으로 이동.
-    static constexpr float LATERAL_LERP_ALPHA = 0.2f;
+    // 횡오프셋을 목표(밴드 중심)로 당기는 Lerp 비율. 리플랜(0.2초)마다 이만큼 목표 쪽으로 이동. m_personality.laneChangeLerpAlpha에서 옴.
 
     float m_lastBehaviorPlanTime = -1000.0f;        // 처음 Drive 진입 시 바로 첫 판단이 돌도록 충분히 과거로 초기화
     float m_planAccel = 0.0f;                       // DriveControl이 매프레임 계산한 IDM 목표가속도(디버그 UI 표시용 캐시)
