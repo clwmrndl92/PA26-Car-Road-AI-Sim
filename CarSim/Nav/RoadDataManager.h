@@ -123,6 +123,9 @@ public:
     void Init(const string &filePath);
     void BuildRoadData(const string &filePath);
 
+    // 테스트용 왕복(patrol) 동적 장애물: start~end 구간을 등속으로 오간다. 매프레임 위치를 갱신.
+    void UpdateDynamicObstacles(float dt);
+
     // 위치를 참조선에 투영해 가장 가까운 road를 찾는다. 없으면 road==nullptr.
     RoadPose GetClosestRoad(const Vec3 &position) const;
     // road 링크(successor) 그래프 A*. 반환 = start~dest road 시퀀스(포함). 실패 시 빈 벡터.
@@ -137,6 +140,8 @@ public:
     const shared_ptr<RoadNode> GetNode(int nodeId) const;
     shared_ptr<RoadNode> GetRandomDestNode() const;
     const vector<VehicleCollision::Obstacle> &GetObstacles() const { return m_obstacles; }
+    // UpdateDynamicObstacles가 매프레임 갱신하는 왕복 장애물의 현재 위치/헤딩/속도.
+    const vector<VehicleCollision::Obstacle> &GetDynamicObstacles() const { return m_dynamicObstacles; }
 
     // road의 참조선 s 위치 횡단면. 없으면 nullptr.
     const LaneSection *GetLateralProfile(const shared_ptr<Road> &road, float s) const;
@@ -156,11 +161,24 @@ private:
     // 명시 successor 링크(Road::GetSuccessor, junction이면 connection)로 successor 그래프를 짠다.
     void BuildRoadSuccessors();
 
+    // start~end 구간을 왕복하는 테스트용 동적 장애물의 정의 + 진행 상태.
+    struct DynamicObstacleState
+    {
+        Vec3 start;
+        Vec3 end;
+        float halfLength = 0.0f;
+        float halfWidth = 0.0f;
+        float speed = 0.0f;    // 구간을 오가는 등속 스칼라 속도(m/s)
+        float traveled = 0.0f; // start 기준 누적 이동거리. [0, 2*구간길이) 범위로 랩되며 왕복을 표현.
+    };
+
 private:
     vector<shared_ptr<Road>> m_roads;
     unordered_map<int, shared_ptr<Road>> m_roadById;
     unordered_map<int, shared_ptr<RoadNode>> m_nodes; // node id -> RoadNode
     vector<VehicleCollision::Obstacle> m_obstacles;
+    vector<DynamicObstacleState> m_dynamicObstacleDefs; // dynamic_obstacles 로드 결과 + 런타임 진행상태
+    vector<VehicleCollision::Obstacle> m_dynamicObstacles; // UpdateDynamicObstacles가 매프레임 다시 채우는 현재 위치 스냅샷
     unordered_map<int, vector<LaneSection>> m_laneSections;             // road id -> sStart 오름차순 횡단면들
     unordered_map<int, BoundaryMark> m_centerMarks;                     // road id -> 중앙선 마킹
     unordered_map<int, Junction> m_junctions;                          // junction id -> Junction

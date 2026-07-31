@@ -37,7 +37,7 @@ void RSFollowSegment::Tick(Car &car)
     if (m_points.size() < 2)
     {
         m_done = true;
-        car.Accelerate(0.0f);
+        car.AccelerateVel(0.0f);
         return;
     }
 
@@ -62,14 +62,14 @@ void RSFollowSegment::Tick(Car &car)
     if (remaining < FINISH_DISTANCE)
     {
         m_done = true;
-        car.Accelerate(0.0f);
+        car.AccelerateVel(0.0f);
         return;
     }
 
     if (remaining < OVERSHOOT_CHECK_DISTANCE && remaining > m_prevRemaining)
     {
         m_done = true;
-        car.Accelerate(0.0f);
+        car.AccelerateVel(0.0f);
         return;
     }
     m_prevRemaining = remaining;
@@ -87,7 +87,7 @@ void RSFollowSegment::Tick(Car &car)
     car.Steer(targetSteer, PARKING_STEER_RAMP_RATE);
 
     float targetSpeed = std::min(MANEUVER_SPEED, std::sqrt(2.0f * DECEL_ESTIMATE * remaining));
-    car.Accelerate(targetSpeed);
+    car.AccelerateVel(targetSpeed);
 }
 
 RSExactSegment::RSExactSegment(ReedsShepp::PathElement element, float steerAngle)
@@ -99,7 +99,7 @@ void RSExactSegment::Tick(Car &car)
 {
     if (m_isSteering)
     {
-        car.Accelerate(0.0f);
+        car.AccelerateVel(0.0f);
         car.Steer(m_steerAngle, STEER_RAMP_RATE);
         if (std::fabs(car.GetSteerAngle() - m_steerAngle) <= STEER_ALIGN_TOLERANCE)
             m_isSteering = false;
@@ -109,14 +109,14 @@ void RSExactSegment::Tick(Car &car)
     float remaining = m_element.param - m_traveled;
     if (remaining <= FINISH_DISTANCE)
     {
-        car.Accelerate(0.0f);
+        car.AccelerateVel(0.0f);
         if (car.GetSpeed() <= STOP_SPEED)
             m_done = true;
         return;
     }
 
     float targetSpeed = std::min(MANEUVER_SPEED, std::sqrt(2.0f * DECEL_ESTIMATE * remaining));
-    car.Accelerate(targetSpeed);
+    car.AccelerateVel(targetSpeed);
     m_traveled += car.GetSpeed() * car.GetDeltaTime();
 }
 
@@ -125,7 +125,7 @@ void ReverseSegment::Tick(Car &car)
     float remaining = m_distance - m_traveled;
     if (remaining <= FINISH_DISTANCE)
     {
-        car.Accelerate(0.0f);
+        car.AccelerateVel(0.0f);
         if (car.GetSpeed() <= STOP_SPEED)
             m_done = true;
         return;
@@ -133,7 +133,7 @@ void ReverseSegment::Tick(Car &car)
 
     car.Steer(0.0f, REVERSE_STEER_RAMP_RATE);
     float targetSpeed = std::min(REVERSE_SPEED, std::sqrt(2.0f * DECEL_ESTIMATE * remaining));
-    car.Accelerate(targetSpeed);
+    car.AccelerateVel(targetSpeed);
     m_traveled += car.GetSpeed() * car.GetDeltaTime();
 }
 
@@ -144,7 +144,7 @@ void SplineFollowSegment::Tick(Car &car)
 
 void CenterSteerSegment::Tick(Car &car)
 {
-    car.Accelerate(0.0f);
+    car.AccelerateVel(0.0f);
     car.Steer(0.0f, CENTER_STEER_RAMP_RATE);
     if (std::fabs(car.GetSteerAngle()) <= STEER_ALIGN_TOLERANCE)
         m_aligned = true;

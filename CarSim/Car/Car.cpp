@@ -209,27 +209,21 @@ void Car::SetRotation(Vec3 direction)
 
 void Car::EmergBrake()
 {
-    m_acceleration = -m_maxEmergBrake;
+    m_acceleration = -m_maxBrake;
+    m_planAccelDebug = -m_maxBrake; // 디버그 UI 표시용 캐시
 }
 
-void Car::Accelerate(float desiredVelocity, float aFF)
+void Car::AccelerateVel(float desiredVelocity)
 {
-    // 계획감속 피드포워드(접근 중일 때만) + 속도오차 비례 피드백. FF가 기준 감속을 미리 넣어 접근 시 P제어 lag를 없앤다.
-    float ff = (desiredVelocity < m_speed) ? aFF : 0.0f; // vRef 도달 순간 FF를 꺼 아래로 오버슈트 방지
-    float aTarget = std::clamp(ff + m_speedGain * (desiredVelocity - m_speed), -m_maxBrake, m_maxAccel);
+    Accelerate(m_speedGain * (desiredVelocity - m_speed));
+}
+void Car::Accelerate(float desiredAccel)
+{
+    float aTarget = std::clamp(desiredAccel, -m_maxBrake, m_maxAccel);
     float jerkLimit = (aTarget > m_acceleration) ? m_jerkUp : m_jerkDown;
     float maxStep = jerkLimit * m_deltaTime;
     m_acceleration += std::clamp(aTarget - m_acceleration, -maxStep, maxStep);
-}
-
-void Car::CommandAcceleration(float aTarget)
-{
-    // IDM이 뱉은 목표가속도를 저크제한으로만 수렴시킨다. (비상 제동은 IDM의 gap<=0 케이스가 -4b로 내므로
-    // 하한을 비상제동까지 열어둔다.)
-    aTarget = std::clamp(aTarget, -m_maxEmergBrake, m_maxAccel);
-    float jerkLimit = (aTarget > m_acceleration) ? m_jerkUp : m_jerkDown;
-    float maxStep = jerkLimit * m_deltaTime;
-    m_acceleration += std::clamp(aTarget - m_acceleration, -maxStep, maxStep);
+    m_planAccelDebug = m_acceleration; // 디버그 UI 표시용 캐시
 }
 
 void Car::Steer(float radian, float steerRamp)
@@ -291,7 +285,7 @@ bool Car::ShouldStopForSignal(const shared_ptr<Road> &road) const
 
     TrafficSignal::Color color = m_SimState->GetSignalColor(signalNode->signalPhaseOffset);
     float gap = (signalNode->position - GetPosition()).Length();
-    float emergStopDistance = (m_speed * m_speed) / (2.0f * m_maxEmergBrake);
+    float emergStopDistance = (m_speed * m_speed) / (2.0f * m_maxBrake);
     if (color == TrafficSignal::Color::Green)
     {
         if (m_committedYellowNodeId == signalNode->id)
@@ -361,11 +355,11 @@ void Car::UpdateWithControl()
     // Acceleration / Brake
 
     if (m_isFocused && ImGui::IsKeyDown(ImGuiKey_DownArrow)) // Brake
-        Accelerate(-1);
+        AccelerateVel(-1);
     else if (m_isFocused && ImGui::IsKeyDown(ImGuiKey_UpArrow)) // Accelerate
-        Accelerate(1);
+        AccelerateVel(1);
     else
-        Accelerate(0);
+        AccelerateVel(0);
 
     // Steering
     if (m_isFocused && ImGui::IsKeyDown(ImGuiKey_LeftArrow))
@@ -540,7 +534,7 @@ void Car::UpdateDebugWindow()
             ImGui::Text("Mode: %s", StateToString(m_mode));
 
         // 행동계획(0.2초마다 UpdateBehaviorPlan이 갱신): IDM 목표가속도, 속도 캡, 현재 횡오프셋.
-        ImGui::Text("Plan accel(IDM): %.2f m/s^2", m_planAccel);
+        ImGui::Text("Plan accel(IDM): %.2f m/s^2", m_planAccelDebug);
         ImGui::Text("Cur offset d: %.2f m", m_currentOffset);
 
         // 회피(레이 스캔 + Avoid 상태)

@@ -6,6 +6,14 @@
 // RoadDataManager/EditApp의 장애물 정의, Car의 실시간 바운딩박스 스윕 판정에서 재사용되어 분리했다.
 namespace VehicleCollision
 {
+    // 정적(맵 고정) / 동적(레이로 매프레임 잡히는 대상) 구분 태그. 테스트용 -- ScanRoadSpeedConstraints(정적)
+    // vs 레이 감지(동적) 분리 실험에 씀.
+    enum class ObstacleType
+    {
+        Static,
+        Dynamic
+    };
+
     // 회전된 사각형(OBB) 장애물.
     struct Obstacle
     {
@@ -14,6 +22,7 @@ namespace VehicleCollision
         float halfWidth;
         float headingRad = 0.0f;
         float speed = 0.0f; // headingRad 방향 기준 스칼라 속도. 정적 장애물은 0(기본값)로 둔다.
+        ObstacleType type = ObstacleType::Static;
     };
 
     struct VehicleShape

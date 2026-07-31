@@ -55,9 +55,21 @@ bool CarSim::Init()
 
 void CarSim::UpdateScene(float dt)
 {
-    m_SimState.Tick(GetSimDt(dt));
+    float simDt = GetSimDt(dt);
+    m_SimState.Tick(simDt);
+    m_RoadDataManager.UpdateDynamicObstacles(simDt);
     UpdateSignalMarkers();
     GameApp::UpdateScene(dt);
+
+    // 왕복 동적 장애물 렌더 위치 갱신 -- 개수/순서는 InitDynamicObstacleRenders가 만든 것과 GetDynamicObstacles()가 항상 같다.
+    const auto &dynamicObstacles = m_RoadDataManager.GetDynamicObstacles();
+    for (size_t i = 0; i < m_DynamicObstacleRenders.size() && i < dynamicObstacles.size(); ++i)
+    {
+        const VehicleCollision::Obstacle &obstacle = dynamicObstacles[i];
+        Vec3 forward(cosf(obstacle.headingRad), 0.0f, sinf(obstacle.headingRad));
+        m_DynamicObstacleRenders[i].GetTransform().SetPosition(ToXMFLOAT3(obstacle.center));
+        m_DynamicObstacleRenders[i].GetTransform().SetRotation(QuatFromForward(forward));
+    }
 }
 
 void CarSim::UpdateSignalMarkers()
@@ -104,6 +116,7 @@ bool CarSim::InitResource()
         InitMarkingRenderer();
         InitRoadColliders();
         InitObstacleColliders();
+        InitDynamicObstacleRenders();
     }
 
     // Car 1
@@ -377,6 +390,8 @@ void CarSim::DrawScene()
         markingRender.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     for (auto &obstacleRender : m_ObstacleRenders)
         obstacleRender.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
+    for (auto &dynamicObstacleRender : m_DynamicObstacleRenders)
+        dynamicObstacleRender.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     for (auto &signalRender : m_SignalRenders)
         signalRender.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
 
@@ -746,6 +761,28 @@ void CarSim::InitRoadColliders()
             road->SetRotation(QuatFromForward(delta));
             m_GameObjects.push_back(road);
         }
+    }
+}
+
+void CarSim::InitDynamicObstacleRenders()
+{
+    // 정적 장애물(InitObstacleColliders)과 달리 물리 콜라이더는 안 만든다 -- 지금은 Car의 레이 감지
+    // (BuildSensorObstacles)만 검증하는 테스트용이라, 실제로 부딪혀도 뚫고 지나간다.
+    constexpr float OBSTACLE_HEIGHT = 1.5f;
+
+    m_DynamicObstacleRenders.clear();
+    int obstacleIndex = 0;
+    for (const VehicleCollision::Obstacle &obstacle : m_RoadDataManager.GetDynamicObstacles())
+    {
+        Model *pCube = m_ModelManager.CreateFromGeometry(
+            "dynamic_obstacle_cube" + std::to_string(obstacleIndex++),
+            Geometry::CreateBox(obstacle.halfWidth * 2.0f, OBSTACLE_HEIGHT, obstacle.halfLength * 2.0f));
+        pCube->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(1.0f, 0.5f, 0.0f, 1.0f));
+        pCube->materials[0].Set<float>("$Opacity", 1.0f);
+
+        RenderObject &render = m_DynamicObstacleRenders.emplace_back();
+        render.SetModel(pCube);
+        render.GetTransform().SetPosition(ToXMFLOAT3(obstacle.center + Vec3(0.0f, OBSTACLE_HEIGHT * 0.5f, 0.0f)));
     }
 }
 

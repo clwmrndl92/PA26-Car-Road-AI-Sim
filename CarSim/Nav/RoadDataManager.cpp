@@ -242,6 +242,27 @@ void RoadDataManager::BuildRoadData(const string &filePath)
         m_obstacles.push_back(obstacle);
     }
 
+    // dynamic_obstacles(테스트용): start~end 구간을 등속으로 왕복하는 장애물.
+    // "start"/"end":[x,y,z], "size":[length,width], "speed"(m/s, 기본 1).
+    m_dynamicObstacleDefs.clear();
+    for (const nlohmann::json &dynJson : root.value("dynamic_obstacles", nlohmann::json::array()))
+    {
+        const nlohmann::json &startJson = dynJson.value("start", nlohmann::json::array());
+        const nlohmann::json &endJson = dynJson.value("end", nlohmann::json::array());
+        const nlohmann::json &sizeJson = dynJson.value("size", nlohmann::json::array());
+        if (startJson.size() < 3 || endJson.size() < 3 || sizeJson.size() < 2)
+            continue;
+
+        DynamicObstacleState state;
+        state.start = Vec3(startJson[0].get<float>(), startJson[1].get<float>(), startJson[2].get<float>());
+        state.end = Vec3(endJson[0].get<float>(), endJson[1].get<float>(), endJson[2].get<float>());
+        state.halfLength = sizeJson[0].get<float>() * 0.5f;
+        state.halfWidth = sizeJson[1].get<float>() * 0.5f;
+        state.speed = dynJson.value("speed", 1.0f);
+        m_dynamicObstacleDefs.push_back(state);
+    }
+    UpdateDynamicObstacles(0.0f); // dt=0으로 한 번 돌려 start 위치의 초기 스냅샷을 채워둔다.
+
     // junctions(optional, track A): 다갈래 교차로. 스키마만 읽어 저장(라우팅 확장은 이후 단계).
     for (const nlohmann::json &junctionJson : root.value("junctions", nlohmann::json::array()))
     {
@@ -261,6 +282,45 @@ void RoadDataManager::BuildRoadData(const string &filePath)
     }
 
     BuildRoadSuccessors();
+}
+
+void RoadDataManager::UpdateDynamicObstacles(float dt)
+{
+    m_dynamicObstacles.clear();
+    m_dynamicObstacles.reserve(m_dynamicObstacleDefs.size());
+    for (DynamicObstacleState &state : m_dynamicObstacleDefs)
+    {
+        Vec3 delta = state.end - state.start;
+        float segLength = delta.Length();
+
+        VehicleCollision::Obstacle obstacle;
+        obstacle.halfLength = state.halfLength;
+        obstacle.halfWidth = state.halfWidth;
+        obstacle.type = VehicleCollision::ObstacleType::Dynamic;
+
+        if (segLength < 0.001f) // start==end: 왕복 구간이 없으니 그 자리에 정지.
+        {
+            obstacle.center = state.start;
+            m_dynamicObstacles.push_back(obstacle);
+            continue;
+        }
+
+        state.traveled += state.speed * dt;
+        float period = segLength * 2.0f; // start->end->start 한 바퀴 길이
+        float phase = std::fmod(state.traveled, period);
+        if (phase < 0.0f)
+            phase += period;
+
+        Vec3 dir = delta * (1.0f / segLength);
+        bool forward = phase <= segLength;
+        float alongSeg = forward ? phase : period - phase; // 왕복 후반부(phase>segLength)는 end->start로 되짚음
+
+        obstacle.center = state.start + dir * alongSeg;
+        Vec3 travelDir = forward ? dir : dir * -1.0f; // atan2(z,x) 규약(ReedsShepp/Car와 동일)
+        obstacle.headingRad = atan2f(travelDir.GetZ(), travelDir.GetX());
+        obstacle.speed = state.speed;
+        m_dynamicObstacles.push_back(obstacle);
+    }
 }
 
 void RoadDataManager::BuildRoadSuccessors()

@@ -26,7 +26,8 @@ private:
         Road,
         Node,
         Marking,
-        Obstacle
+        Obstacle,
+        DynamicObstacle
     };
 
     enum class MarkingLineType
@@ -185,6 +186,18 @@ private:
         float rotation = 0.0f;
     };
 
+    // start~end 구간을 등속 왕복하는 테스트용 동적 장애물. RoadDataManager::DynamicObstacleState와
+    // 필드를 맞췄다(speed는 그 구간을 오가는 스칼라 속도, heading은 저장 안 하고 런타임이 진행방향으로 계산).
+    struct EditDynamicObstacle
+    {
+        int id = -1;
+        DirectX::XMFLOAT3 start{0.0f, 0.0f, 0.0f};
+        DirectX::XMFLOAT3 end{5.0f, 0.0f, 0.0f};
+        float length = 4.0f;
+        float width = 2.0f;
+        float speed = 1.0f;
+    };
+
     // UI windows
     void DrawToolbarWindow();
     void DrawLaneListWindow();
@@ -198,6 +211,8 @@ private:
     void DrawMarkingEditWindow();
     void DrawObstacleListWindow();
     void DrawObstacleEditWindow();
+    void DrawDynamicObstacleListWindow();
+    void DrawDynamicObstacleEditWindow();
 
     // Interaction / rendering
     void UpdateDrag();
@@ -216,12 +231,14 @@ private:
     std::vector<EditNode> m_Nodes;
     std::vector<EditMarking> m_Markings;
     std::vector<EditObstacle> m_Obstacles;
+    std::vector<EditDynamicObstacle> m_DynamicObstacles;
     int m_NextLaneId = 1;
     int m_NextRoadId = 1;
     int m_NextJunctionId = 1;
     int m_NextNodeId = 1;
     int m_NextMarkingId = 1;
     int m_NextObstacleId = 1;
+    int m_NextDynamicObstacleId = 1;
 
     Selection m_Selection = Selection::None;
     int m_SelectedLane = -1;     // index into m_Lanes when m_Selection == Lane
@@ -230,6 +247,7 @@ private:
     int m_SelectedNode = -1;     // index into m_Nodes when m_Selection == Node
     int m_SelectedMarking = -1;  // index into m_Markings when m_Selection == Marking
     int m_SelectedObstacle = -1; // index into m_Obstacles when m_Selection == Obstacle
+    int m_SelectedDynamicObstacle = -1; // index into m_DynamicObstacles when m_Selection == DynamicObstacle
     int m_DraggingPoint = -1;
 
     std::string m_LastSavePath;
@@ -240,6 +258,8 @@ private:
     std::vector<RenderObject> m_RoadRenders;     // reference lines (green) + band marks (ribbons), always shown
     std::vector<RenderObject> m_MarkingRenders;  // marking-line ribbons (solid/dashed), always shown
     std::vector<RenderObject> m_ObstacleRenders; // blue obstacle rectangle outlines, always shown
+    std::vector<RenderObject> m_DynamicObstacleRenders;     // orange dynamic-obstacle footprint quads, always shown
+    std::vector<RenderObject> m_DynamicObstaclePathRenders; // start~end path lines (line topology, drawn with SetRenderLines like m_SplineRenders)
 
     static constexpr float CP_RADIUS = 0.4f;
     static constexpr float NODE_RADIUS = 0.5f;

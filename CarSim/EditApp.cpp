@@ -137,6 +137,13 @@ void EditApp::UpdateDrag()
         pts.push_back(&m_Obstacles[m_SelectedObstacle].position);
         radius = OBSTACLE_MARKER_RADIUS;
     }
+    else if (m_Selection == Selection::DynamicObstacle && m_SelectedDynamicObstacle >= 0 &&
+             m_SelectedDynamicObstacle < (int)m_DynamicObstacles.size())
+    {
+        pts.push_back(&m_DynamicObstacles[m_SelectedDynamicObstacle].start);
+        pts.push_back(&m_DynamicObstacles[m_SelectedDynamicObstacle].end);
+        radius = OBSTACLE_MARKER_RADIUS;
+    }
     else
     {
         // Nothing (draggable) selected -- leave pts empty so the click-handling below falls
@@ -306,6 +313,8 @@ void EditApp::RebuildRenderObjects()
     m_RoadRenders.clear();
     m_MarkingRenders.clear();
     m_ObstacleRenders.clear();
+    m_DynamicObstacleRenders.clear();
+    m_DynamicObstaclePathRenders.clear();
 
     // Every lane's spline (red) is always shown, even while editing something else.
     for (const auto &lane : m_Lanes)
@@ -569,6 +578,77 @@ void EditApp::RebuildRenderObjects()
         ro.SetModel(pPlane);
     }
 
+    // Dynamic-obstacle start/end spheres (draggable, always visible for context): orange,
+    // selected one yellow. Both endpoints of the same obstacle share the marker model.
+    Model *pDynMarker = m_ModelManager.CreateFromGeometry("edit_dyn_obstacle_marker", Geometry::CreateSphere(OBSTACLE_MARKER_RADIUS));
+    pDynMarker->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(1.0f, 0.5f, 0.0f, 1.0f));
+    pDynMarker->materials[0].Set<float>("$Opacity", 1.0f);
+
+    Model *pDynMarkerSel = m_ModelManager.CreateFromGeometry("edit_dyn_obstacle_marker_sel", Geometry::CreateSphere(OBSTACLE_MARKER_RADIUS));
+    pDynMarkerSel->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f));
+    pDynMarkerSel->materials[0].Set<float>("$Opacity", 1.0f);
+
+    for (int i = 0; i < (int)m_DynamicObstacles.size(); ++i)
+    {
+        bool selected = (m_Selection == Selection::DynamicObstacle && i == m_SelectedDynamicObstacle);
+        RenderObject &roStart = m_PointRenders.emplace_back();
+        roStart.SetModel(selected ? pDynMarkerSel : pDynMarker);
+        roStart.GetTransform().SetPosition(m_DynamicObstacles[i].start);
+
+        RenderObject &roEnd = m_PointRenders.emplace_back();
+        roEnd.SetModel(selected ? pDynMarkerSel : pDynMarker);
+        roEnd.GetTransform().SetPosition(m_DynamicObstacles[i].end);
+    }
+
+    // Dynamic-obstacle footprint (filled orange plane at start, oriented toward end) + a line
+    // to end showing the patrol path -- position/size exactly as authored, heading is derived
+    // (RoadDataManager::UpdateDynamicObstacles computes it the same way at runtime).
+    for (int i = 0; i < (int)m_DynamicObstacles.size(); ++i)
+    {
+        const EditDynamicObstacle &obstacle = m_DynamicObstacles[i];
+        XMFLOAT3 forward(obstacle.end.x - obstacle.start.x, 0.0f, obstacle.end.z - obstacle.start.z);
+        float len = std::sqrt(forward.x * forward.x + forward.z * forward.z);
+        if (len > 1e-5f)
+        {
+            forward.x /= len;
+            forward.z /= len;
+        }
+        else
+        {
+            forward = XMFLOAT3(1.0f, 0.0f, 0.0f);
+        }
+        XMFLOAT3 right(-forward.z, 0.0f, forward.x);
+        float halfLength = obstacle.length * 0.5f;
+        float halfWidth = obstacle.width * 0.5f;
+
+        auto corner = [&](float alongSign, float acrossSign)
+        {
+            XMFLOAT3 p(obstacle.start.x + forward.x * halfLength * alongSign + right.x * halfWidth * acrossSign,
+                       obstacle.start.y + 0.1f,
+                       obstacle.start.z + forward.z * halfLength * alongSign + right.z * halfWidth * acrossSign);
+            return p;
+        };
+
+        Model *pPlane = m_ModelManager.CreateFromGeometry(
+            "edit_dyn_obstacle_plane_" + std::to_string(obstacle.id),
+            Geometry::CreateQuad(corner(1.0f, 1.0f), corner(1.0f, -1.0f), corner(-1.0f, -1.0f), corner(-1.0f, 1.0f)));
+        pPlane->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(1.0f, 0.5f, 0.0f, 1.0f));
+        pPlane->materials[0].Set<float>("$Opacity", 1.0f);
+
+        RenderObject &roPlane = m_DynamicObstacleRenders.emplace_back();
+        roPlane.SetModel(pPlane);
+
+        XMFLOAT3 pathStart(obstacle.start.x, obstacle.start.y + 0.1f, obstacle.start.z);
+        XMFLOAT3 pathEnd(obstacle.end.x, obstacle.end.y + 0.1f, obstacle.end.z);
+        Model *pPath = m_ModelManager.CreateFromGeometry(
+            "edit_dyn_obstacle_path_" + std::to_string(obstacle.id), Geometry::CreateLine(pathStart, pathEnd));
+        pPath->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(1.0f, 0.5f, 0.0f, 1.0f));
+        pPath->materials[0].Set<float>("$Opacity", 1.0f);
+
+        RenderObject &roPath = m_DynamicObstaclePathRenders.emplace_back();
+        roPath.SetModel(pPath);
+    }
+
     // Selected lane or marking: control-point spheres (orange), on top of its always-shown
     // spline/ribbon.
     const std::vector<XMFLOAT3> *selectedPoints = nullptr;
@@ -702,6 +782,17 @@ void EditApp::SaveToJson()
         jo["size"] = {o.length, o.width};
         jo["rotation"] = o.rotation;
         root["obstacles"].push_back(jo);
+    }
+
+    root["dynamic_obstacles"] = json::array();
+    for (const auto &d : m_DynamicObstacles)
+    {
+        json jd;
+        jd["start"] = {d.start.x, d.start.y, d.start.z};
+        jd["end"] = {d.end.x, d.end.y, d.end.z};
+        jd["size"] = {d.length, d.width};
+        jd["speed"] = d.speed;
+        root["dynamic_obstacles"].push_back(jd);
     }
 
     root["parking_lanes"] = parkingLanes;
@@ -843,6 +934,7 @@ void EditApp::LoadFromJson(const std::filesystem::path &path)
     m_Lanes.clear();
     m_Nodes.clear();
     m_Obstacles.clear();
+    m_DynamicObstacles.clear();
 
     auto copyStr = [](char *dst, size_t n, const std::string &s)
     {
@@ -1008,6 +1100,27 @@ void EditApp::LoadFromJson(const std::filesystem::path &path)
         m_Obstacles.push_back(o);
     }
 
+    int dynamicObstacleId = 1;
+    for (const auto &jd : root.value("dynamic_obstacles", nlohmann::json::array()))
+    {
+        EditDynamicObstacle d;
+        d.id = dynamicObstacleId++; // data.json엔 id가 없어서 로드 순서로 부여 (obstacles와 동일)
+        const auto &startJson = jd.value("start", nlohmann::json::array());
+        if (startJson.is_array() && startJson.size() >= 3)
+            d.start = XMFLOAT3(startJson[0].get<float>(), startJson[1].get<float>(), startJson[2].get<float>());
+        const auto &endJson = jd.value("end", nlohmann::json::array());
+        if (endJson.is_array() && endJson.size() >= 3)
+            d.end = XMFLOAT3(endJson[0].get<float>(), endJson[1].get<float>(), endJson[2].get<float>());
+        const auto &sizeJson = jd.value("size", nlohmann::json::array());
+        if (sizeJson.is_array() && sizeJson.size() >= 2)
+        {
+            d.length = sizeJson[0].get<float>();
+            d.width = sizeJson[1].get<float>();
+        }
+        d.speed = jd.value("speed", 1.0f);
+        m_DynamicObstacles.push_back(d);
+    }
+
     // Reset id counters so newly-added items don't collide with loaded ones.
     m_NextLaneId = 1;
     for (const auto &l : m_Lanes)
@@ -1024,6 +1137,9 @@ void EditApp::LoadFromJson(const std::filesystem::path &path)
     m_NextObstacleId = 1;
     for (const auto &o : m_Obstacles)
         m_NextObstacleId = std::max(m_NextObstacleId, o.id + 1);
+    m_NextDynamicObstacleId = 1;
+    for (const auto &d : m_DynamicObstacles)
+        m_NextDynamicObstacleId = std::max(m_NextDynamicObstacleId, d.id + 1);
 
     m_Selection = Selection::None;
     m_SelectedLane = -1;
@@ -1031,6 +1147,7 @@ void EditApp::LoadFromJson(const std::filesystem::path &path)
     m_SelectedBand = -1;
     m_SelectedNode = -1;
     m_SelectedObstacle = -1;
+    m_SelectedDynamicObstacle = -1;
     m_DraggingPoint = -1;
 
     m_LastSavePath = "Loaded: " + path.filename().string();
@@ -1156,6 +1273,7 @@ void EditApp::UpdateUI(float dt)
     DrawNodeListWindow();
     DrawMarkingListWindow();
     DrawObstacleListWindow();
+    DrawDynamicObstacleListWindow();
 
     if (m_Selection == Selection::Lane)
         DrawLaneEditWindow();
@@ -1167,6 +1285,8 @@ void EditApp::UpdateUI(float dt)
         DrawMarkingEditWindow();
     else if (m_Selection == Selection::Obstacle)
         DrawObstacleEditWindow();
+    else if (m_Selection == Selection::DynamicObstacle)
+        DrawDynamicObstacleEditWindow();
 }
 
 void EditApp::DrawToolbarWindow()
@@ -2056,6 +2176,92 @@ void EditApp::DrawObstacleEditWindow()
         m_Selection = Selection::None;
 }
 
+void EditApp::DrawDynamicObstacleListWindow()
+{
+    if (ImGui::Begin("Dynamic Obstacles"))
+    {
+        if (ImGui::Button("Add Dynamic Obstacle"))
+        {
+            EditDynamicObstacle obstacle;
+            obstacle.id = m_NextDynamicObstacleId++;
+            m_DynamicObstacles.push_back(obstacle);
+            m_Selection = Selection::DynamicObstacle;
+            m_SelectedDynamicObstacle = (int)m_DynamicObstacles.size() - 1;
+        }
+
+        ImGui::Separator();
+
+        for (int i = 0; i < (int)m_DynamicObstacles.size(); ++i)
+        {
+            char label[64];
+            snprintf(label, sizeof(label), "Dynamic Obstacle %d", m_DynamicObstacles[i].id);
+            bool selected = (m_Selection == Selection::DynamicObstacle && i == m_SelectedDynamicObstacle);
+
+            ImGui::PushID(i);
+            float avail = ImGui::GetContentRegionAvail().x;
+            if (ImGui::Selectable(label, selected, 0, ImVec2(avail - 28.0f, 0.0f)))
+            {
+                m_Selection = Selection::DynamicObstacle;
+                m_SelectedDynamicObstacle = i;
+            }
+            ImGui::SameLine();
+            bool erased = ImGui::SmallButton("X");
+            ImGui::PopID();
+
+            if (erased)
+            {
+                m_DynamicObstacles.erase(m_DynamicObstacles.begin() + i);
+                if (m_Selection == Selection::DynamicObstacle)
+                {
+                    if (m_SelectedDynamicObstacle == i)
+                    {
+                        m_Selection = Selection::None;
+                        m_SelectedDynamicObstacle = -1;
+                    }
+                    else if (m_SelectedDynamicObstacle > i)
+                    {
+                        --m_SelectedDynamicObstacle;
+                    }
+                }
+                break;
+            }
+        }
+    }
+    ImGui::End();
+}
+
+void EditApp::DrawDynamicObstacleEditWindow()
+{
+    if (m_SelectedDynamicObstacle < 0 || m_SelectedDynamicObstacle >= (int)m_DynamicObstacles.size())
+    {
+        m_Selection = Selection::None;
+        return;
+    }
+
+    EditDynamicObstacle &obstacle = m_DynamicObstacles[m_SelectedDynamicObstacle];
+    bool open = true;
+    if (ImGui::Begin("Dynamic Obstacle Edit", &open))
+    {
+        ImGui::Text("Dynamic Obstacle ID: %d", obstacle.id);
+        float start[3] = {obstacle.start.x, obstacle.start.y, obstacle.start.z};
+        if (ImGui::InputFloat3("Start", start))
+            obstacle.start = XMFLOAT3(start[0], start[1], start[2]);
+        float end[3] = {obstacle.end.x, obstacle.end.y, obstacle.end.z};
+        if (ImGui::InputFloat3("End", end))
+            obstacle.end = XMFLOAT3(end[0], end[1], end[2]);
+        ImGui::TextDisabled("(or drag the orange spheres)");
+
+        ImGui::DragFloat("Length (heading dir)", &obstacle.length, 0.1f, 0.1f, 100.0f, "%.2f");
+        ImGui::DragFloat("Width", &obstacle.width, 0.1f, 0.1f, 100.0f, "%.2f");
+        ImGui::DragFloat("Speed (m/s)", &obstacle.speed, 0.1f, 0.0f, 50.0f, "%.2f");
+        ImGui::TextDisabled("Patrols start<->end at constant speed; heading follows travel direction.");
+    }
+    ImGui::End();
+
+    if (!open)
+        m_Selection = Selection::None;
+}
+
 void EditApp::DrawScene()
 {
     // Create render target view for the back buffer (mirrors GameApp::DrawScene).
@@ -2086,6 +2292,8 @@ void EditApp::DrawScene()
         ro.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     for (auto &obstacle : m_ObstacleRenders)
         obstacle.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
+    for (auto &ro : m_DynamicObstacleRenders)
+        ro.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
 
     m_BasicEffect.SetRenderLines();
     if (m_ShowGridXZ)
@@ -2096,6 +2304,8 @@ void EditApp::DrawScene()
         m_GridYZ.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     for (auto &spline : m_SplineRenders)
         spline.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
+    for (auto &ro : m_DynamicObstaclePathRenders)
+        ro.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     m_BasicEffect.SetRenderDefault();
 
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());

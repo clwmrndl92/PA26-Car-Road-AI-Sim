@@ -219,7 +219,7 @@ void Car::OnModeEnter(Mode prev)
     if (m_mode == Mode::Drive)
     {
         SetSubMode(SubMode::D_Normal);
-        m_planAccel = 0.0f; // 직전 Drive의 목표가속도가 새 주행에 새지 않게 리셋
+        m_planAccelDebug = 0.0f; // 직전 Drive의 목표가속도가 새 주행에 새지 않게 리셋
         // 회피 상태도 같이 리셋한다 -- 특히 backingUp을 들고 나가면 다음 Drive에서 ReverseSegment가
         // 이미 Abort된 채라 영영 끝나지 않는 후진 대기에 갇힌다.
         m_avoid = AvoidState{};
@@ -358,7 +358,7 @@ void Car::MaintainRoamingPath()
 void Car::UpdatePark()
 {
     // 주차 비활성(stub). Park 모드는 진입하지 않는다.
-    Accelerate(0.0f);
+    AccelerateVel(0.0f);
 }
 
 void Car::BeginParkPlan() {}
@@ -416,7 +416,7 @@ void Car::UpdateStop()
     {
         if (m_currentRoad != nullptr)
             Steer(PurePursuit(m_currentSpline.GetLookaheadPoint(GetRigidbodyPosition(), ComputeLookaheadDistance())));
-        Accelerate(0.0f);
+        AccelerateVel(0.0f);
         return;
     }
 
@@ -516,30 +516,36 @@ void Car::DriveControl()
     float targetSteer = PurePursuit(target);
     Steer(targetSteer);
 
-    // 레이/차체 스윕이 잡은 전방 위험이 상용제동으로는 못 서는 거리까지 들어오면 IDM을 건너뛰고 바로
-    // 비상제동. (IDM 제약 목록은 0.2초 주기 스캔이라, 방금 끼어든 차처럼 프레임 단위 반응이 필요한 경우가 남는다.)
-    float hazardDistance = m_sensor.frontDistance;
-    if (m_sensor.bodyContactDistance >= 0.0f && (hazardDistance < 0.0f || m_sensor.bodyContactDistance < hazardDistance))
-        hazardDistance = m_sensor.bodyContactDistance;
-    if (m_speed > 0.1f && hazardDistance >= 0.0f &&
-        hazardDistance < m_speed * m_speed / (2.0f * m_maxEmergBrake) + MIN_SAFE_GAP * 0.5f)
+    bool IsEmergeBrake = false;
+    if (IsEmergeBrake)
     {
+        // // 레이/차체 스윕이 잡은 전방 위험이 상용제동으로는 못 서는 거리까지 들어오면 IDM을 건너뛰고 바로
+        // // 비상제동. (IDM 제약 목록은 0.2초 주기 스캔이라, 방금 끼어든 차처럼 프레임 단위 반응이 필요한 경우가 남는다.)
+        // float hazardDistance = m_sensor.frontDistance;
+        // if (m_sensor.bodyContactDistance >= 0.0f && (hazardDistance < 0.0f || m_sensor.bodyContactDistance < hazardDistance))
+        //     hazardDistance = m_sensor.bodyContactDistance;
+        // if (m_speed > 0.1f && hazardDistance >= 0.0f &&
+        //     hazardDistance < m_speed * m_speed / (2.0f * m_maxEmergBrake) + MIN_SAFE_GAP * 0.5f)
+        // {
+        //     EmergBrake();
+        //     return;
+        // }
         EmergBrake();
-        m_planAccel = -m_maxEmergBrake; // 디버그 UI 표시용 캐시
         return;
     }
 
     // 종방향: 리더/제약 목록은 행동 계획(UpdateBehaviorPlan, 0.2초 주기)이 스캔해두지만, IDM 가속도 자체는
     // 매프레임 다시 계산한다(앞차 속도/가속도/gap을 그때그때 최신값으로) -- ComputeIdmAcceleration 참고.
     float distanceOffset = (GetPosition() - m_planScanPosition).Length(); // 스캔 이후 이동거리(정적 제약 gap 보정용)
-    float aCmd = ComputeIdmAcceleration(m_lastRoadSamples, m_lastIdmParams, distanceOffset);
+    float accelIDM = ComputeIdmAcceleration(m_lastRoadSamples, m_lastIdmParams, distanceOffset);
     float steerSpeedCap = CalcMaxSpeed(targetSteer); // 이번 프레임 조향각이 물리적으로 허용하는 한계속도(커브 안에서 반응형 유지)
     if (m_speed > steerSpeedCap)
-        aCmd = std::min(aCmd, -m_maxBrake);
-    m_planAccel = aCmd; // 디버그 UI 표시용 캐시
-    CommandAcceleration(aCmd);
+        accelIDM = std::min(accelIDM, -m_maxBrake);
 
-    // Debug: Pure Pursuit 목표점(전방주시 지점) 표시
+    // IDM이 뱉은 목표가속도를 저크제한으로만 수렴
+    Accelerate(accelIDM);
+
+    // Debug : Pure Pursuit 목표점(전방주시 지점) 표시
     DirectX::XMFLOAT3 targetMarkerPos = ToXMFLOAT3(target);
     targetMarkerPos.y = GetPosition().GetY() + 0.2f;
     m_targetMarker.GetTransform().SetPosition(targetMarkerPos);
@@ -554,6 +560,18 @@ std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistan
     constexpr float ROAD_SAMPLE_SPACING = 5.0f; // 도로 스캔 샘플 간격 (m)
 
     Vec3 calPosition = GetPosition();
+
+    // 정적 장애물(맵 고정): 룩어헤드 범위 밖은 미리 걸러서 아래 프로브 판정 비용을 줄인다.
+    std::vector<VehicleCollision::Obstacle> obstacles;
+    {
+        float reach = lookDistance + GetLength();
+        for (const VehicleCollision::Obstacle &obstacle : RoadDataManager::Get().GetObstacles())
+        {
+            if ((obstacle.center - calPosition).Length() > reach + obstacle.halfLength + obstacle.halfWidth)
+                continue;
+            obstacles.push_back(obstacle);
+        }
+    }
 
     std::vector<RoadSpeedSample> samples;
     samples.reserve(static_cast<size_t>(lookDistance / ROAD_SAMPLE_SPACING) + 4);
@@ -596,6 +614,34 @@ std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistan
                                                  ? (signalNode->position - calPosition).Length()
                                                  : traveledDistance + (nodeT - startT) * splineLength;
                         samples.push_back({signalNode->position, nodeDistance - MIN_SAFE_GAP, 0.0f});
+                    }
+                }
+            }
+
+            // 정적 장애물: ROAD_SAMPLE_SPACING 간격으로 경로 위에 프로브 박스를 두고, 겹치는 장애물을 만나면
+            // 그 앞에 0속도 샘플(가상 정지선)을 세운다. 이 세그먼트에서 가장 가까운 것 하나면 충분해 찾는
+            // 즉시 멈춘다(더 먼 장애물은 다음 프로브 지점, 또는 다음 세그먼트 순회에서 처리됨).
+            if (!obstacles.empty() && splineLength > 0.0f)
+            {
+                constexpr float OBSTACLE_PROBE_MARGIN = 0.25f;
+                int sampleCount = static_cast<int>(walkDistance / ROAD_SAMPLE_SPACING) + 1;
+                for (int index = 0; index <= sampleCount; ++index)
+                {
+                    float localDistance = std::min(static_cast<float>(index) * ROAD_SAMPLE_SPACING, walkDistance);
+                    float t = std::clamp(startT + localDistance / splineLength, 0.0f, 1.0f);
+                    Vec3 probePos = spline->GetPositionAt(t);
+                    Vec3 probeDir = spline->GetDirectionAt(t);
+                    VehicleCollision::VehicleShape probeShape;
+                    probeShape.pivotToCenter = 0.0f;
+                    probeShape.halfLength = ROAD_SAMPLE_SPACING * 0.5f;
+                    probeShape.halfWidth = m_halfExtents.GetX() + OBSTACLE_PROBE_MARGIN;
+                    float probeHeading = atan2f(probeDir.GetZ(), probeDir.GetX());
+                    if (VehicleCollision::IsColliding(probePos, probeHeading, obstacles, probeShape))
+                    {
+                        // 프로브 안 어디에 걸렸는지는 모르니 프로브 반길이 + 안전마진만큼 앞에서 선다.
+                        float stopDistance = traveledDistance + localDistance - ROAD_SAMPLE_SPACING * 0.5f - MIN_SAFE_GAP;
+                        samples.push_back({probePos, stopDistance, 0.0f}); // 거리<0이면 캡이 0으로 내려가 장애물 앞에서 크리핑하지 않는다
+                        break;
                     }
                 }
             }
@@ -1019,7 +1065,7 @@ float Car::ComputeLateralTarget(const std::vector<NearbyCar> &nearbyCars, const 
         long adjIdx = static_cast<long>(curIdx) + di;
         if (adjIdx < 0 || adjIdx >= static_cast<long>(bands.size()))
             continue;
-            
+
         const LaneBand &adjBand = *bands[adjIdx];
         LaneNeighbors nbr = GatherLaneNeighbors(nearbyCars, refLine, adjBand.centerOffset, adjBand.width * 0.5f, egoS);
         const Mobil::VehicleState &newLeader = nbr.hasLeader ? nbr.leader : farLeader;
@@ -1071,6 +1117,15 @@ std::vector<VehicleCollision::Obstacle> Car::BuildSensorObstacles() const
         obstacles.push_back(obstacle);
     }
 
+    // 테스트용 왕복 동적 장애물(RoadDataManager::UpdateDynamicObstacles가 매프레임 갱신) -- Car가 아니라
+    // m_lastNearbyCars엔 안 잡히므로 여기서 별도로 합친다.
+    for (const VehicleCollision::Obstacle &obstacle : RoadDataManager::Get().GetDynamicObstacles())
+    {
+        if ((obstacle.center - egoPosition).Length() > reach + obstacle.halfLength + obstacle.halfWidth)
+            continue;
+        obstacles.push_back(obstacle);
+    }
+
     obstacles.reserve(obstacles.size() + m_lastNearbyCars.size());
     for (const NearbyCar &nearbyCar : m_lastNearbyCars)
     {
@@ -1081,6 +1136,7 @@ std::vector<VehicleCollision::Obstacle> Car::BuildSensorObstacles() const
         obstacle.halfWidth = other->m_halfExtents.GetX();
         obstacle.headingRad = DirectionToAngleRad(other->GetForwardAxis());
         obstacle.speed = other->GetSpeed();
+        obstacle.type = VehicleCollision::ObstacleType::Dynamic;
         obstacles.push_back(obstacle);
     }
     return obstacles;
@@ -1100,11 +1156,12 @@ Car::SensorScan Car::ScanSensors(const std::vector<VehicleCollision::Obstacle> &
     Vec3 frontCenter = center + forward * halfLength;
     Vec3 frontLeft = frontCenter - right * halfWidth;
     Vec3 frontRight = frontCenter + right * halfWidth;
-    Vec3 sideLeft = center - right * halfWidth;
-    Vec3 sideRight = center + right * halfWidth;
-    Vec3 rearCenter = center - forward * halfLength;
-    Vec3 rearLeft = rearCenter - right * halfWidth;
-    Vec3 rearRight = rearCenter + right * halfWidth;
+    // 대각/측면/후방 레이 기준점 -- UpdateAvoidance의 상태전이가 꺼져 있는 동안은 안 쓴다(아래 2)+3)+4) 참고).
+    // Vec3 sideLeft = center - right * halfWidth;
+    // Vec3 sideRight = center + right * halfWidth;
+    // Vec3 rearCenter = center - forward * halfLength;
+    // Vec3 rearLeft = rearCenter - right * halfWidth;
+    // Vec3 rearRight = rearCenter + right * halfWidth;
 
     // 전방 레이 길이 = 지금 속도로 상용제동해서 설 수 있는 거리 + 표준 간격. 정지 중에도 바로 앞은 보게 최소치를 둔다.
     float frontLength = std::clamp(m_speed * m_speed / (2.0f * m_maxBrake) + MIN_SAFE_GAP,
@@ -1163,10 +1220,10 @@ Car::SensorScan Car::ScanSensors(const std::vector<VehicleCollision::Obstacle> &
         {frontCenter, 0.0f, farLength},
         {frontLeft, 0.0f, farLength},
         {frontRight, 0.0f, farLength},
-        {frontCenter, ToRadians(15.0f), frontLength},
-        {frontCenter, ToRadians(-15.0f), frontLength},
-        {frontCenter, ToRadians(30.0f), frontLength},
-        {frontCenter, ToRadians(-30.0f), frontLength},
+        {frontRight, ToRadians(15.0f), frontLength},
+        {frontLeft, ToRadians(-15.0f), frontLength},
+        {frontRight, ToRadians(30.0f), frontLength},
+        {frontLeft, ToRadians(-30.0f), frontLength},
     };
     for (const FrontRay &frontRay : frontRays)
     {
@@ -1199,6 +1256,10 @@ Car::SensorScan Car::ScanSensors(const std::vector<VehicleCollision::Obstacle> &
             scan.frontBlocked = true;
     }
 
+    // 2) 대각선 + 3) 측면 + 4) 후방: leftBlocked/rightBlocked/sideNear/rearDistance는 UpdateAvoidance의
+    // 상태전이(회피 진입/복귀/후진 판단) 전용이라, 그게 꺼져 있는 동안은 레이 자체를 쏘지 않는다.
+    // 되살릴 때 이 블록과 위 기준점(sideLeft 등) 주석을 함께 해제.
+    /*
     // 2) 대각선(앞 꼭지점에서 45/70도) + 3) 측면(앞 꼭지점/측면 중점/뒤 꼭지점에서 90도).
     //    기본은 90도 레이만 막힘으로 본다 -- 대각선 레이는 정면의 장애물 자체를 스치기 쉬워서, 그걸
     //    막힘으로 치면 정면에 뭔가 있을 때 양쪽 다 막힌 걸로 나와 회피를 아예 못 하게 된다.
@@ -1238,6 +1299,7 @@ Car::SensorScan Car::ScanSensors(const std::vector<VehicleCollision::Obstacle> &
         if (hit != nullptr && (scan.rearDistance < 0.0f || distance < scan.rearDistance))
             scan.rearDistance = distance;
     }
+    */
 
     return scan;
 }
@@ -1360,12 +1422,16 @@ void Car::UpdateAvoidance()
 
     std::vector<VehicleCollision::Obstacle> obstacles = BuildSensorObstacles();
     m_sensor = ScanSensors(obstacles);
+    RebuildSensorRender();
+
+    // 회피 재구현 중 -- 레이스캔 -> IDM 제약(AppendSensorConstraintSample)/MOBIL 리더 반영만 남기고
+    // 트리거/오프셋 회피/후진 등 나머지는 아래에서 하나씩 다시 켠다.
+    /*
     // 레이 스캔이 놓치는 '회전 중 차체가 쓸고 가는 면적'을 OBB 스윕으로 보강한다. 접촉이 예고되면
     // 제동 근거(AppendSensorConstraintSample / DriveControl)이자 회피 트리거로 같이 쓴다.
     m_sensor.bodyContactDistance = PredictBodyContact(obstacles);
     if (m_sensor.bodyContactDistance >= 0.0f)
         m_sensor.frontBlocked = true;
-    RebuildSensorRender();
 
     // 실제 물리 충돌은 레이가 못 본 각도(대각선 꼭짓점 등)로 박은 경우까지 잡는 최후의 안전망이다.
     // 레이 판정과 무관하게 여기서 끊어주지 않으면, 계획상으론 아직 '회피 진행 중'이라 계속 밀어붙인다.
@@ -1492,6 +1558,7 @@ void Car::UpdateAvoidance()
 
     // 좌우 어느 쪽으로도 못 피한다.
     HandleAvoidStuck();
+    */
 }
 
 // 회피가 막혔을 때: 그 자리에 정지하고(경적은 UpdateHorn이 알아서 울린다), 뒤가 비어 있으면 차 길이
