@@ -429,8 +429,7 @@ void Car::UpdateStop()
 
     if (m_speed > 0.01f)
     {
-        if (m_currentRoad != nullptr)
-            Steer(PurePursuit(m_currentSpline.GetLookaheadPoint(GetRigidbodyPosition(), ComputeLookaheadDistance())));
+        Steer(0.0f);
         AccelerateVel(0.0f);
         return;
     }
@@ -534,20 +533,13 @@ bool Car::CheckPath()
     return true;
 }
 
-float Car::ComputeLookaheadDistance() const
-{
-    if (!m_currentSpline.IsStraight())
-    {
-        return 5;
-    }
-    constexpr float LOOKAHEAD_TIME = 1.5f;
-    return m_speed * LOOKAHEAD_TIME;
-}
-
 void Car::DriveControl()
 {
     const Spline &spline = m_currentSpline;
-    Vec3 target = spline.GetLookaheadPoint(GetRigidbodyPosition(), ComputeLookaheadDistance());
+
+    constexpr float LOOKAHEAD_TIME = 1.5f;
+    float lookaheadDistance = m_currentSpline.IsStraight() ? m_speed * LOOKAHEAD_TIME : 5;
+    Vec3 target = spline.GetLookaheadPoint(GetRigidbodyPosition(), lookaheadDistance);
     float targetSteer = PurePursuit(target);
     Steer(targetSteer);
 

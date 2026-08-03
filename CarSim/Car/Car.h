@@ -191,7 +191,6 @@ private:
     bool IsHornSituation() const;     // Drive 중 (빨간불 대기가 아닌) 정지 상태인가
     bool KnowsRedSignalAhead() const; // 경로 앞쪽 가장 가까운 신호가 빨강인 걸 아는 상태인가(그럼 경적 안 울림)
 
-    float ComputeLookaheadDistance() const;
 #pragma endregion
 
 #pragma region BehaviorPlan
@@ -321,13 +320,13 @@ private:
     };
 
     // Drive 서브모드별 틱. UpdateDrive가 m_subMode로 갈라 부른다 -- 어느 함수가 도는지가 곧 현재 상태다.
-    void UpdateSensors();        // (공통) 장애물 목록 수집 + 레이 스캔 + 차체접촉/교차충돌 예측
-    bool HandleContactPending(); // (공통) 실제 물리 충돌 뒷수습. 서브모드와 무관하게 먼저 끊는다
-    bool UpdateBackupState();    // (공통) 후진 매뉴버 진행/종료. 도는 동안 서브모드 틱을 건너뛴다
-    void DecideAvoidance();      // D_Normal: 위협을 분류해 다음 서브모드를 고른다
-    void UpdateWaitObstacle();   // D_WaitObstacle: 정지 대기 유지/해제
-    void UpdateAvoid();          // D_Avoid: 오프셋 회피 재계획/복귀/종료
-    void UpdateLaneChange();     // D_LaneChange: 차선변경 진행/취소/완료
+    void UpdateSensors();                   // (공통) 장애물 목록 수집 + 레이 스캔 + 차체접촉/교차충돌 예측
+    bool HandleContactPending();            // (공통) 실제 물리 충돌 뒷수습. 서브모드와 무관하게 먼저 끊는다
+    bool UpdateBackupState();               // (공통) 후진 매뉴버 진행/종료. 도는 동안 서브모드 틱을 건너뛴다
+    void DecideAvoidance();                 // D_Normal: 위협을 분류해 다음 서브모드를 고른다
+    void UpdateWaitObstacle();              // D_WaitObstacle: 정지 대기 유지/해제
+    void UpdateAvoid();                     // D_Avoid: 오프셋 회피 재계획/복귀/종료
+    void UpdateLaneChange();                // D_LaneChange: 차선변경 진행/취소/완료
     void HandleAvoidStuck();                // 회피 불가: 그 자리 정지 + 뒤가 비었으면 후진(최초 탐색/재탐색 실패가 공유)
     ThreatKind ClassifyFrontThreat() const; // 전방 최근접 히트를 차/동적/정적으로 분류
     bool IsDynamicThreatClear() const;      // 동적 장애물이 내가 닿기 전에 진로를 비우는가(TTC)
