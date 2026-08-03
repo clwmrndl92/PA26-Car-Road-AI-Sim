@@ -338,14 +338,9 @@ private:
     // '그 차로 자체가 뚫렸나'를 본다 -- 3차로에서 1차로로 갈 때 중간 2차로가 막혔다고 1차로까지
     // 못 쓰는 차로로 판정해버리면 갈 곳이 없어져 후진만 반복한다.
     bool IsBandClearAhead(float bandCenter, float bandHalfWidth) const;
-    // 정지 장애물이 걸쳐 있지 않은 driving 밴드(차로 중심 d)를 현재 차로에서 가까운 순으로 찾는다.
-    bool FindPassableBand(float &outOffset) const;
-    // 지금 속도/Lerp 비율로 차선 하나를 갈아타는 데 필요한 종방향 거리(m). 남은 거리가 이보다 짧으면 차선변경으로는 못 피한다.
-    float EstimateLaneChangeDistance() const;
-    // targetOffset 쪽으로 '한 차로만' 이동하는 인접 밴드 중심을 고르고, 그 진입이 안전한지까지 본다.
-    bool PickAdjacentBandToward(float targetOffset, float &outOffset) const;
     // 그 차로에 들어갔을 때 앞차/뒤차를 모두 감당할 수 있는가. IsSafeLaneEntry(뒤차 기준)에 앞차 gap 검사를
-    // 더한 것 -- 회피용 차선변경은 MOBIL 유인 기준을 안 거치므로 앞차를 봐 주는 곳이 여기밖에 없다.
+    // 더한 것. 차선변경 결정 자체는 MOBIL(ComputeLateralTarget)이 다 하므로, 여기서는 진행 중인
+    // D_LaneChange가 도중에 막혔는지(UpdateLaneChange) 확인하는 용도로만 쓰인다.
     bool IsLaneEntryClear(float targetOffset) const;
     Vec3 GetBodyCenter() const;                                           // 콜라이더(차체 사각)의 중심 -- 레이 원점/OBB 판정 기준
     std::vector<VehicleCollision::Obstacle> BuildSensorObstacles() const; // 정적 장애물 + 주변 차를 OBB 목록으로
@@ -470,7 +465,6 @@ private:
     static constexpr float AVOID_LOW_SPEED = 18.26f / 3.6f;
     static constexpr float AVOID_TTC_MARGIN = 1.5f;       // 동적 장애물이 진로를 비우는 시각보다 이만큼 더 늦게 닿아야 그냥 통과(s)
     static constexpr float AVOID_WAIT_TIMEOUT = 5.0f;     // 정지 대기가 이만큼 이어지면 '안 비켜준다'로 보고 정적 취급(회피 시도)
-    static constexpr float AVOID_LANE_CHANGE_LEAD = 1.3f; // 차선변경 소요거리에 이 배수만큼 여유가 있어야 차선변경으로 피한다
     static constexpr float AVOID_TRIGGER_DELAY = 0.6f;    // 전방이 이만큼 계속 막혀 있어야 회피 시작(s) -- 순간 오검출로 안 흔들리게
     static constexpr float AVOID_CLEAR_DELAY = 0.5f;      // 레이가 이만큼 계속 깨끗해야 원래 차로로 복귀(s)
     static constexpr float AVOID_REPLAN_INTERVAL = 0.5f;  // 회피 중 오프셋 재탐색 최소 간격(s) -- 좌/우 진동 방지

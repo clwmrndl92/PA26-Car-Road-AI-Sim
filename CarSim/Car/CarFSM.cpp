@@ -1045,6 +1045,11 @@ void Car::UpdateDrivePlan()
             targetOffset = laneCenter;
         }
 
+        if (isLaneChange)
+        {
+            m_avoid.laneOffset = laneCenter;
+            m_avoid.laneChangeTarget = targetOffset;
+        }
         SetSubMode(isLaneChange ? SubMode::D_LaneChange : SubMode::D_Normal);
     }
     m_currentOffset += (targetOffset - m_currentOffset) * m_personality.laneChangeLerpAlpha;
@@ -1608,17 +1613,6 @@ bool Car::IsDynamicThreatClear() const
     return timeToReach > timeToClear + AVOID_TTC_MARGIN;
 }
 
-// 지금 속도/Lerp 비율로 차선 하나를 갈아타는 데 필요한 종방향 거리. Lerp는 지수수렴이라 잔차 10%까지를
-// '갈아탔다'로 보고 그 스텝 수(BEHAVIOR_PLAN_INTERVAL마다 한 번)를 거리로 환산한다.
-float Car::EstimateLaneChangeDistance() const
-{
-    float alpha = std::clamp(m_personality.laneChangeLerpAlpha, 0.01f, 0.99f);
-    float steps = std::log(0.1f) / std::log(1.0f - alpha);
-    // 실제 속도로 잰다. 최저속을 하한으로 잡으면 장애물 앞에 멈춰선 차가 "차선변경할 거리가 없다"고
-    // 판정해 회피로도 못 가고 후진만 반복한다 -- Lerp는 시간 기준이라 정지 상태에선 거의 제자리에서 돈다.
-    return steps * BEHAVIOR_PLAN_INTERVAL * m_speed;
-}
-
 // 그 차로 앞쪽이 비어 있는가. m_stationaryObstacles는 이미 센서 사거리로 잘려 있으므로 따로 룩어헤드를
 // 두지 않는다. 장애물이 밴드에 걸치기만 해도 막힌 것으로 본다(ProjectObstacle의 횡방향 반폭 기준).
 bool Car::IsBandClearAhead(float bandCenter, float bandHalfWidth) const
@@ -1640,34 +1634,6 @@ bool Car::IsBandClearAhead(float bandCenter, float bandHalfWidth) const
             return false;
     }
     return true;
-}
-
-// 앞이 뚫린 driving 밴드를 현재 차로에서 가까운 순으로 찾는다. '거기까지 가는 궤적'이 아니라 '그 차로
-// 자체'를 보는 게 핵심 -- 궤적으로 판정하면 중간 차로가 막혔을 때 그 너머 뚫린 차로까지 같이 탈락한다.
-bool Car::FindPassableBand(float &outOffset) const
-{
-    const LaneSection *sec = RoadDataManager::Get().GetLateralProfile(m_currentRoad, 0.0f);
-    if (sec == nullptr || sec->bands.empty())
-        return false;
-
-    std::vector<const LaneBand *> bands;
-    for (const LaneBand &b : sec->bands)
-        if (b.type == LaneType::Driving)
-            bands.push_back(&b);
-    // 현재 오프셋에서 가까운 밴드부터 검사 -- 굳이 멀리 건너갈 이유가 없다.
-    std::sort(bands.begin(), bands.end(), [&](const LaneBand *a, const LaneBand *b)
-              { return std::fabs(a->centerOffset - m_currentOffset) < std::fabs(b->centerOffset - m_currentOffset); });
-
-    for (const LaneBand *band : bands)
-    {
-        if (std::fabs(band->centerOffset - m_currentOffset) < AVOID_MIN_SHIFT)
-            continue; // 지금 있는 차로 -- 여기가 막혀서 찾는 중이다
-        if (!IsBandClearAhead(band->centerOffset, band->width * 0.5f))
-            continue;
-        outOffset = band->centerOffset;
-        return true;
-    }
-    return false;
 }
 
 // 그 차로에 들어가도 되는가: 뒤차(IsSafeLaneEntry) + 앞차(그 뒤에 붙었을 때 내가 밟을 감속)
@@ -1699,39 +1665,6 @@ bool Car::IsLaneEntryClear(float targetOffset) const
             return false; // 그 차 뒤에 붙으려면 안전한계보다 세게 밟아야 한다
     }
     return IsSafeLaneEntry(m_currentRoad, targetOffset, m_lastNearbyCars);
-}
-
-// targetOffset 방향으로 '한 칸만' 이동하는 인접 밴드를 고른다.
-bool Car::PickAdjacentBandToward(float targetOffset, float &outOffset) const
-{
-    const LaneSection *sec = RoadDataManager::Get().GetLateralProfile(m_currentRoad, 0.0f);
-    if (sec == nullptr || sec->bands.empty())
-        return false;
-
-    std::vector<const LaneBand *> bands;
-    for (const LaneBand &b : sec->bands)
-        if (b.type == LaneType::Driving)
-            bands.push_back(&b);
-    if (bands.empty())
-        return false;
-    std::sort(bands.begin(), bands.end(), [](const LaneBand *a, const LaneBand *b)
-              { return a->centerOffset < b->centerOffset; });
-
-    size_t curIdx = 0;
-    for (size_t i = 1; i < bands.size(); ++i)
-        if (std::fabs(m_currentOffset - bands[i]->centerOffset) < std::fabs(m_currentOffset - bands[curIdx]->centerOffset))
-            curIdx = i;
-
-    long step = (targetOffset > bands[curIdx]->centerOffset) ? 1 : -1;
-    long adjIdx = static_cast<long>(curIdx) + step;
-    if (adjIdx < 0 || adjIdx >= static_cast<long>(bands.size()))
-        return false;
-
-    // 중간 차로가 막혀 있으면 거기 설 수가 없다 -- false를 줘서 호출부가 뚫린 차로까지 한 번에 건너가게 한다.
-    if (!IsBandClearAhead(bands[adjIdx]->centerOffset, bands[adjIdx]->width * 0.5f))
-        return false;
-    outOffset = bands[adjIdx]->centerOffset;
-    return true;
 }
 
 // 정지 대기 유지/해제. 해제는 "레이에서 사라짐"이 원칙이지만, 정지하면 전방 레이가 AVOID_FRONT_RAY_MIN까지
@@ -1896,9 +1829,10 @@ void Car::UpdateAvoid()
 }
 
 // D_LaneChange: 목표 차로에 닿으면 끝(아직 막혀 있으면 다음 판단에서 다시 트리거).
+// MOBIL 자발적 차선변경만 여기로 들어온다(장애물 회피는 D_Avoid) -- 완만한 Lerp라 저속 강제가 필요 없다.
+// 급조향이 실제로 필요해지면 DriveControl의 steerSpeedCap이 알아서 감속시킨다.
 void Car::UpdateLaneChange()
 {
-    m_speedCap = AVOID_LOW_SPEED;
     bool arrived = std::fabs(m_currentOffset - m_avoid.laneChangeTarget) < AVOID_RETURN_TOLERANCE;
     // 아직 원래 차로 쪽에 더 가까울 때만 취소
     bool canAbort = std::fabs(m_currentOffset - m_avoid.laneOffset) <
@@ -1953,36 +1887,11 @@ void Car::DecideAvoidance()
         return;
     }
 
-    float laneCenter = m_currentOffset;
-    ComputeLateralTarget(m_lastNearbyCars, m_lastIdmParams, &laneCenter);
-
-    // 통과할 수 있는 차로가 있으면 차로 사이를 걸치는 회피까지 갈 필요가 없다 -- 정상 차선변경으로 피한다.
-    // 단, 차선변경은 Lerp라 시간이 걸린다: 남은 거리가 모자라면 걸친 채로 장애물에 닿으므로 바로 회피로 간다.
-    float passableOffset = 0.0f;
-    bool hasRoomToChange = m_sensor.frontDistance < 0.0f ||
-                           m_sensor.frontDistance > EstimateLaneChangeDistance() * AVOID_LANE_CHANGE_LEAD;
-    // 차선변경은 항상 한 칸씩만 한다. 중간 차로까지 막혀 있으면(두 차로를 한 번에 건너야 하는 상황)
-    // 차선변경으로는 못 피하는 것으로 보고 아래 오프셋 회피에 맡긴다 -- 동시 회피는 만들지 않는다.
-    float stepOffset = 0.0f;
-    if (hasRoomToChange && FindPassableBand(passableOffset) &&
-        PickAdjacentBandToward(passableOffset, stepOffset))
-    {
-        if (IsLaneEntryClear(stepOffset))
-        {
-            m_avoid.laneOffset = laneCenter; // 취소 판정 기준(출발한 차로)
-            m_avoid.laneChangeTarget = stepOffset;
-            m_avoid.blockedTimer = 0.0f;
-            m_speedCap = AVOID_LOW_SPEED;
-            SetSubMode(SubMode::D_LaneChange);
-            DebugConsole::Log(GetName() + ": static obstacle -> lane change d " + ToString(laneCenter) +
-                              " -> " + ToString(stepOffset));
-            return;
-        }
-        // 차로는 뚫렸는데 지금 그쪽으로 못 들어간다(앞뒤차). IDM이 장애물 앞에 세우는 동안 다음 판단을 기다린다.
-        m_avoid.stuck = false;
-        return;
-    }
-
+    // 정적 장애물도 GatherLaneNeighbors가 리더 후보로 잡아주므로, 차선변경 자체는 매 계획 주기
+    // ComputeLateralTarget/EvaluateLaneChange(MOBIL)이 이미 시도해봤다 -- 막힌 채로 여기까지 왔다는 건
+    // 갈 수 있는 인접 차로가 없거나 안전하지 않다고 MOBIL이 이미 판단했다는 뜻이다. 남은 수단은 차로
+    // 사이를 걸치는 부분 오프셋 회피뿐.
+    float laneCenter = CurrentLaneCenter();
     float avoidOffset = 0.0f;
     if (FindAvoidOffset(m_sensor, m_sensorObstacles, laneCenter, avoidOffset))
     {
