@@ -47,6 +47,23 @@ namespace
         return (position - onRef).Dot(rightN);
     }
 
+    // 장애물의 횡오프셋 d와, 도로 우법선 방향으로 본 반폭을 함께 구한다(투영 한 번만 하려고 묶음).
+    // 반폭을 외접원 반지름으로 잡으면 안 된다 -- 도로와 나란한 긴 장애물이 옆 차로까지 막은 걸로 나온다.
+    void ProjectObstacle(const Spline &referenceLine, const VehicleCollision::Obstacle &obstacle,
+                         float &outOffset, float &outHalfExtent)
+    {
+        float t = referenceLine.GetSplinePosition(obstacle.center);
+        Vec3 onRef = referenceLine.GetPositionAt(t);
+        Vec3 dir = referenceLine.GetDirectionAt(t);
+        Vec3 rightN(dir.GetZ(), 0.0f, -dir.GetX());
+        outOffset = (obstacle.center - onRef).Dot(rightN);
+
+        Vec3 forward(cosf(obstacle.headingRad), 0.0f, sinf(obstacle.headingRad));
+        Vec3 right(forward.GetZ(), 0.0f, -forward.GetX());
+        outHalfExtent = std::fabs(rightN.Dot(right)) * obstacle.halfWidth +
+                        std::fabs(rightN.Dot(forward)) * obstacle.halfLength;
+    }
+
     std::vector<std::unique_ptr<VehicleSegment>> BuildReedSheppSegments(const ReedsShepp::Path &path, const Vec3 &startPos,
                                                                         float startAngleRad, float turningRadius)
     {
@@ -223,7 +240,9 @@ void Car::OnModeEnter(Mode prev)
         // 회피 상태도 같이 리셋한다 -- 특히 backingUp을 들고 나가면 다음 Drive에서 ReverseSegment가
         // 이미 Abort된 채라 영영 끝나지 않는 후진 대기에 갇힌다.
         m_avoid = AvoidState{};
+        m_wait = WaitState{};
         m_sensor = SensorScan{};
+        m_speedCap = -1.0f;
         std::vector<std::unique_ptr<VehicleSegment>> segments;
         segments.push_back(std::make_unique<SplineFollowSegment>());
         m_vehicleController.BeginPlan(std::move(segments));
@@ -393,10 +412,6 @@ void Car::BeginParkSpotLeg() {}
 #pragma region Stop
 void Car::UpdateStop()
 {
-    // Drive에서 "도착"으로 넘어왔으면 그 목적지는 여기서 소모한다(m_destLane 해제). 안 지우면
-    // destLane이 남아 다음 프레임 DecideNextMode(Stop)가 바로 Drive를 돌려주고 Drive는 다시
-    // "도착"으로 Stop을 돌려줘 매 프레임 Stop<->Drive 진동이 생긴다 -- 그동안 제동(Stop 틱)과
-    // 유지(Drive 틱)가 번갈아 걸려 목적지 앞에서 기어가기만 하고 멈추지 못한다.
     if (m_destRoad != nullptr)
     {
         const std::vector<Vec3> &destPts = m_destRoad->GetReferenceLine().GetSplinePoints();
@@ -438,10 +453,30 @@ void Car::UpdateDrive()
 {
     if (!CheckPath())
         return;
-    // 회피 판단이 먼저: UpdateBehaviorPlan의 횡목표(MOBIL vs 회피 오프셋)와 IDM 제약(레이 히트)이
-    // 이번 프레임 스캔 결과를 그대로 쓰도록 한다.
-    UpdateAvoidance();
-    UpdateBehaviorPlan();
+
+    UpdateSensors();
+
+    // 물리 충돌 뒷수습과 후진 매뉴버는 어느 서브모드에 있든 먼저 끊어야 한다.
+    if (!HandleContactPending() && !UpdateBackupState())
+    {
+        switch (m_subMode)
+        {
+        case SubMode::D_WaitObstacle:
+            UpdateWaitObstacle();
+            break;
+        case SubMode::D_Avoid:
+            UpdateAvoid();
+            break;
+        case SubMode::D_LaneChange:
+            UpdateLaneChange();
+            break;
+        default:
+            DecideAvoidance(); // D_Normal: 다음 서브모드를 고른다
+            break;
+        }
+    }
+
+    UpdateDrivePlan();
 
     m_wantSegmentTick = true;
 }
@@ -516,28 +551,33 @@ void Car::DriveControl()
     float targetSteer = PurePursuit(target);
     Steer(targetSteer);
 
-    bool IsEmergeBrake = false;
-    if (IsEmergeBrake)
-    {
-        // // 레이/차체 스윕이 잡은 전방 위험이 상용제동으로는 못 서는 거리까지 들어오면 IDM을 건너뛰고 바로
-        // // 비상제동. (IDM 제약 목록은 0.2초 주기 스캔이라, 방금 끼어든 차처럼 프레임 단위 반응이 필요한 경우가 남는다.)
-        // float hazardDistance = m_sensor.frontDistance;
-        // if (m_sensor.bodyContactDistance >= 0.0f && (hazardDistance < 0.0f || m_sensor.bodyContactDistance < hazardDistance))
-        //     hazardDistance = m_sensor.bodyContactDistance;
-        // if (m_speed > 0.1f && hazardDistance >= 0.0f &&
-        //     hazardDistance < m_speed * m_speed / (2.0f * m_maxEmergBrake) + MIN_SAFE_GAP * 0.5f)
-        // {
-        //     EmergBrake();
-        //     return;
-        // }
-        EmergBrake();
-        return;
-    }
+    // // 레이/차체 스윕이 잡은 전방 위험이 상용제동으로는 못 서는 거리까지 들어오면 IDM을 건너뛰고 바로
+    // // 비상제동. (IDM 제약 목록은 0.2초 주기 스캔이라, 방금 끼어든 차처럼 프레임 단위 반응이 필요한 경우가 남는다.)
+    // float hazardDistance = m_sensor.frontDistance;
+    // if (m_sensor.bodyContactDistance >= 0.0f && (hazardDistance < 0.0f || m_sensor.bodyContactDistance < hazardDistance))
+    //     hazardDistance = m_sensor.bodyContactDistance;
+    // if (m_speed > 0.1f && hazardDistance >= 0.0f &&
+    //     hazardDistance < m_speed * m_speed / (2.0f * m_maxBrake) + MIN_SAFE_GAP * 0.5f)
+    // {
+    //     EmergBrake();
+    //     return;
+    // }
 
     // 종방향: 리더/제약 목록은 행동 계획(UpdateBehaviorPlan, 0.2초 주기)이 스캔해두지만, IDM 가속도 자체는
     // 매프레임 다시 계산한다(앞차 속도/가속도/gap을 그때그때 최신값으로) -- ComputeIdmAcceleration 참고.
     float distanceOffset = (GetPosition() - m_planScanPosition).Length(); // 스캔 이후 이동거리(정적 제약 gap 보정용)
     float accelIDM = ComputeIdmAcceleration(m_lastRoadSamples, m_lastIdmParams, distanceOffset);
+
+    // 회피/정지대기가 건 종방향 상한. IDM을 끄는 대신 '그 속도로 가는 가상 리더'를 하나 더 두는 형태라,
+    // 신호/앞차/제한속도 제약이 그대로 살아 있고 감속도 저크제한을 타고 부드럽게 붙는다. m_speedCap은
+    // 매프레임 갱신되므로 0.2초 주기 샘플 목록이 아니라 여기서 건다.
+    if (m_speedCap >= 0.0f && m_speed > m_speedCap)
+    {
+        float capGap = std::max(1.0f, (m_speed * m_speed - m_speedCap * m_speedCap) / (2.0f * m_maxBrake) + MIN_SAFE_GAP);
+        accelIDM = std::min(accelIDM, IDM::CalculateAcceleration(m_speed, m_acceleration, m_speedCap, 0.0f,
+                                                                 capGap, m_lastIdmParams));
+    }
+
     float steerSpeedCap = CalcMaxSpeed(targetSteer); // 이번 프레임 조향각이 물리적으로 허용하는 한계속도(커브 안에서 반응형 유지)
     if (m_speed > steerSpeedCap)
         accelIDM = std::min(accelIDM, -m_maxBrake);
@@ -618,34 +658,6 @@ std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistan
                 }
             }
 
-            // 정적 장애물: ROAD_SAMPLE_SPACING 간격으로 경로 위에 프로브 박스를 두고, 겹치는 장애물을 만나면
-            // 그 앞에 0속도 샘플(가상 정지선)을 세운다. 이 세그먼트에서 가장 가까운 것 하나면 충분해 찾는
-            // 즉시 멈춘다(더 먼 장애물은 다음 프로브 지점, 또는 다음 세그먼트 순회에서 처리됨).
-            if (!obstacles.empty() && splineLength > 0.0f)
-            {
-                constexpr float OBSTACLE_PROBE_MARGIN = 0.25f;
-                int sampleCount = static_cast<int>(walkDistance / ROAD_SAMPLE_SPACING) + 1;
-                for (int index = 0; index <= sampleCount; ++index)
-                {
-                    float localDistance = std::min(static_cast<float>(index) * ROAD_SAMPLE_SPACING, walkDistance);
-                    float t = std::clamp(startT + localDistance / splineLength, 0.0f, 1.0f);
-                    Vec3 probePos = spline->GetPositionAt(t);
-                    Vec3 probeDir = spline->GetDirectionAt(t);
-                    VehicleCollision::VehicleShape probeShape;
-                    probeShape.pivotToCenter = 0.0f;
-                    probeShape.halfLength = ROAD_SAMPLE_SPACING * 0.5f;
-                    probeShape.halfWidth = m_halfExtents.GetX() + OBSTACLE_PROBE_MARGIN;
-                    float probeHeading = atan2f(probeDir.GetZ(), probeDir.GetX());
-                    if (VehicleCollision::IsColliding(probePos, probeHeading, obstacles, probeShape))
-                    {
-                        // 프로브 안 어디에 걸렸는지는 모르니 프로브 반길이 + 안전마진만큼 앞에서 선다.
-                        float stopDistance = traveledDistance + localDistance - ROAD_SAMPLE_SPACING * 0.5f - MIN_SAFE_GAP;
-                        samples.push_back({probePos, stopDistance, 0.0f}); // 거리<0이면 캡이 0으로 내려가 장애물 앞에서 크리핑하지 않는다
-                        break;
-                    }
-                }
-            }
-
             traveledDistance += walkDistance;
             remainingDistance -= walkDistance;
             if (remainingDistance <= 0.0f)
@@ -701,7 +713,9 @@ std::vector<Car::NearbyCar> Car::CollectNearbyCars() const
         float reachDistance = (m_speed + other->GetSpeed()) * BEHAVIOR_SAFETY_HORIZON +
                               0.5f * m_maxAccel * BEHAVIOR_SAFETY_HORIZON * BEHAVIOR_SAFETY_HORIZON +
                               GetLength() * 0.5f + other->GetLength() * 0.5f + MIN_SAFE_GAP;
-        if ((other->GetPosition() - egoPosition).Length() > reachDistance)
+        // 둘 다 느리면 이 반경이 15m까지 줄어든다 -- 옆차로에 '멈춰 있는' 차가 그 밖에 있으면 MOBIL 눈에
+        // 안 보여서 그 차로로 변경해버린다. 레이가 보는 만큼(AVOID_FRONT_RAY_MAX)은 항상 후보로 둔다.
+        if ((other->GetPosition() - egoPosition).Length() > std::max(reachDistance, AVOID_FRONT_RAY_MAX))
             continue;
 
         // 교차/합류 방향(진행방향 차 45도 초과) 차에 대해 우선권을 가짐
@@ -763,6 +777,8 @@ void Car::AppendCarConstraintSamples(std::vector<RoadSpeedSample> &samples,
         const Spline &segRef = segmentRoad->GetReferenceLine();
         for (const NearbyCar &nearbyCar : nearbyCars)
         {
+            if (!m_SimState->IsCarAlive(nearbyCar.car))
+                continue; // 캐시된 뒤 삭제된 차(0.2초 주기 갱신 사이 delete됨) -- dangling 포인터
             Car *other = nearbyCar.car;
             float otherT = spline->GetSplinePosition(other->GetPosition());
             Vec3 projected = spline->GetPositionAt(otherT);
@@ -835,10 +851,7 @@ IDM::Params Car::BuildIdmParams(const shared_ptr<Road> &road) const
     return idm;
 }
 
-// samples를 IDM 가상 리더로 보고(앞차/정지선/커브속도 모두), 각 리더의 IDM 가속도 중 최솟값을 반환.
-// 실제 앞차(leader!=nullptr)는 gap/속도/가속도를 그 차의 지금 상태에서 새로 읽는다(0.2초 전 스캔값 안 씀) --
-// 리더가 '누구인지'만 0.2초 주기 스캔 결과를 쓰고, 값 자체는 매프레임 최신이어야 하므로. 정적 제약(신호/커브 등)은
-// 살아있는 대상이 없어 sample.speed를 그대로 쓰되, gap만 distanceOffset(스캔 이후 이동거리)만큼 보정한다.
+// 스캔 주기 0.2초, gap/속도/가속도는 매 프레임 계산
 float Car::ComputeIdmAcceleration(const std::vector<RoadSpeedSample> &samples, const IDM::Params &params,
                                   float distanceOffset) const
 {
@@ -863,7 +876,7 @@ float Car::ComputeIdmAcceleration(const std::vector<RoadSpeedSample> &samples, c
             // 정적 제약(신호/정지선/커브속도)은 스캔 당시 값 그대로, gap만 그 이후 이동거리로 보정.
             float remaining = sample.distance - distanceOffset;
             bool hardStop = sample.speed <= 0.0f; // 정지선/장애물은 gap<0(표준간격 침범)이어도 강제 제동
-            if (!hardStop && remaining <= 0.0f)   // 이미 지나간 커브/제한속도는 스킵
+            if (!hardStop && (remaining <= 0.0f || m_speed <= sample.speed))
                 continue;
             // 샘플 거리는 MIN_SAFE_GAP 마진이 이미 빠져있으므로, IDM엔 실제 gap을 되돌려 넘긴다(정지거리는 IDM s0가 관장).
             leaderSpeed = sample.speed;
@@ -876,8 +889,9 @@ float Car::ComputeIdmAcceleration(const std::vector<RoadSpeedSample> &samples, c
     return bestAccel;
 }
 
-// nearby 중 refLine 기준 bandCenter 밴드(±bandHalfWidth)에 속한 차들에서 egoS 앞/뒤 가장 가까운 차를
-// MOBIL 상태로 뽑는다. position은 참조선 호길이 s.
+// nearby 중 refLine 기준 bandCenter 밴드(±bandHalfWidth)에 속한 차들 + 그 밴드를 막고 있는 장애물
+// (m_sensorObstacles)에서 egoS 앞/뒤 가장 가까운 걸 MOBIL 상태로 뽑는다. position은 참조선 호길이 s.
+// 장애물은 리더 후보로만 쓴다(뒤차 역할은 못 함).
 Car::LaneNeighbors Car::GatherLaneNeighbors(const std::vector<NearbyCar> &nearby, const Spline &refLine,
                                             float bandCenter, float bandHalfWidth, float egoS) const
 {
@@ -887,6 +901,8 @@ Car::LaneNeighbors Car::GatherLaneNeighbors(const std::vector<NearbyCar> &nearby
     float bestFollowerGap = std::numeric_limits<float>::max();
     for (const NearbyCar &nb : nearby)
     {
+        if (!m_SimState->IsCarAlive(nb.car))
+            continue; // 캐시된 뒤 삭제된 차(0.2초 주기 갱신 사이 delete됨) -- dangling 포인터
         Car *other = nb.car;
         float d = ComputeReferenceOffset(refLine, other->GetPosition());
         if (std::fabs(d - bandCenter) > bandHalfWidth)
@@ -919,6 +935,39 @@ Car::LaneNeighbors Car::GatherLaneNeighbors(const std::vector<NearbyCar> &nearby
             }
         }
     }
+
+    // 센서 사거리 안의 장애물을 리더 후보로 본다. 레이 히트(m_sensor.frontHitObstacles)로 잡으면 안 된다 --
+    // 레이 길이가 속도에 비례해서 저속에선 10m도 안 나가고, 그러면 옆 차로 장애물이 MOBIL 눈에 안 보여
+    // '텅 빈 차로'로 판정돼 그쪽으로 차선변경해버린다.
+    // 장애물은 반응해서 감속/양보하는 주체가 아니라 뒤차(follower)는 못 되므로 리더 쪽에만 넣는다.
+    for (const VehicleCollision::Obstacle &obstacle : m_sensorObstacles)
+    {
+        if (obstacle.isVehicle)
+            continue; // 차는 위 nearby 루프가 이미 처리했다
+
+        // 밴드 경계에 걸쳐 있기만 해도 그 차로를 막는다 -- 중심이 밴드 밖이라고 흘려보내면 안 된다.
+        float d = 0.0f;
+        float halfExtent = 0.0f;
+        ProjectObstacle(refLine, obstacle, d, halfExtent);
+        if (std::fabs(d - bandCenter) > bandHalfWidth + halfExtent)
+            continue; // 이 밴드 차로가 아님
+
+        float s = refLine.GetSplinePosition(obstacle.center) * refLen;
+        if (s < egoS)
+            continue; // 이미 지난 장애물은 리더 후보가 아님
+
+        float gap = s - egoS;
+        if (gap < bestLeaderGap)
+        {
+            bestLeaderGap = gap;
+            out.leader.speed = obstacle.speed;
+            out.leader.accel = 0.0f;
+            out.leader.position = s;
+            out.leader.length = obstacle.halfLength * 2.0f;
+            out.hasLeader = true;
+        }
+    }
+
     return out;
 }
 
@@ -961,7 +1010,7 @@ bool Car::ShouldHoldForMerge(const shared_ptr<Road> &nextRoad) const
 }
 
 // BEHAVIOR_PLAN_INTERVAL(0.2초)마다 IDM(종방향)로 목표가속도를, MOBIL(횡방향)로 차선변경을 정한다.
-void Car::UpdateBehaviorPlan()
+void Car::UpdateDrivePlan()
 {
     if (m_currentRoad == nullptr)
         return;
@@ -982,12 +1031,50 @@ void Car::UpdateBehaviorPlan()
 
     // ---- 횡방향: MOBIL 차선변경 판정 + Lerp ----
     // (실제 종방향 IDM 가속도는 DriveControl이 위 캐시로 매프레임 다시 계산한다.)
-    // 회피 중에는 MOBIL을 끄고 UpdateAvoidance가 정한 오프셋(복귀 중이면 원래 차로)으로만 수렴한다.
-    float targetOffset = m_avoid.active ? (m_avoid.returning ? m_avoid.laneOffset : m_avoid.avoidOffset)
-                                        : ComputeLateralTarget(m_lastNearbyCars, m_lastIdmParams);
+    // 회피/차선변경/정지대기 서브모드에서는 MOBIL을 끄고 그 서브모드가 정한 오프셋으로만 수렴한다.
+    float laneCenter = m_currentOffset;
+    float targetOffset;
+    if (m_subMode == SubMode::D_Avoid || m_subMode == SubMode::D_LaneChange)
+    {
+        targetOffset = AvoidTargetOffset(); // PredictBodyContact가 굴려보는 목표와 반드시 같아야 한다
+    }
+    else if (m_subMode == SubMode::D_WaitObstacle)
+    {
+        targetOffset = laneCenter = CurrentLaneCenter();
+    }
+    else
+    {
+        targetOffset = ComputeLateralTarget(m_lastNearbyCars, m_lastIdmParams, &laneCenter);
+        bool isLaneChange = std::fabs(targetOffset - laneCenter) > 0.01f;
+        bool sideBlocked = (targetOffset > laneCenter) ? m_sensor.rightBlocked : m_sensor.leftBlocked;
+        if (isLaneChange && sideBlocked)
+        {
+            isLaneChange = false;
+            targetOffset = laneCenter;
+        }
+
+        SetSubMode(isLaneChange ? SubMode::D_LaneChange : SubMode::D_Normal);
+    }
     m_currentOffset += (targetOffset - m_currentOffset) * m_personality.laneChangeLerpAlpha;
     m_currentSpline = RoadDataManager::Get().BuildOffsetSpline(m_currentRoad, m_currentOffset);
     RebuildSplineRender();
+}
+
+float Car::CurrentLaneCenter() const
+{
+    const LaneSection *sec = RoadDataManager::Get().GetLateralProfile(m_currentRoad, 0.0f);
+    if (sec == nullptr || sec->bands.empty())
+        return m_currentOffset;
+
+    const LaneBand *closest = nullptr;
+    for (const LaneBand &b : sec->bands)
+    {
+        if (b.type != LaneType::Driving)
+            continue;
+        if (closest == nullptr || std::fabs(m_currentOffset - b.centerOffset) < std::fabs(m_currentOffset - closest->centerOffset))
+            closest = &b;
+    }
+    return closest != nullptr ? closest->centerOffset : m_currentOffset;
 }
 
 // 현재 밴드를 유지할지, MOBIL이 유인+안전 판정한 인접 밴드로 변경할지 정해 목표 횡오프셋을 돌려준다.
@@ -1040,9 +1127,6 @@ float Car::ComputeLateralTarget(const std::vector<NearbyCar> &nearbyCars, const 
     const Mobil::VehicleState *curLeader = cur.hasLeader ? &cur.leader : &farLeader;
     const Mobil::VehicleState *oldFollower = cur.hasFollower ? &cur.follower : nullptr;
 
-    // 레이(정면 중앙, farLength)에 잡힌 전방 장애물도 현재 차로의 리더로 넣는다. GatherLaneNeighbors는
-    // Car만 훑기 때문에, 이게 없으면 정적 장애물 앞에서 MOBIL이 "앞이 뻥 뚫렸다"고 보고 차선변경 유인을
-    // 아예 못 느껴 -- 결국 장애물 코앞까지 가서 회피(차로 걸침)로만 빠져나가게 된다.
     Mobil::VehicleState sensorLeader;
     if (m_sensor.frontDistance >= 0.0f)
     {
@@ -1059,8 +1143,8 @@ float Car::ComputeLateralTarget(const std::vector<NearbyCar> &nearbyCars, const 
 
     Mobil::Params mobil{MOBIL_B_SAFE, m_personality.politeness, MOBIL_A_THR};
 
-    // 좌/우 인접 밴드를 MOBIL로 검사해 통과하면 그 밴드 중심으로.
-    for (int di : {-1, 1})
+    bool leanRight = m_currentOffset > curBand.centerOffset;
+    for (int di : {leanRight ? 1 : -1, leanRight ? -1 : 1})
     {
         long adjIdx = static_cast<long>(curIdx) + di;
         if (adjIdx < 0 || adjIdx >= static_cast<long>(bands.size()))
@@ -1102,10 +1186,8 @@ Vec3 Car::GetBodyCenter() const
     return GetRigidbodyPosition() + forward * m_colliderOffset.z + right * m_colliderOffset.x;
 }
 
-std::vector<VehicleCollision::Obstacle> Car::BuildSensorObstacles() const
+std::vector<VehicleCollision::Obstacle> Car::CollectMapObstaclesInSensorRange() const
 {
-    // 레이/OBB 판정 대상: 지도상의 정적 장애물 + 지금 주변에 있는 차들. 차 '목록'은 0.2초 주기 캐시
-    // (m_lastNearbyCars)지만 위치/헤딩/속도는 매프레임 그 차에서 새로 읽으므로 기하는 항상 최신이다.
     std::vector<VehicleCollision::Obstacle> obstacles;
     Vec3 egoPosition = GetPosition();
     float reach = AVOID_FRONT_RAY_MAX + GetLength();
@@ -1125,10 +1207,20 @@ std::vector<VehicleCollision::Obstacle> Car::BuildSensorObstacles() const
             continue;
         obstacles.push_back(obstacle);
     }
+    return obstacles;
+}
+
+std::vector<VehicleCollision::Obstacle> Car::BuildSensorObstacles() const
+{
+    // 레이/OBB 판정 대상: 지도상의 정적 장애물 + 지금 주변에 있는 차들. 차 '목록'은 0.2초 주기 캐시
+    // (m_lastNearbyCars)지만 위치/헤딩/속도는 매프레임 그 차에서 새로 읽으므로 기하는 항상 최신이다.
+    std::vector<VehicleCollision::Obstacle> obstacles = CollectMapObstaclesInSensorRange();
 
     obstacles.reserve(obstacles.size() + m_lastNearbyCars.size());
     for (const NearbyCar &nearbyCar : m_lastNearbyCars)
     {
+        if (!m_SimState->IsCarAlive(nearbyCar.car))
+            continue; // 캐시된 뒤 삭제된 차(0.2초 주기 갱신 사이 delete됨) -- dangling 포인터
         const Car *other = nearbyCar.car;
         VehicleCollision::Obstacle obstacle;
         obstacle.center = other->GetBodyCenter();
@@ -1137,6 +1229,7 @@ std::vector<VehicleCollision::Obstacle> Car::BuildSensorObstacles() const
         obstacle.headingRad = DirectionToAngleRad(other->GetForwardAxis());
         obstacle.speed = other->GetSpeed();
         obstacle.type = VehicleCollision::ObstacleType::Dynamic;
+        obstacle.isVehicle = true;
         obstacles.push_back(obstacle);
     }
     return obstacles;
@@ -1156,12 +1249,11 @@ Car::SensorScan Car::ScanSensors(const std::vector<VehicleCollision::Obstacle> &
     Vec3 frontCenter = center + forward * halfLength;
     Vec3 frontLeft = frontCenter - right * halfWidth;
     Vec3 frontRight = frontCenter + right * halfWidth;
-    // 대각/측면/후방 레이 기준점 -- UpdateAvoidance의 상태전이가 꺼져 있는 동안은 안 쓴다(아래 2)+3)+4) 참고).
-    // Vec3 sideLeft = center - right * halfWidth;
-    // Vec3 sideRight = center + right * halfWidth;
-    // Vec3 rearCenter = center - forward * halfLength;
-    // Vec3 rearLeft = rearCenter - right * halfWidth;
-    // Vec3 rearRight = rearCenter + right * halfWidth;
+    Vec3 sideLeft = center - right * halfWidth;
+    Vec3 sideRight = center + right * halfWidth;
+    Vec3 rearCenter = center - forward * halfLength;
+    Vec3 rearLeft = rearCenter - right * halfWidth;
+    Vec3 rearRight = rearCenter + right * halfWidth;
 
     // 전방 레이 길이 = 지금 속도로 상용제동해서 설 수 있는 거리 + 표준 간격. 정지 중에도 바로 앞은 보게 최소치를 둔다.
     float frontLength = std::clamp(m_speed * m_speed / (2.0f * m_maxBrake) + MIN_SAFE_GAP,
@@ -1217,38 +1309,42 @@ Car::SensorScan Car::ScanSensors(const std::vector<VehicleCollision::Obstacle> &
         float maxDistance;
     };
     const FrontRay frontRays[] = {
+        // {frontCenter, 0.0f, 0.0f}
         {frontCenter, 0.0f, farLength},
-        {frontLeft, 0.0f, farLength},
         {frontRight, 0.0f, farLength},
-        {frontRight, ToRadians(15.0f), frontLength},
-        {frontLeft, ToRadians(-15.0f), frontLength},
-        {frontRight, ToRadians(30.0f), frontLength},
-        {frontLeft, ToRadians(-30.0f), frontLength},
+        {frontLeft, 0.0f, farLength},
+        {frontRight, ToRadians(5.0f), farLength},
+        {frontLeft, ToRadians(-5.0f), farLength},
+
+        {frontRight, ToRadians(15.0f), farLength * 0.5f},
+        {frontLeft, ToRadians(-15.0f), farLength * 0.5f},
+        {frontRight, ToRadians(30.0f), farLength * 0.5f},
+        {frontLeft, ToRadians(-30.0f), farLength * 0.5f},
+        {frontRight, ToRadians(45.0f), farLength * 0.5f},
+        {frontLeft, ToRadians(-45.0f), farLength * 0.5f},
     };
     for (const FrontRay &frontRay : frontRays)
     {
         auto [hit, distance] = cast(frontRay.origin, frontRay.rightAngle, frontRay.maxDistance);
         if (hit == nullptr)
             continue;
-        scan.anyFrontHit = true;
 
-        // 히트가 정말 '내 진로 위'인지 거른다. 부채꼴 레이는 멀리서 옆차로까지 훑고 커브에서는 정면
-        // 레이조차 차로를 벗어나므로, 이게 없으면 옆차로/노변에 헛제동을 한다. 기준을 차체 진행축이
-        // 아니라 주행선으로 잡는 이유는 pathDistance 주석 참고(코너에서 안 서던 원인).
+        // 히트가 정말 '내 진로 위'인지 거른다.
         Vec3 hitPosition = scan.rays.back().end;
         float offPath = pathDistance(hitPosition);
         if (offPath > corridorHalfWidth)
             continue; // 내 진로에서 완전히 벗어남(옆차로/노변)
 
-        // 종방향 제약(IDM 가상 리더 / 비상제동)은 차체가 실제로 쓸 폭 안에 든 것만 건다. 트리거 코리도
-        // (더 넓다)를 그대로 쓰면, 회피로 옆을 통과하는 도중에 아직 코리도에 걸쳐 있는 그 장애물을
-        // 정지 리더로 잡아 스스로 제동해버린다 -- IDM은 s0(표준 gap)만큼 앞에서 서려 하므로 딱 그
-        // 지점에 갇혀 영영 못 지나간다.
         if (offPath <= brakeHalfWidth && (scan.frontDistance < 0.0f || distance < scan.frontDistance))
         {
             scan.frontDistance = distance;
             scan.frontHitPosition = hitPosition;
-            scan.frontHitSpeed = hit->speed;
+            // 스칼라 speed를 내 진행방향에 투영해 '멀어지는 성분'만 남긴다. 마주 오는 대상을 같이 도망가는
+            // 리더로 넘기면 IDM이 감속하지 않는다(음수는 0으로 -- 정지한 리더가 가장 보수적).
+            Vec3 hitDir(cosf(hit->headingRad), 0.0f, sinf(hit->headingRad));
+            scan.frontHitSpeed = std::max(0.0f, forward.Dot(hitDir) * hit->speed);
+            scan.frontHitObstacle = *hit;
+            scan.hasFrontHitObstacle = true;
         }
         // 그중 거의 멈춰 있고 제동거리 안까지 들어온 것만 '피해 갈 대상'. 정상 주행 중인 앞차는 IDM
         // 추종이 처리하고, 멀리(farLength) 보이는 장애물은 아직 MOBIL 차선변경이 처리할 몫이다.
@@ -1256,10 +1352,6 @@ Car::SensorScan Car::ScanSensors(const std::vector<VehicleCollision::Obstacle> &
             scan.frontBlocked = true;
     }
 
-    // 2) 대각선 + 3) 측면 + 4) 후방: leftBlocked/rightBlocked/sideNear/rearDistance는 UpdateAvoidance의
-    // 상태전이(회피 진입/복귀/후진 판단) 전용이라, 그게 꺼져 있는 동안은 레이 자체를 쏘지 않는다.
-    // 되살릴 때 이 블록과 위 기준점(sideLeft 등) 주석을 함께 해제.
-    /*
     // 2) 대각선(앞 꼭지점에서 45/70도) + 3) 측면(앞 꼭지점/측면 중점/뒤 꼭지점에서 90도).
     //    기본은 90도 레이만 막힘으로 본다 -- 대각선 레이는 정면의 장애물 자체를 스치기 쉬워서, 그걸
     //    막힘으로 치면 정면에 뭔가 있을 때 양쪽 다 막힌 걸로 나와 회피를 아예 못 하게 된다.
@@ -1281,13 +1373,16 @@ Car::SensorScan Car::ScanSensors(const std::vector<VehicleCollision::Obstacle> &
 
         bool lateralHit = cast(frontCorner, sign * ToRadians(90.0f), AVOID_SIDE_RAY_LENGTH).first != nullptr;
         lateralHit |= cast(sideMid, sign * ToRadians(90.0f), AVOID_SIDE_RAY_LENGTH).first != nullptr;
-        lateralHit |= cast(rearCorner, sign * ToRadians(90.0f), AVOID_SIDE_RAY_LENGTH).first != nullptr;
+        bool rearLateralHit = cast(rearCorner, sign * ToRadians(90.0f), AVOID_SIDE_RAY_LENGTH).first != nullptr;
 
-        bool blocked = lateralHit || (turningThisWay && diagonalHit);
+        // 그쪽으로 '새로' 밀고 들어갈지(FindAvoidOffset)는 뒷범퍼 옆까지 다 봐야 한다.
+        bool blocked = lateralHit || rearLateralHit || (turningThisWay && diagonalHit);
         if (side < 0)
             scan.leftBlocked = blocked;
         else
             scan.rightBlocked = blocked;
+        // 반면 복귀 판정에는 뒤쪽 히트를 넣지 않는다 -- 방금 지나친 장애물이 뒷범퍼 옆에 남아 있는 동안
+        // 계속 막히면 회피 오프셋에서 영영 못 돌아온다. 뒤차라면 알아서 감속한다.
         scan.sideNear = scan.sideNear || diagonalHit || lateralHit;
     }
 
@@ -1299,7 +1394,6 @@ Car::SensorScan Car::ScanSensors(const std::vector<VehicleCollision::Obstacle> &
         if (hit != nullptr && (scan.rearDistance < 0.0f || distance < scan.rearDistance))
             scan.rearDistance = distance;
     }
-    */
 
     return scan;
 }
@@ -1348,6 +1442,16 @@ bool Car::SimulateAvoidPath(float targetOffset, const std::vector<VehicleCollisi
     return SweepBodyPath(targetOffset, obstacles, speed, speed * AVOID_SIM_TIME) < 0.0f;
 }
 
+// 회피가 지금 향하고 있는 목표 오프셋. 아무것도 진행 중이 아니면 지금 오프셋 그대로.
+float Car::AvoidTargetOffset() const
+{
+    if (m_subMode == SubMode::D_Avoid)
+        return m_avoid.avoidOffset;
+    if (m_subMode == SubMode::D_LaneChange)
+        return m_avoid.laneChangeTarget;
+    return m_currentOffset;
+}
+
 // 레이는 '점'이라, 회전 중 바깥쪽 앞 꼭지점이 그리는 궤적(코너에서 대각선 꼭짓점으로 박는 원인)을
 // 원리적으로 못 잡는다. 지금 주행선을 그대로 따라갔을 때 실제 차체가 처음 닿는 거리를 따로 재둔다.
 float Car::PredictBodyContact(const std::vector<VehicleCollision::Obstacle> &obstacles) const
@@ -1367,11 +1471,59 @@ float Car::PredictBodyContact(const std::vector<VehicleCollision::Obstacle> &obs
 
     // 회피 중이면 실제로 향하는 목표 오프셋으로 굴려야 한다. 지금 오프셋으로 굴리면 Lerp로 빠져나가는
     // 중인 궤적을 충돌로 잘못 보고 회피 도중에 스스로 제동해버린다.
-    float targetOffset = m_avoid.active ? (m_avoid.returning ? m_avoid.laneOffset : m_avoid.avoidOffset)
-                                        : m_currentOffset;
+    float targetOffset = AvoidTargetOffset();
     float horizon = std::clamp(m_speed * m_speed / (2.0f * m_maxBrake) + MIN_SAFE_GAP,
                                AVOID_FRONT_RAY_MIN, AVOID_FRONT_RAY_MAX);
     return SweepBodyPath(targetOffset, stationary, m_speed, horizon);
+}
+
+// 나와 장애물을 각각 등속으로 굴려 만나는 순간을 찾는다. 레이는 '지금' 진로 위인 것만 통과시키므로
+// 비스듬히 들어오는 대상은 코앞에 올 때까지 안 잡히는데(그땐 이미 늦다), 여기서 미리 잡는다.
+float Car::PredictMovingConflict(const std::vector<VehicleCollision::Obstacle> &obstacles,
+                                 const VehicleCollision::Obstacle **outObstacle) const
+{
+    constexpr int CONFLICT_STEPS = 12;
+
+    // 멈춰 있어도 "지금 출발하면"을 봐야 한다(SimulateAvoidPath와 같은 가정) -- 안 그러면 정지한 순간
+    // 예측이 사라져서 대기가 풀리고, 출발하면 다시 잡히는 걸 반복한다.
+    float speed = std::max(m_speed, AVOID_SIM_MIN_SPEED);
+    float stepTime = AVOID_SIM_TIME / CONFLICT_STEPS;
+    float myRadius = GetHalfWidth() + AVOID_CORRIDOR_MARGIN;
+
+    // 내 미래 위치는 장애물과 무관하니 한 번만 뽑아둔다(GetLookaheadPoint는 스플라인 탐색이라 싸지 않다).
+    Vec3 futurePath[CONFLICT_STEPS];
+    for (int i = 0; i < CONFLICT_STEPS; ++i)
+        futurePath[i] = m_currentSpline.GetLookaheadPoint(GetPosition(), speed * stepTime * static_cast<float>(i + 1));
+
+    float best = -1.0f;
+    for (const VehicleCollision::Obstacle &obstacle : obstacles)
+    {
+        // 차는 IDM/MOBIL이, 멈춰 있는 것은 레이/차체 스윕이 이미 맡는다.
+        if (obstacle.isVehicle || obstacle.speed <= AVOID_BLOCK_SPEED)
+            continue;
+
+        Vec3 velocity = Vec3(cosf(obstacle.headingRad), 0.0f, sinf(obstacle.headingRad)) * obstacle.speed;
+        // OBB 회전까지 보지 않고 외접원으로 잡는다 -- 여기 결과는 '설지 말지'라 보수적인 쪽이 맞다.
+        float hitRadius = myRadius + std::sqrt(obstacle.halfWidth * obstacle.halfWidth +
+                                               obstacle.halfLength * obstacle.halfLength);
+        for (int i = 0; i < CONFLICT_STEPS; ++i)
+        {
+            float elapsed = stepTime * static_cast<float>(i + 1);
+            Vec3 theirPos = obstacle.center + velocity * elapsed;
+            if ((theirPos - futurePath[i]).Length() > hitRadius)
+                continue;
+
+            float travel = speed * elapsed;
+            if (best < 0.0f || travel < best)
+            {
+                best = travel;
+                if (outObstacle != nullptr)
+                    *outObstacle = &obstacle;
+            }
+            break; // 이 장애물에 대한 첫(가장 이른) 접촉만 쓴다
+        }
+    }
+    return best;
 }
 
 bool Car::FindAvoidOffset(const SensorScan &scan, const std::vector<VehicleCollision::Obstacle> &obstacles,
@@ -1393,11 +1545,11 @@ bool Car::FindAvoidOffset(const SensorScan &scan, const std::vector<VehicleColli
     float maxOffset = 0.0f;
     ComputeDrivableRange(m_currentRoad, minOffset, maxOffset);
 
-    // 가까운 오프셋부터: 차로 반폭 -> 한 폭 -> 두 폭. 같은 크기면 좌/우 둘 다 굴려보고 먼저 통과한 쪽을 쓴다.
     const float magnitudes[] = {laneWidth * 0.5f, laneWidth, laneWidth * 2.0f};
+    bool leanRight = m_currentOffset > laneCenter;
     for (float magnitude : magnitudes)
     {
-        for (int side : {-1, 1})
+        for (int side : {leanRight ? 1 : -1, leanRight ? -1 : 1})
         {
             if (side < 0 ? scan.leftBlocked : scan.rightBlocked)
                 continue; // 바로 옆에 차/장애물이 붙어 있는 방향
@@ -1413,121 +1565,395 @@ bool Car::FindAvoidOffset(const SensorScan &scan, const std::vector<VehicleColli
     return false;
 }
 
-// 매프레임: 레이를 쏘고 그 결과로 회피 상태(진입 / 오프셋 유지 / 복귀 / 막힘-후진)를 전이시킨다.
-// 실제 횡오프셋 Lerp와 종방향 감속은 UpdateBehaviorPlan / DriveControl이 이 상태를 보고 수행한다.
-void Car::UpdateAvoidance()
+// 전방 최근접 히트를 무엇으로 볼지 한 번만 정한다. 차는 IDM/MOBIL이 이미 다루고, 장애물은 움직이는지에
+// 따라 대응이 정반대(정지 vs 회피)라 여기서 갈라야 아래 로직이 단순해진다.
+Car::ThreatKind Car::ClassifyFrontThreat() const
 {
-    if (m_currentRoad == nullptr)
+    if (!m_sensor.hasFrontHitObstacle)
+    {
+        // 레이엔 안 잡혔지만 차체 스윕이 접촉을 예고한 경우(회전 중 바깥 꼭지점). 스윕 대상은 정지한
+        // 것만 넣으므로 정적으로 본다.
+        return (m_sensor.bodyContactDistance >= 0.0f) ? ThreatKind::Static : ThreatKind::None;
+    }
+
+    const VehicleCollision::Obstacle &hit = m_sensor.frontHitObstacle;
+    if (hit.isVehicle)
+        return ThreatKind::Vehicle; // 정지한 차(신호대기/정체)도 여기 -- 줄 서서 기다려야지 피해 가면 안 된다
+
+    // 임계값 두 개 사이는 판단 보류. 하나로 자르면 그 근처 속도에서 정적/동적이 매 프레임 뒤집혀
+    // 회피와 정지가 번갈아 걸린다. 보류 구간에서도 IDM은 frontDistance 리더로 계속 감속한다.
+    if (hit.speed <= AVOID_BLOCK_SPEED)
+        return ThreatKind::Static;
+    if (hit.speed >= AVOID_DYNAMIC_SPEED)
+        return m_wait.timedOut ? ThreatKind::Static : ThreatKind::Dynamic;
+    return ThreatKind::None;
+}
+
+// 움직이는 장애물이 '내가 닿기 전에' 진로를 비우는가. 종방향 TTC가 아니라 횡방향 이탈 시각으로 잰다 --
+// 가로지르는 대상에게 의미 있는 건 충돌까지 시간이 아니라 언제 코리도를 벗어나는가이기 때문.
+bool Car::IsDynamicThreatClear() const
+{
+    if (m_sensor.movingConflict)
+        return false; // 이미 '지나가면 부딪힌다'로 판정났다 -- 비켜줄지 따질 단계가 아니다
+
+    const VehicleCollision::Obstacle &hit = m_sensor.frontHitObstacle;
+    Vec3 forward = GetForwardAxis();
+    Vec3 right(forward.GetZ(), 0.0f, -forward.GetX());
+
+    Vec3 velocity = Vec3(cosf(hit.headingRad), 0.0f, sinf(hit.headingRad)) * hit.speed;
+    float lateralSpeed = velocity.Dot(right);
+    if (std::fabs(lateralSpeed) < AVOID_BLOCK_SPEED * 0.5f)
+        return false; // 내 진행방향과 나란히 간다 -- 비켜줄 기미가 없으니 선다
+
+    float lateralOffset = (hit.center - GetPosition()).Dot(right);
+    float corridorHalf = GetHalfWidth() + AVOID_CORRIDOR_MARGIN + hit.halfWidth;
+    // 지금 가는 쪽 코리도 경계까지 남은 횡거리(이미 넘었으면 0).
+    float clearDistance = (lateralSpeed > 0.0f) ? (corridorHalf - lateralOffset) : (lateralOffset + corridorHalf);
+    float timeToClear = std::max(0.0f, clearDistance) / std::fabs(lateralSpeed);
+    // 멈춰 있으면 "지금 출발하면"으로 재야 한다. 실제 속도로 재면 정지 중엔 도달시간이 무한이라 항상
+    // 여유 있다고 나와서, 대기를 풀고 출발하자마자 다시 서는 진동이 생긴다(SimulateAvoidPath와 같은 가정).
+    float timeToReach = m_sensor.frontDistance / std::max(m_speed, AVOID_SIM_MIN_SPEED);
+    return timeToReach > timeToClear + AVOID_TTC_MARGIN;
+}
+
+// 지금 속도/Lerp 비율로 차선 하나를 갈아타는 데 필요한 종방향 거리. Lerp는 지수수렴이라 잔차 10%까지를
+// '갈아탔다'로 보고 그 스텝 수(BEHAVIOR_PLAN_INTERVAL마다 한 번)를 거리로 환산한다.
+float Car::EstimateLaneChangeDistance() const
+{
+    float alpha = std::clamp(m_personality.laneChangeLerpAlpha, 0.01f, 0.99f);
+    float steps = std::log(0.1f) / std::log(1.0f - alpha);
+    // 실제 속도로 잰다. 최저속을 하한으로 잡으면 장애물 앞에 멈춰선 차가 "차선변경할 거리가 없다"고
+    // 판정해 회피로도 못 가고 후진만 반복한다 -- Lerp는 시간 기준이라 정지 상태에선 거의 제자리에서 돈다.
+    return steps * BEHAVIOR_PLAN_INTERVAL * m_speed;
+}
+
+// 그 차로 앞쪽이 비어 있는가. m_stationaryObstacles는 이미 센서 사거리로 잘려 있으므로 따로 룩어헤드를
+// 두지 않는다. 장애물이 밴드에 걸치기만 해도 막힌 것으로 본다(ProjectObstacle의 횡방향 반폭 기준).
+bool Car::IsBandClearAhead(float bandCenter, float bandHalfWidth) const
+{
+    const Spline &ref = m_currentRoad->GetReferenceLine();
+    float refLength = ref.GetLength();
+    float egoS = ref.GetSplinePosition(GetPosition()) * refLength;
+
+    for (const VehicleCollision::Obstacle &obstacle : m_stationaryObstacles)
+    {
+        float s = ref.GetSplinePosition(obstacle.center) * refLength;
+        if (s < egoS)
+            continue; // 이미 지나친 것은 이 차로를 막지 않는다
+
+        float d = 0.0f;
+        float halfExtent = 0.0f;
+        ProjectObstacle(ref, obstacle, d, halfExtent);
+        if (std::fabs(d - bandCenter) <= bandHalfWidth + halfExtent)
+            return false;
+    }
+    return true;
+}
+
+// 앞이 뚫린 driving 밴드를 현재 차로에서 가까운 순으로 찾는다. '거기까지 가는 궤적'이 아니라 '그 차로
+// 자체'를 보는 게 핵심 -- 궤적으로 판정하면 중간 차로가 막혔을 때 그 너머 뚫린 차로까지 같이 탈락한다.
+bool Car::FindPassableBand(float &outOffset) const
+{
+    const LaneSection *sec = RoadDataManager::Get().GetLateralProfile(m_currentRoad, 0.0f);
+    if (sec == nullptr || sec->bands.empty())
+        return false;
+
+    std::vector<const LaneBand *> bands;
+    for (const LaneBand &b : sec->bands)
+        if (b.type == LaneType::Driving)
+            bands.push_back(&b);
+    // 현재 오프셋에서 가까운 밴드부터 검사 -- 굳이 멀리 건너갈 이유가 없다.
+    std::sort(bands.begin(), bands.end(), [&](const LaneBand *a, const LaneBand *b)
+              { return std::fabs(a->centerOffset - m_currentOffset) < std::fabs(b->centerOffset - m_currentOffset); });
+
+    for (const LaneBand *band : bands)
+    {
+        if (std::fabs(band->centerOffset - m_currentOffset) < AVOID_MIN_SHIFT)
+            continue; // 지금 있는 차로 -- 여기가 막혀서 찾는 중이다
+        if (!IsBandClearAhead(band->centerOffset, band->width * 0.5f))
+            continue;
+        outOffset = band->centerOffset;
+        return true;
+    }
+    return false;
+}
+
+// 그 차로에 들어가도 되는가: 뒤차(IsSafeLaneEntry) + 앞차(그 뒤에 붙었을 때 내가 밟을 감속)
+bool Car::IsLaneEntryClear(float targetOffset) const
+{
+    const LaneSection *sec = RoadDataManager::Get().GetLateralProfile(m_currentRoad, 0.0f);
+    if (sec == nullptr || sec->bands.empty())
+        return true;
+
+    const LaneBand *target = &sec->bands.front();
+    for (const LaneBand &b : sec->bands)
+        if (std::fabs(targetOffset - b.centerOffset) < std::fabs(targetOffset - target->centerOffset))
+            target = &b;
+
+    const Spline &ref = m_currentRoad->GetReferenceLine();
+    float egoS = ref.GetSplinePosition(GetPosition()) * ref.GetLength();
+    LaneNeighbors nbr = GatherLaneNeighbors(m_lastNearbyCars, ref, target->centerOffset, target->width * 0.5f, egoS);
+
+    if (nbr.hasLeader)
+    {
+        Mobil::VehicleState ego;
+        ego.speed = m_speed;
+        ego.accel = m_acceleration;
+        ego.position = egoS;
+        ego.length = GetLength();
+        float accel = IDM::CalculateAcceleration(ego.speed, ego.accel, nbr.leader.speed, nbr.leader.accel,
+                                                 Mobil::GetGap(ego, &nbr.leader), BuildIdmParams(m_currentRoad));
+        if (accel < -MOBIL_B_SAFE)
+            return false; // 그 차 뒤에 붙으려면 안전한계보다 세게 밟아야 한다
+    }
+    return IsSafeLaneEntry(m_currentRoad, targetOffset, m_lastNearbyCars);
+}
+
+// targetOffset 방향으로 '한 칸만' 이동하는 인접 밴드를 고른다.
+bool Car::PickAdjacentBandToward(float targetOffset, float &outOffset) const
+{
+    const LaneSection *sec = RoadDataManager::Get().GetLateralProfile(m_currentRoad, 0.0f);
+    if (sec == nullptr || sec->bands.empty())
+        return false;
+
+    std::vector<const LaneBand *> bands;
+    for (const LaneBand &b : sec->bands)
+        if (b.type == LaneType::Driving)
+            bands.push_back(&b);
+    if (bands.empty())
+        return false;
+    std::sort(bands.begin(), bands.end(), [](const LaneBand *a, const LaneBand *b)
+              { return a->centerOffset < b->centerOffset; });
+
+    size_t curIdx = 0;
+    for (size_t i = 1; i < bands.size(); ++i)
+        if (std::fabs(m_currentOffset - bands[i]->centerOffset) < std::fabs(m_currentOffset - bands[curIdx]->centerOffset))
+            curIdx = i;
+
+    long step = (targetOffset > bands[curIdx]->centerOffset) ? 1 : -1;
+    long adjIdx = static_cast<long>(curIdx) + step;
+    if (adjIdx < 0 || adjIdx >= static_cast<long>(bands.size()))
+        return false;
+
+    // 중간 차로가 막혀 있으면 거기 설 수가 없다 -- false를 줘서 호출부가 뚫린 차로까지 한 번에 건너가게 한다.
+    if (!IsBandClearAhead(bands[adjIdx]->centerOffset, bands[adjIdx]->width * 0.5f))
+        return false;
+    outOffset = bands[adjIdx]->centerOffset;
+    return true;
+}
+
+// 정지 대기 유지/해제. 해제는 "레이에서 사라짐"이 원칙이지만, 정지하면 전방 레이가 AVOID_FRONT_RAY_MIN까지
+// 줄어 그 안에 멈춘 대상은 영영 안 사라진다 -- 타임아웃을 두고 정적 취급(회피 시도)으로 넘긴다.
+void Car::UpdateWaitObstacle()
+{
+    m_wait.elapsed += m_deltaTime;
+    m_speedCap = 0.0f; // 대기 중엔 종방향 상한 0 (IDM이 부드럽게 세운다)
+
+    // 레이에서 사라졌거나(None), 비켜나는 중이거나(Dynamic+TTC 여유), 대상이 바뀌었으면(Static/Vehicle) 대기 해제.
+    ThreatKind kind = ClassifyFrontThreat();
+    bool stillWaiting = (kind == ThreatKind::Dynamic) && !IsDynamicThreatClear();
+    if (!stillWaiting)
+    {
+        m_wait = WaitState{};
+        m_speedCap = -1.0f;
+        SetSubMode(SubMode::D_Normal); // 다음 프레임에 DecideAvoidance가 다시 판단한다
+        DebugConsole::Log(GetName() + ": wait -> clear");
         return;
+    }
+    if (m_wait.elapsed >= AVOID_WAIT_TIMEOUT)
+    {
+        // 안 비켜준다. 이 대상이 사라질 때까지 정적 장애물로 보고 회피/차선변경 쪽으로 넘긴다.
+        m_wait.elapsed = 0.0f;
+        m_wait.timedOut = true;
+        m_speedCap = -1.0f;
+        SetSubMode(SubMode::D_Normal);
+        DebugConsole::Log(GetName() + ": wait timeout -> treat as static");
+    }
+}
 
-    std::vector<VehicleCollision::Obstacle> obstacles = BuildSensorObstacles();
-    m_sensor = ScanSensors(obstacles);
+// 이번 프레임의 인지 결과를 한 번에 만든다: 판정 대상 목록 -> 레이 스캔 -> 레이가 못 보는 두 가지 보강.
+void Car::UpdateSensors()
+{
+    m_sensorObstacles = BuildSensorObstacles();
+    m_stationaryObstacles.clear();
+    for (const VehicleCollision::Obstacle &obstacle : m_sensorObstacles)
+        if (obstacle.speed <= AVOID_BLOCK_SPEED)
+            m_stationaryObstacles.push_back(obstacle);
+
+    m_sensor = ScanSensors(m_sensorObstacles);
     RebuildSensorRender();
+    m_speedCap = -1.0f; // 매프레임 초기화 -- 아래 상태들이 필요할 때만 다시 건다
+    if (!m_sensor.hasFrontHitObstacle)
+        m_wait.timedOut = false; // 대상이 시야에서 사라졌다 -- 다음 장애물은 다시 정상 분류로
 
-    // 회피 재구현 중 -- 레이스캔 -> IDM 제약(AppendSensorConstraintSample)/MOBIL 리더 반영만 남기고
-    // 트리거/오프셋 회피/후진 등 나머지는 아래에서 하나씩 다시 켠다.
-    /*
     // 레이 스캔이 놓치는 '회전 중 차체가 쓸고 가는 면적'을 OBB 스윕으로 보강한다. 접촉이 예고되면
     // 제동 근거(AppendSensorConstraintSample / DriveControl)이자 회피 트리거로 같이 쓴다.
-    m_sensor.bodyContactDistance = PredictBodyContact(obstacles);
+    m_sensor.bodyContactDistance = PredictBodyContact(m_sensorObstacles);
     if (m_sensor.bodyContactDistance >= 0.0f)
         m_sensor.frontBlocked = true;
 
-    // 실제 물리 충돌은 레이가 못 본 각도(대각선 꼭짓점 등)로 박은 경우까지 잡는 최후의 안전망이다.
-    // 레이 판정과 무관하게 여기서 끊어주지 않으면, 계획상으론 아직 '회피 진행 중'이라 계속 밀어붙인다.
-    if (m_contactPending)
+    // 비스듬히 들어오는 동적 장애물은 레이 코리도 필터를 통과하지 못해 frontDistance에 안 잡힌다.
+    // 예측 충돌이 더 가까우면 그걸 전방 위협으로 승격시킨다 -- 그래야 IDM이 세울 근거가 생긴다.
+    const VehicleCollision::Obstacle *conflictObstacle = nullptr;
+    float conflictDistance = PredictMovingConflict(m_sensorObstacles, &conflictObstacle);
+    if (conflictObstacle != nullptr && (m_sensor.frontDistance < 0.0f || conflictDistance < m_sensor.frontDistance))
     {
-        m_contactPending = false;
-        if (m_avoid.backingUp)
-        {
-            // 후진하다 뒤를 박았다. ReverseSegment는 속도로 진행거리를 재는데 충돌로 속도가 0이 되므로,
-            // 여기서 안 끊으면 진행거리가 영영 안 늘어 후진이 끝나지 않는다.
-            DebugConsole::Log(GetName() + ": backup hit something -> abort backup");
-            m_avoid.backingUp = false;
-            std::vector<std::unique_ptr<VehicleSegment>> segments;
-            segments.push_back(std::make_unique<SplineFollowSegment>());
-            m_vehicleController.BeginPlan(std::move(segments));
-            return;
-        }
-        if (m_avoid.active)
-        {
-            DebugConsole::Log(GetName() + ": avoid contact -> stuck");
-            HandleAvoidStuck();
-            return;
-        }
+        m_sensor.frontDistance = conflictDistance;
+        m_sensor.frontHitPosition = conflictObstacle->center;
+        m_sensor.frontHitSpeed = 0.0f; // 가로지르는 대상 뒤를 따라갈 수는 없다 -- 정지 제약으로 건다
+        m_sensor.frontHitObstacle = *conflictObstacle;
+        m_sensor.hasFrontHitObstacle = true;
+        m_sensor.movingConflict = true;
     }
+}
 
-    // 후진 매뉴버 중에는 아무 판단도 하지 않는다. 끝나면 정속주행 계획으로 되돌리고, 다음 프레임에 회피를 다시 시도한다.
+// 실제 물리 충돌은 레이가 못 본 각도(대각선 꼭짓점 등)로 박은 경우까지 잡는 최후의 안전망이다.
+// 레이 판정과 무관하게 여기서 끊어주지 않으면, 계획상으론 아직 '회피 진행 중'이라 계속 밀어붙인다.
+bool Car::HandleContactPending()
+{
+    if (!m_contactPending)
+        return false;
+
+    m_contactPending = false;
     if (m_avoid.backingUp)
     {
-        if (!m_vehicleController.IsFinished())
-            return;
+        // 후진하다 뒤를 박았다. ReverseSegment는 속도로 진행거리를 재는데 충돌로 속도가 0이 되므로,
+        // 여기서 안 끊으면 진행거리가 영영 안 늘어 후진이 끝나지 않는다.
+        DebugConsole::Log(GetName() + ": backup hit something -> abort backup");
         m_avoid.backingUp = false;
-        m_avoid.stuck = false;
-        m_avoid.blockedTimer = 0.0f;
         std::vector<std::unique_ptr<VehicleSegment>> segments;
         segments.push_back(std::make_unique<SplineFollowSegment>());
         m_vehicleController.BeginPlan(std::move(segments));
-        return;
+        return true;
     }
-
-    // ---- 회피 중: 오프셋을 유지하다가 레이가 깨끗해지면 원래 차로로 복귀 ----
-    if (m_avoid.active)
+    if (m_subMode == SubMode::D_Avoid)
     {
-        // 재계획: 기본적으로는 산출된 오프셋으로 Lerp만 하지만, 그 계획이 실패했다는 신호가 오면 다시 찾는다.
-        //  - 내가 '밀고 들어가는 쪽'이 막혔다: 비우려던 공간에 뭔가 들어왔다.
-        //    반대쪽 히트는 지금 지나치는 중인 장애물이라 정상이므로 트리거로 쓰면 안 된다 -- 그걸 쓰면
-        //    회피가 성공하는 도중에 매번 스스로 취소해버린다.
-        //  - 오프셋에 다 도착했는데 아직도 정면이 막혔다: 이 정도 횡이동으로는 못 피한다(더 크게 잡아야 한다).
-        if (!m_avoid.returning && m_currentTime - m_avoid.lastPlanTime >= AVOID_REPLAN_INTERVAL)
+        DebugConsole::Log(GetName() + ": avoid contact -> stuck");
+        HandleAvoidStuck();
+        return true;
+    }
+    return false; // 회피/후진 중이 아니면 뒷수습할 게 없다
+}
+
+// 후진 매뉴버 중에는 아무 판단도 하지 않는다. 끝나면 정속주행 계획으로 되돌리고, 다음 프레임에 회피를 다시 시도한다.
+bool Car::UpdateBackupState()
+{
+    if (!m_avoid.backingUp)
+        return false;
+    if (!m_vehicleController.IsFinished())
+        return true;
+
+    m_avoid.backingUp = false;
+    m_avoid.stuck = false;
+    m_avoid.blockedTimer = 0.0f;
+    std::vector<std::unique_ptr<VehicleSegment>> segments;
+    segments.push_back(std::make_unique<SplineFollowSegment>());
+    m_vehicleController.BeginPlan(std::move(segments));
+    return true;
+}
+
+// D_Avoid: 산출된 오프셋을 유지하다가 레이가 깨끗해지면 원래 차로로 복귀한다.
+void Car::UpdateAvoid()
+{
+    m_speedCap = AVOID_LOW_SPEED; // 회피 궤적은 조향 여유가 필요하다 -- 최대 조향 가능한 속도까지 낮춘다
+
+    // 재계획: 기본적으로는 산출된 오프셋으로 Lerp만 하지만, 그 계획이 실패했다는 신호가 오면 다시 찾는다.
+    //  - 내가 '밀고 들어가는 쪽'이 막혔다: 비우려던 공간에 뭔가 들어왔다.
+    //    반대쪽 히트는 지금 지나치는 중인 장애물이라 정상이므로 트리거로 쓰면 안 된다 -- 그걸 쓰면
+    //    회피가 성공하는 도중에 매번 스스로 취소해버린다.
+    //  - 오프셋에 다 도착했는데 아직도 정면이 막혔다: 이 정도 횡이동으로는 못 피한다(더 크게 잡아야 한다).
+    if (m_currentTime - m_avoid.lastPlanTime >= AVOID_REPLAN_INTERVAL)
+    {
+        bool towardRight = m_avoid.avoidOffset > m_avoid.laneOffset;
+        bool shiftSideBlocked = towardRight ? m_sensor.rightBlocked : m_sensor.leftBlocked;
+        bool arrivedButBlocked = m_sensor.frontBlocked &&
+                                 std::fabs(m_currentOffset - m_avoid.avoidOffset) < AVOID_RETURN_TOLERANCE;
+        if (shiftSideBlocked || arrivedButBlocked)
         {
-            bool towardRight = m_avoid.avoidOffset > m_avoid.laneOffset;
-            bool shiftSideBlocked = towardRight ? m_sensor.rightBlocked : m_sensor.leftBlocked;
-            bool arrivedButBlocked = m_sensor.frontBlocked &&
-                                     std::fabs(m_currentOffset - m_avoid.avoidOffset) < AVOID_RETURN_TOLERANCE;
-            if (shiftSideBlocked || arrivedButBlocked)
+            m_avoid.lastPlanTime = m_currentTime;
+            float replanOffset = 0.0f;
+            if (FindAvoidOffset(m_sensor, m_sensorObstacles, m_avoid.laneOffset, replanOffset))
             {
-                m_avoid.lastPlanTime = m_currentTime;
-                float replanOffset = 0.0f;
-                if (FindAvoidOffset(m_sensor, obstacles, m_avoid.laneOffset, replanOffset))
-                {
-                    if (std::fabs(replanOffset - m_avoid.avoidOffset) > 0.01f)
-                        DebugConsole::Log(GetName() + ": avoid replan d " + ToString(m_avoid.avoidOffset) +
-                                          " -> " + ToString(replanOffset));
-                    m_avoid.avoidOffset = replanOffset;
-                }
-                else
-                {
-                    // 어느 쪽으로도 못 간다. 여기서 회피를 접으면(차로 중심으로 복귀) 지금 옆으로 지나치는
-                    // 중인 바로 그 장애물 쪽으로 되돌아가는 꼴이 된다 -- 지금 오프셋을 그대로 지킨 채
-                    // 정지(필요하면 후진)하고, 0.5초 뒤 다시 찾아본다.
-                    HandleAvoidStuck();
-                }
+                if (std::fabs(replanOffset - m_avoid.avoidOffset) > 0.01f)
+                    DebugConsole::Log(GetName() + ": avoid replan d " + ToString(m_avoid.avoidOffset) +
+                                      " -> " + ToString(replanOffset));
+                m_avoid.avoidOffset = replanOffset;
+            }
+            else
+            {
+                // 어느 쪽으로도 못 간다. 여기서 회피를 접으면(차로 중심으로 복귀) 지금 옆으로 지나치는
+                // 중인 바로 그 장애물 쪽으로 되돌아가는 꼴이 된다 -- 지금 오프셋을 그대로 지킨 채
+                // 정지(필요하면 후진)하고, 0.5초 뒤 다시 찾아본다.
+                HandleAvoidStuck();
             }
         }
+    }
 
-        bool clear = !m_sensor.anyFrontHit && !m_sensor.sideNear;
-        m_avoid.clearTimer = clear ? m_avoid.clearTimer + m_deltaTime : 0.0f;
+    // 종료 기준은 '앞이 막혔는가'(frontBlocked)지 '앞에 뭐라도 보이는가'(anyFrontHit)가 아니다.
+    // 정면 레이는 최대 60m를 보므로, 후자로 잡으면 앞에 정상 주행 중인 차만 있어도 회피 오프셋에서
+    // 영영 못 나온다. 지금 옆에 붙어 있는 것은 sideNear가 따로 본다.
+    bool clear = !m_sensor.frontBlocked && !m_sensor.sideNear;
+    m_avoid.clearTimer = clear ? m_avoid.clearTimer + m_deltaTime : 0.0f;
 
-        if (!m_avoid.returning && m_avoid.clearTimer >= AVOID_CLEAR_DELAY)
-        {
-            m_avoid.returning = true;
-            DebugConsole::Log(GetName() + ": avoid -> return to lane d " + ToString(m_avoid.laneOffset));
-        }
-        else if (m_avoid.returning && !clear)
-        {
-            m_avoid.returning = false; // 복귀 도중 다시 막히면 회피 오프셋으로 되돌아간다
-        }
+    if (m_avoid.clearTimer >= AVOID_CLEAR_DELAY)
+    {
+        DebugConsole::Log(GetName() + ": avoid -> clear, resume normal at d " + ToString(m_currentOffset));
+        m_avoid = AvoidState{};
+        SetSubMode(SubMode::D_Normal);
+    }
+}
 
-        if (m_avoid.returning && std::fabs(m_currentOffset - m_avoid.laneOffset) < AVOID_RETURN_TOLERANCE)
-        {
-            m_avoid = AvoidState{};
-            SetSubMode(SubMode::D_Normal);
-        }
+// D_LaneChange: 목표 차로에 닿으면 끝(아직 막혀 있으면 다음 판단에서 다시 트리거).
+void Car::UpdateLaneChange()
+{
+    m_speedCap = AVOID_LOW_SPEED;
+    bool arrived = std::fabs(m_currentOffset - m_avoid.laneChangeTarget) < AVOID_RETURN_TOLERANCE;
+    // 아직 원래 차로 쪽에 더 가까울 때만 취소
+    bool canAbort = std::fabs(m_currentOffset - m_avoid.laneOffset) <
+                    std::fabs(m_currentOffset - m_avoid.laneChangeTarget);
+    // 목표 차로가 도중에 막히면(장애물이든 차든) 취소
+    bool blocked = canAbort &&
+                   (!IsBandClearAhead(m_avoid.laneChangeTarget, GetHalfWidth() + AVOID_CORRIDOR_MARGIN) ||
+                    !IsLaneEntryClear(m_avoid.laneChangeTarget));
+    if (arrived || blocked)
+    {
+        if (!arrived)
+            DebugConsole::Log(GetName() + ": lane change blocked -> cancel");
+        m_avoid = AvoidState{};
+        m_speedCap = -1.0f;
+        SetSubMode(SubMode::D_Normal);
+    }
+}
+
+// 진행 중인 매뉴버가 없을 때: 전방 최근접 위협이 무엇인지로 다음 행동을 고른다.
+void Car::DecideAvoidance()
+{
+    ThreatKind threat = ClassifyFrontThreat();
+    if (threat != ThreatKind::Static)
+        m_avoid.blockedTimer = 0.0f; // 정적 장애물 트리거는 '같은 대상이 계속' 잡혀야 성립한다
+
+    if (threat == ThreatKind::None || threat == ThreatKind::Vehicle)
+    {
+        // 차는 IDM(추종/정지)과 MOBIL(차선변경)이 이미 처리한다. 정체/신호대기 줄을 회피로 빠져나가면 안 된다.
+        m_avoid.stuck = false;
         return;
     }
 
-    // ---- 평상시: 전방이 계속 막혀 있을 때만 회피 판단 ----
+    if (threat == ThreatKind::Dynamic)
+    {
+        // 원칙은 정지. 판단하는 동안 조향 여유가 남게 최저속까지 먼저 줄인다.
+        m_speedCap = AVOID_LOW_SPEED;
+        if (IsDynamicThreatClear())
+            return; // 내가 닿기 전에 비켜난다 -- 그냥 지나간다(속도 상한은 이번 프레임만 유지)
+
+        m_wait.elapsed = 0.0f;
+        m_speedCap = 0.0f;
+        SetSubMode(SubMode::D_WaitObstacle);
+        DebugConsole::Log(GetName() + ": dynamic obstacle -> wait");
+        return;
+    }
+
+    // ---- 정적 장애물 ----
     m_avoid.blockedTimer = m_sensor.frontBlocked ? m_avoid.blockedTimer + m_deltaTime : 0.0f;
     if (m_avoid.blockedTimer < AVOID_TRIGGER_DELAY)
     {
@@ -1535,22 +1961,43 @@ void Car::UpdateAvoidance()
         return;
     }
 
-    // MOBIL로 정상 차선변경이 가능하면 차로 사이를 걸치는 회피까지 갈 필요가 없다 -- 그쪽에 맡긴다.
     float laneCenter = m_currentOffset;
-    float mobilTarget = ComputeLateralTarget(m_lastNearbyCars, m_lastIdmParams, &laneCenter);
-    if (std::fabs(mobilTarget - laneCenter) > 0.01f)
+    ComputeLateralTarget(m_lastNearbyCars, m_lastIdmParams, &laneCenter);
+
+    // 통과할 수 있는 차로가 있으면 차로 사이를 걸치는 회피까지 갈 필요가 없다 -- 정상 차선변경으로 피한다.
+    // 단, 차선변경은 Lerp라 시간이 걸린다: 남은 거리가 모자라면 걸친 채로 장애물에 닿으므로 바로 회피로 간다.
+    float passableOffset = 0.0f;
+    bool hasRoomToChange = m_sensor.frontDistance < 0.0f ||
+                           m_sensor.frontDistance > EstimateLaneChangeDistance() * AVOID_LANE_CHANGE_LEAD;
+    // 차선변경은 항상 한 칸씩만 한다. 중간 차로까지 막혀 있으면(두 차로를 한 번에 건너야 하는 상황)
+    // 차선변경으로는 못 피하는 것으로 보고 아래 오프셋 회피에 맡긴다 -- 동시 회피는 만들지 않는다.
+    float stepOffset = 0.0f;
+    if (hasRoomToChange && FindPassableBand(passableOffset) &&
+        PickAdjacentBandToward(passableOffset, stepOffset))
     {
+        if (IsLaneEntryClear(stepOffset))
+        {
+            m_avoid.laneOffset = laneCenter; // 취소 판정 기준(출발한 차로)
+            m_avoid.laneChangeTarget = stepOffset;
+            m_avoid.blockedTimer = 0.0f;
+            m_speedCap = AVOID_LOW_SPEED;
+            SetSubMode(SubMode::D_LaneChange);
+            DebugConsole::Log(GetName() + ": static obstacle -> lane change d " + ToString(laneCenter) +
+                              " -> " + ToString(stepOffset));
+            return;
+        }
+        // 차로는 뚫렸는데 지금 그쪽으로 못 들어간다(앞뒤차). IDM이 장애물 앞에 세우는 동안 다음 판단을 기다린다.
         m_avoid.stuck = false;
         return;
     }
 
     float avoidOffset = 0.0f;
-    if (FindAvoidOffset(m_sensor, obstacles, laneCenter, avoidOffset))
+    if (FindAvoidOffset(m_sensor, m_sensorObstacles, laneCenter, avoidOffset))
     {
-        m_avoid.active = true;
         m_avoid.laneOffset = laneCenter;
         m_avoid.avoidOffset = avoidOffset;
         m_avoid.lastPlanTime = m_currentTime;
+        m_speedCap = AVOID_LOW_SPEED;
         SetSubMode(SubMode::D_Avoid);
         DebugConsole::Log(GetName() + ": avoid d " + ToString(laneCenter) + " -> " + ToString(avoidOffset));
         return;
@@ -1558,7 +2005,6 @@ void Car::UpdateAvoidance()
 
     // 좌우 어느 쪽으로도 못 피한다.
     HandleAvoidStuck();
-    */
 }
 
 // 회피가 막혔을 때: 그 자리에 정지하고(경적은 UpdateHorn이 알아서 울린다), 뒤가 비어 있으면 차 길이
@@ -1570,7 +2016,7 @@ void Car::HandleAvoidStuck()
         return;
 
     float backupDistance = GetLength() * 0.5f;
-    bool rearClear = m_sensor.rearDistance < 0.0f || m_sensor.rearDistance > backupDistance + MIN_SAFE_GAP;
+    bool rearClear = m_sensor.rearDistance < 0.0f || m_sensor.rearDistance > backupDistance + AVOID_BACKUP_CLEARANCE;
     if (m_speed > HORN_STOP_SPEED || !rearClear)
         return; // 아직 굴러가는 중이거나 뒤가 막혔다 -- 정지 유지(IDM/비상제동이 세운다)
 

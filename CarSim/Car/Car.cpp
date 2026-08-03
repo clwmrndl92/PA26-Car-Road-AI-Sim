@@ -379,7 +379,7 @@ void Car::ApplyMotion()
         m_rigidbody.SetAngularVelocity(JPH::Vec3::sZero());
         m_acceleration = 0.0f;
         m_speed = 0.0f;
-        // 회피 상태머신(UpdateAvoidance)이 다음 Update에서 소비한다. 레이가 못 본 각도로 꼭짓점을 박은
+        // 회피 상태머신(HandleContactPending)이 다음 Update에서 소비한다. 레이가 못 본 각도로 꼭짓점을 박은
         // 경우, 계획상으론 아직 '진행 중'이라 그대로 두면 계속 밀어붙이기 때문.
         m_contactPending = true;
         DebugConsole::Log("CRASH!!");
@@ -544,9 +544,8 @@ void Car::UpdateDebugWindow()
         ImGui::Text("Body sweep: %.1f m", m_sensor.bodyContactDistance);
         if (m_avoid.backingUp)
             ImGui::Text("Avoid: backing up");
-        else if (m_avoid.active)
-            ImGui::Text("Avoid: %s d %.2f -> %.2f", m_avoid.returning ? "returning" : "shifted",
-                        m_avoid.laneOffset, m_avoid.avoidOffset);
+        else if (m_subMode == SubMode::D_Avoid)
+            ImGui::Text("Avoid: shifted d %.2f -> %.2f", m_avoid.laneOffset, m_avoid.avoidOffset);
         else if (m_avoid.stuck)
             ImGui::Text("Avoid: stuck (no gap)");
 
@@ -654,11 +653,12 @@ void Car::RebuildSensorRender()
 
     // 서로 떨어진 레이 여러 개를 폴리라인 하나로 그린다: origin -> end -> origin 으로 되돌아온 뒤 다음
     // 레이로 넘어가므로, 되돌아오는 선은 원래 선과 겹치고 레이 사이를 잇는 선은 차체 외곽을 따라간다.
+    // 실제로 뭔가 맞힌 레이만 그린다 -- 전부 그리면 매프레임 20여 개가 깔려서 정작 감지된 게 안 보인다.
     std::vector<DirectX::XMFLOAT3> points;
-    points.reserve(m_sensor.rays.size() * 3);
-    bool anyHit = false;
     for (const SensorRay &ray : m_sensor.rays)
     {
+        if (ray.hitDistance < 0.0f)
+            continue;
         DirectX::XMFLOAT3 origin = ToXMFLOAT3(ray.origin);
         DirectX::XMFLOAT3 end = ToXMFLOAT3(ray.end);
         origin.y += SENSOR_LINE_HEIGHT;
@@ -666,14 +666,16 @@ void Car::RebuildSensorRender()
         points.push_back(origin);
         points.push_back(end);
         points.push_back(origin);
-        anyHit = anyHit || ray.hitDistance >= 0.0f;
+    }
+    if (points.empty())
+    {
+        m_sensorRender.SetModel(nullptr);
+        return;
     }
 
     Model *pModel = ModelManager::Get().CreateFromGeometry("__sensor_rays__:" + GetName(),
                                                            Geometry::CreatePolyline(points));
-    pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor",
-                                                anyHit ? DirectX::XMFLOAT4(1.0f, 0.5f, 0.0f, 1.0f)
-                                                       : DirectX::XMFLOAT4(0.0f, 1.0f, 1.0f, 1.0f));
+    pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(1.0f, 0.5f, 0.0f, 1.0f));
     pModel->materials[0].Set<float>("$Opacity", 1.0f);
     m_sensorRender.SetModel(pModel);
 }

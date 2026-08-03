@@ -108,9 +108,14 @@ private:
         None,
 
         // Drive
-        D_Normal,     // 일반 주행
-        D_WaitSignal, // 신호대기
-        D_Avoid,      // 장애물 회피(차로 중심을 벗어난 오프셋 주행)
+        D_Normal,       // 일반 주행
+        D_WaitSignal,   // 신호대기
+        D_WaitObstacle, // 움직이는 장애물이 진로를 비울 때까지 정지 대기
+        D_Avoid,        // 장애물 회피(차로 중심을 벗어난 오프셋 주행)
+        // 옆 차로 중심으로 이동 중(차로 '중심'으로 가므로 D_Avoid와 다르다). 회피용 차선변경(DecideAvoidance
+        // -> UpdateLaneChange, 커밋된 매뉴버)과 MOBIL의 일반 차선변경(UpdateDrivePlan, 매 틱 재평가) 둘 다
+        // 이 서브모드로 보인다 -- 판단/취소 로직은 서로 다르고, 여기서는 라벨만 통일한다.
+        D_LaneChange,
 
         // Park
         P_EXIT,        // 출차
@@ -128,8 +133,12 @@ private:
             return "Normal";
         case SubMode::D_WaitSignal:
             return "WaitSignal";
+        case SubMode::D_WaitObstacle:
+            return "WaitObstacle";
         case SubMode::D_Avoid:
             return "Avoid";
+        case SubMode::D_LaneChange:
+            return "LaneChange";
         case SubMode::P_EXIT:
             return "ParkExit";
         case SubMode::P_ENTER_LEG1:
@@ -210,7 +219,7 @@ private:
         Mobil::VehicleState follower;
     };
 
-    void UpdateBehaviorPlan();
+    void UpdateDrivePlan();
     IDM::Params BuildIdmParams(const shared_ptr<Road> &road) const; // road 제한속도를 v0로 반영한 IDM 파라미터
     // samples를 IDM 가상 리더로 보고 각각의 IDM 가속도 중 최솟값을 반환(매프레임 호출 가능). 실제 앞차(leader!=nullptr)는
     // 그 차의 현재 속도/가속도/거리를 매번 새로 읽고, 정적 제약(신호/커브 등)은 distanceOffset(스캔 이후 이동거리)만큼
@@ -231,9 +240,11 @@ private:
     // nearby 중 refLine 기준 bandCenter 밴드에 속한 차들에서 egoS 앞/뒤 가장 가까운 leader/follower를 MOBIL 상태로.
     LaneNeighbors GatherLaneNeighbors(const std::vector<NearbyCar> &nearby, const Spline &refLine,
                                       float bandCenter, float bandHalfWidth, float egoS) const;
+    // 현재 오프셋에서 가장 가까운 driving 밴드 중심(MOBIL 판정 없이 밴드 조회만).
+    float CurrentLaneCenter() const;
     // 현재 밴드 유지 vs MOBIL 판정 인접 밴드로 변경 -> 목표 횡오프셋 d.
     // outLaneCenter가 nullptr이 아니면 "지금 속한 차로의 중심 d"를 따로 써준다 -- 반환값과 다르면 MOBIL이
-    // 차선변경을 하기로 했다는 뜻이라, 회피 판단(UpdateAvoidance)이 이걸로 "정상 차선변경 가능"을 본다.
+    // 차선변경을 하기로 했다는 뜻이라, 회피 판단(DecideAvoidance)이 이걸로 "정상 차선변경 가능"을 본다.
     float ComputeLateralTarget(const std::vector<NearbyCar> &nearbyCars, const IDM::Params &idm,
                                float *outLaneCenter = nullptr) const;
     std::vector<RoadSpeedSample> ScanRoadSpeedConstraints(float lookDistance) const;
@@ -255,39 +266,93 @@ private:
     // 매프레임 갱신되는 레이 스캔 결과. 그룹별로 "막혔는가"만 뽑아 회피 판단에 쓴다.
     struct SensorScan
     {
-        bool frontBlocked = false;   // 전방 코리도 안에 (거의) 멈춰 있는 장애물이 잡힘 -- 회피 트리거 후보
-        bool anyFrontHit = false;    // 전방 그룹에 뭐든(정상 주행 중인 앞차 포함) 맞았는가 -- 차로 복귀 판정용
-        bool sideNear = false;       // 대각/측면 레이에 뭐든 맞았는가 -- 차로 복귀 판정용
+        bool frontBlocked = false; // 전방 코리도 안에 (거의) 멈춰 있는 장애물이 잡힘 -- 회피 트리거 후보
+
+        bool sideNear = false;
         bool leftBlocked = false;    // 왼쪽 바로 옆에 뭔가 있음 -- 그쪽으로는 못 피한다
         bool rightBlocked = false;   // 오른쪽 바로 옆에 뭔가 있음
         float frontDistance = -1.0f; // 내 진로 코리도 안에 들어온 전방 히트 중 최단 거리(범퍼 기준). 없으면 -1
         Vec3 frontHitPosition;       // 위 히트 지점 (IDM 가상 리더 샘플 위치)
-        float frontHitSpeed = 0.0f;  // 위 히트 대상의 진행 속도 (IDM 리더 속도)
-        float rearDistance = -1.0f;  // 후방 레이 최단 히트 거리. 없으면 -1
+        // 위 히트 대상이 '내 진행방향으로' 멀어지는 속도(IDM 리더 속도). obstacle.speed는 headingRad 기준
+        // 부호 없는 스칼라라, 그대로 쓰면 마주 오는 대상도 같이 도망가는 리더로 잡힌다 -- 투영해서 쓴다.
+        float frontHitSpeed = 0.0f;
+        bool hasFrontHitObstacle = false;            // 아래 원본 정보가 유효한가
+        VehicleCollision::Obstacle frontHitObstacle; // 위 히트의 원본(위협 분류/TTC 계산용)
+        // 아직 진로 밖이지만 등속으로 굴려보면 내가 지나갈 때 겹치는 동적 장애물이 있다(비스듬히 접근).
+        // 이 경우 '비켜줄까'를 따질 게 아니라 이미 부딪히는 것으로 판정났으므로 무조건 정지 대기다.
+        bool movingConflict = false;
+        float rearDistance = -1.0f; // 후방 레이 최단 히트 거리. 없으면 -1
         // 차체(OBB) 스윕이 예고한 접촉까지의 주행거리. 없으면 -1. 레이(점)로는 못 잡는 '회전 중
         // 바깥쪽 앞 꼭지점이 쓸고 가는 면적'을 담당한다.
         float bodyContactDistance = -1.0f;
         std::vector<SensorRay> rays; // 디버그 렌더용 전체 목록
     };
 
-    // 회피 진행 상태. active인 동안은 MOBIL 차선변경을 끄고 목표 오프셋으로만 Lerp한다(재탐색 없음).
+    // 회피 진행 상태. "지금 회피 중인가"는 m_subMode(D_Avoid / D_LaneChange)가 유일한 기준이고,
+    // 여기에는 그 서브모드 안에서만 의미 있는 값들만 둔다 -- 플래그를 따로 두면 둘이 어긋난다.
     struct AvoidState
     {
-        bool active = false;
-        bool returning = false;        // 레이가 깨끗해져 원래 차로로 복귀하는 중
         bool stuck = false;            // 좌우 어느 쪽으로도 못 피함 -- 정지(경적은 UpdateHorn이 알아서)
         bool backingUp = false;        // ReverseSegment 실행 중
-        float laneOffset = 0.0f;       // 복귀 목표 d (회피 시작 시점의 차로 중심)
+        float laneOffset = 0.0f;       // 회피 시작 시점의 원래 차로 중심 d -- 재계획 기준점(방향/크기 계산용)
         float avoidOffset = 0.0f;      // 회피 목표 d
         float blockedTimer = 0.0f;     // 전방이 막힌 채로 지난 시간 (진입 트리거용)
-        float clearTimer = 0.0f;       // 레이가 깨끗한 채로 지난 시간 (복귀 트리거용)
+        float clearTimer = 0.0f;       // 레이가 깨끗한 채로 지난 시간 (회피 종료 디바운스용)
         float lastPlanTime = -1000.0f; // 마지막으로 오프셋을 (재)탐색한 시각 -- 재계획 디더링 방지
+        float laneChangeTarget = 0.0f; // D_LaneChange일 때 목표 차로 중심 d
     };
 
-    void UpdateAvoidance();                                               // 매프레임: 레이 스캔 -> 회피 상태 전이(진입/복귀/후진)
-    void HandleAvoidStuck();                                              // 회피 불가: 그 자리 정지 + 뒤가 비었으면 후진(최초 탐색/재탐색 실패가 공유)
+    // 움직이는 장애물이 진로를 비울 때까지 그 앞에서 정지 대기하는 상태(D_WaitObstacle).
+    struct WaitState
+    {
+        float elapsed = 0.0f; // 대기 누적 시간 -- AVOID_WAIT_TIMEOUT을 넘으면 '안 비켜준다'로 보고 정적 취급
+        // 타임아웃으로 정적 취급 중. 이 대상이 시야에서 사라질 때까지 유지해야 한다 -- 안 그러면 대기를
+        // 푼 다음 프레임에 같은 대상이 다시 Dynamic으로 분류돼 대기/타임아웃을 무한 반복한다.
+        bool timedOut = false;
+    };
+
+    // 전방 최근접 위협을 무엇으로 볼 것인가. 대상마다 대응이 완전히 갈리므로 여기서 한 번만 분기한다.
+    enum class ThreatKind
+    {
+        None,    // 위협 없음 또는 판단 보류(속도 임계 사이) -- IDM 추종에 맡긴다
+        Vehicle, // 차 -- IDM(종방향)/MOBIL(횡방향)이 이미 처리한다
+        Dynamic, // 움직이는 장애물 -- 정지 원칙(TTC가 넉넉할 때만 통과)
+        Static,  // 멈춰 있는 장애물 -- 차선변경 또는 오프셋 회피
+    };
+
+    // Drive 서브모드별 틱. UpdateDrive가 m_subMode로 갈라 부른다 -- 어느 함수가 도는지가 곧 현재 상태다.
+    void UpdateSensors();        // (공통) 장애물 목록 수집 + 레이 스캔 + 차체접촉/교차충돌 예측
+    bool HandleContactPending(); // (공통) 실제 물리 충돌 뒷수습. 서브모드와 무관하게 먼저 끊는다
+    bool UpdateBackupState();    // (공통) 후진 매뉴버 진행/종료. 도는 동안 서브모드 틱을 건너뛴다
+    void DecideAvoidance();      // D_Normal: 위협을 분류해 다음 서브모드를 고른다
+    void UpdateWaitObstacle();   // D_WaitObstacle: 정지 대기 유지/해제
+    void UpdateAvoid();          // D_Avoid: 오프셋 회피 재계획/복귀/종료
+    void UpdateLaneChange();     // D_LaneChange: 차선변경 진행/취소/완료
+    void HandleAvoidStuck();                // 회피 불가: 그 자리 정지 + 뒤가 비었으면 후진(최초 탐색/재탐색 실패가 공유)
+    ThreatKind ClassifyFrontThreat() const; // 전방 최근접 히트를 차/동적/정적으로 분류
+    bool IsDynamicThreatClear() const;      // 동적 장애물이 내가 닿기 전에 진로를 비우는가(TTC)
+    // 회피(오프셋/차선변경)가 지금 실제로 향하고 있는 횡오프셋. 진행 중이 아니면 현재 오프셋.
+    // 궤적을 굴려보는 쪽(PredictBodyContact)과 Lerp하는 쪽이 같은 목표를 봐야 한다 -- 어긋나면
+    // 빠져나가는 중인 궤적을 충돌로 잘못 보고 스스로 제동한다.
+    float AvoidTargetOffset() const;
+    // 그 밴드(차로) 앞쪽에 정지 장애물이 걸쳐 있지 않은가. '거기까지 가는 궤적이 뚫렸나'가 아니라
+    // '그 차로 자체가 뚫렸나'를 본다 -- 3차로에서 1차로로 갈 때 중간 2차로가 막혔다고 1차로까지
+    // 못 쓰는 차로로 판정해버리면 갈 곳이 없어져 후진만 반복한다.
+    bool IsBandClearAhead(float bandCenter, float bandHalfWidth) const;
+    // 정지 장애물이 걸쳐 있지 않은 driving 밴드(차로 중심 d)를 현재 차로에서 가까운 순으로 찾는다.
+    bool FindPassableBand(float &outOffset) const;
+    // 지금 속도/Lerp 비율로 차선 하나를 갈아타는 데 필요한 종방향 거리(m). 남은 거리가 이보다 짧으면 차선변경으로는 못 피한다.
+    float EstimateLaneChangeDistance() const;
+    // targetOffset 쪽으로 '한 차로만' 이동하는 인접 밴드 중심을 고르고, 그 진입이 안전한지까지 본다.
+    bool PickAdjacentBandToward(float targetOffset, float &outOffset) const;
+    // 그 차로에 들어갔을 때 앞차/뒤차를 모두 감당할 수 있는가. IsSafeLaneEntry(뒤차 기준)에 앞차 gap 검사를
+    // 더한 것 -- 회피용 차선변경은 MOBIL 유인 기준을 안 거치므로 앞차를 봐 주는 곳이 여기밖에 없다.
+    bool IsLaneEntryClear(float targetOffset) const;
     Vec3 GetBodyCenter() const;                                           // 콜라이더(차체 사각)의 중심 -- 레이 원점/OBB 판정 기준
     std::vector<VehicleCollision::Obstacle> BuildSensorObstacles() const; // 정적 장애물 + 주변 차를 OBB 목록으로
+    // 지도 정적/동적 장애물 중 센서 사거리(AVOID_FRONT_RAY_MAX) 안에 든 것만. BuildSensorObstacles가
+    // 레이캐스트 대상(장애물+차) 목록을 만들 때 쓰는 전반부.
+    std::vector<VehicleCollision::Obstacle> CollectMapObstaclesInSensorRange() const;
     SensorScan ScanSensors(const std::vector<VehicleCollision::Obstacle> &obstacles) const;
     // 좌/우 후보 오프셋(차로 반폭 -> 한 폭 -> 두 폭)을 가까운 쪽부터 궤적 시뮬레이션해 첫 무충돌 오프셋을 고른다.
     bool FindAvoidOffset(const SensorScan &scan, const std::vector<VehicleCollision::Obstacle> &obstacles,
@@ -300,6 +365,10 @@ private:
     bool SimulateAvoidPath(float targetOffset, const std::vector<VehicleCollision::Obstacle> &obstacles) const;
     // 지금 주행선을 따라갔을 때 실제 차체가 정지 장애물에 처음 닿는 거리(없으면 -1). 제동/회피 트리거용.
     float PredictBodyContact(const std::vector<VehicleCollision::Obstacle> &obstacles) const;
+    // 움직이는 장애물과 서로를 등속으로 굴려 만나는 지점까지 내가 갈 거리(없으면 -1). 레이 코리도 필터는
+    // '지금' 진로 위인 것만 통과시켜서 비스듬히 들어오는 대상을 코앞까지 못 보는데, 그걸 메운다.
+    float PredictMovingConflict(const std::vector<VehicleCollision::Obstacle> &obstacles,
+                                const VehicleCollision::Obstacle **outObstacle) const;
     void RebuildSensorRender();
 #pragma endregion
 
@@ -394,7 +463,15 @@ private:
 
     // 장애물 회피(Avoid). 레이 스캔은 IDM/MOBIL의 0.2초 주기와 달리 매프레임 돈다 -- 갑자기 끼어든 차나
     // 차로 코리도 판정으로는 안 잡히는 정적 장애물에 프레임 단위로 반응해야 하기 때문.
-    static constexpr float AVOID_BLOCK_SPEED = 1.0f;      // 이 속도 이하로 움직이는 대상은 '길을 막고 있다'고 본다(m/s)
+    static constexpr float AVOID_BLOCK_SPEED = 1.0f; // 이 속도 이하로 움직이는 대상은 '길을 막고 있다'고 본다(m/s)
+    // 이 속도 이상이면 '움직이는 장애물'(정지 원칙 대상). AVOID_BLOCK_SPEED와 이 값 사이는 판단 보류라
+    // 정지/회피 어느 쪽으로도 안 튄다 -- 임계값 하나면 그 근처에서 분류가 매 프레임 뒤집힌다.
+    static constexpr float AVOID_DYNAMIC_SPEED = 1.5f;
+    // 최대 조향이 가능한 저속(CalcMaxSteerAngle의 LOW_SPEED_CUTOFF와 같은 값). 위협 판단/회피 중 속도 상한.
+    static constexpr float AVOID_LOW_SPEED = 18.26f / 3.6f;
+    static constexpr float AVOID_TTC_MARGIN = 1.5f;       // 동적 장애물이 진로를 비우는 시각보다 이만큼 더 늦게 닿아야 그냥 통과(s)
+    static constexpr float AVOID_WAIT_TIMEOUT = 5.0f;     // 정지 대기가 이만큼 이어지면 '안 비켜준다'로 보고 정적 취급(회피 시도)
+    static constexpr float AVOID_LANE_CHANGE_LEAD = 1.3f; // 차선변경 소요거리에 이 배수만큼 여유가 있어야 차선변경으로 피한다
     static constexpr float AVOID_TRIGGER_DELAY = 0.6f;    // 전방이 이만큼 계속 막혀 있어야 회피 시작(s) -- 순간 오검출로 안 흔들리게
     static constexpr float AVOID_CLEAR_DELAY = 0.5f;      // 레이가 이만큼 계속 깨끗해야 원래 차로로 복귀(s)
     static constexpr float AVOID_REPLAN_INTERVAL = 0.5f;  // 회피 중 오프셋 재탐색 최소 간격(s) -- 좌/우 진동 방지
@@ -428,13 +505,25 @@ private:
     // 직진 중 미세한 조향 떨림에 대각선이 계속 막힘으로 잡히는 걸 막는 데드존.
     static constexpr float AVOID_STEER_DEADZONE = ToRadians(3.0f);
     static constexpr float AVOID_REAR_RAY_LENGTH = 6.0f; // 후방 레이 길이(m)
+    // 후진해도 되는지 볼 때 물러날 거리 뒤로 더 남아 있어야 하는 여유(m). 저속 직선 후진이라 주행 중
+    // 표준 간격(MIN_SAFE_GAP)만큼 잡을 필요는 없다 -- 너무 크면 물러날 자리가 있어도 스턱에서 못 벗어난다.
+    static constexpr float AVOID_BACKUP_CLEARANCE = 1.0f;
 
-    // ApplyMotion(물리 틱)이 실제 충돌을 감지하면 세우고, UpdateAvoidance(프레임 틱)가 소비하며 지운다.
+    // ApplyMotion(물리 틱)이 실제 충돌을 감지하면 세우고, HandleContactPending(프레임 틱)이 소비하며 지운다.
     // 물리/판단이 서로 다른 틱이라 즉시 처리 대신 이렇게 걸어둔다.
     bool m_contactPending = false;
 
-    SensorScan m_sensor; // 이번 프레임 레이 스캔 결과 (UpdateAvoidance가 갱신, DriveControl이 비상제동에 참조)
+    SensorScan m_sensor; // 이번 프레임 레이 스캔 결과 (UpdateSensors가 갱신, DriveControl이 비상제동에 참조)
     AvoidState m_avoid;
+    WaitState m_wait;
+    // 이번 프레임 레이/OBB 판정 대상 목록. UpdateSensors가 만들고 UpdateBehaviorPlan(차선변경 궤적 검증)이 재사용.
+    std::vector<VehicleCollision::Obstacle> m_sensorObstacles;
+    // 위에서 움직이는 대상을 뺀 것. 궤적 스윕(SweepBodyPath)은 상대를 정지한 것으로 보므로, 같이 굴러가는
+    // 차까지 넣으면 어떤 차선변경도 항상 충돌로 나온다 -- 움직이는 차는 MOBIL/IDM이 맡는다.
+    std::vector<VehicleCollision::Obstacle> m_stationaryObstacles;
+    // 이번 프레임 종방향 속도 상한(m/s). <0이면 제한 없음. 서브모드 틱이 정하고 DriveControl이 IDM 가상
+    // 리더로 걸어 부드럽게 수렴시킨다 -- IDM 자체를 끄면 신호/앞차/제한속도 제약이 같이 사라진다.
+    float m_speedCap = -1.0f;
 
     // 스폰 및 리셋 데이터 (Spawn / Reset Data)
     DirectX::XMFLOAT3 m_spawnPosition = {0.0f, 0.0f, 0.0f};
