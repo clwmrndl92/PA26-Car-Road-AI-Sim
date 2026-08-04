@@ -458,15 +458,8 @@ void Car::UpdateDrive()
     // 물리 충돌 뒷수습과 후진 매뉴버는 어느 서브모드에 있든 먼저 끊어야 한다.
     if (!HandleContactPending() && !UpdateBackupState())
     {
-        // 상용제동으로는 못 서는 거리까지 전방 위험이 들어왔으면 어느 서브모드에 있든 비상제동으로 끊는다.
-        if (IsEmergencyHazard(EMERG_TRIGGER_GAP))
-            SetSubMode(SubMode::D_EmergBrake);
-
         switch (m_subMode)
         {
-        case SubMode::D_EmergBrake:
-            UpdateEmergBrake();
-            break;
         case SubMode::D_WaitObstacle:
             UpdateWaitObstacle();
             break;
@@ -540,22 +533,6 @@ bool Car::CheckPath()
     return true;
 }
 
-// 레이/차체 스윕이 잡은 전방 위험까지의 거리가 상용제동 정지거리 안이면 비상제동 대상이다.
-// (IDM 제약 목록은 0.2초 주기 스캔이라, 방금 끼어든 차처럼 프레임 단위 반응이 필요한 경우가 남는다.)
-bool Car::IsEmergencyHazard(float extraGap) const
-{
-    if (m_speed <= 0.1f)
-        return false; // 이미 섰다 -- 여기서부터는 IDM/정지대기가 맡는다
-
-    float hazardDistance = m_sensor.frontDistance;
-    if (m_sensor.bodyContactDistance >= 0.0f && (hazardDistance < 0.0f || m_sensor.bodyContactDistance < hazardDistance))
-        hazardDistance = m_sensor.bodyContactDistance;
-    if (hazardDistance < 0.0f)
-        return false;
-
-    return hazardDistance < m_speed * m_speed / (2.0f * m_maxBrake) + extraGap;
-}
-
 void Car::DriveControl()
 {
     const Spline &spline = m_currentSpline;
@@ -565,13 +542,6 @@ void Car::DriveControl()
     Vec3 target = spline.GetLookaheadPoint(GetRigidbodyPosition(), lookaheadDistance);
     float targetSteer = PurePursuit(target);
     Steer(targetSteer);
-
-    // UpdateDrive가 비상제동으로 판단한 프레임은 IDM을 건너뛰고 최대제동. 조향은 위에서 이미 걸었다.
-    if (m_subMode == SubMode::D_EmergBrake)
-    {
-        EmergBrake();
-        return;
-    }
 
     // 종방향: 리더/제약 목록은 행동 계획(UpdateBehaviorPlan, 0.2초 주기)이 스캔해두지만, IDM 가속도 자체는
     // 매프레임 다시 계산한다(앞차 속도/가속도/gap을 그때그때 최신값으로) -- ComputeIdmAcceleration 참고.
@@ -1048,9 +1018,8 @@ void Car::UpdateDrivePlan()
     {
         targetOffset = AvoidTargetOffset(); // PredictBodyContact가 굴려보는 목표와 반드시 같아야 한다
     }
-    else if (m_subMode == SubMode::D_WaitObstacle || m_subMode == SubMode::D_EmergBrake)
+    else if (m_subMode == SubMode::D_WaitObstacle)
     {
-        // 세우는 중엔 차선변경을 판정하지 않는다 -- 아래 else의 SetSubMode가 이 서브모드를 덮어쓰기도 한다.
         targetOffset = laneCenter = CurrentLaneCenter();
     }
     else
@@ -1688,15 +1657,6 @@ bool Car::IsLaneEntryClear(float targetOffset) const
 
 // 정지 대기 유지/해제. 해제는 "레이에서 사라짐"이 원칙이지만, 정지하면 전방 레이가 AVOID_FRONT_RAY_MIN까지
 // 줄어 그 안에 멈춘 대상은 영영 안 사라진다 -- 타임아웃을 두고 정적 취급(회피 시도)으로 넘긴다.
-// D_EmergBrake: 위험이 풀릴 때까지 유지한다. 실제 감속은 DriveControl이 IDM 대신 EmergBrake로 건다.
-void Car::UpdateEmergBrake()
-{
-    if (IsEmergencyHazard(EMERG_RELEASE_GAP))
-        return;
-
-    SetSubMode(SubMode::D_Normal); // 다음 프레임에 DecideAvoidance가 다시 판단한다
-}
-
 void Car::UpdateWaitObstacle()
 {
     m_wait.elapsed += m_deltaTime;

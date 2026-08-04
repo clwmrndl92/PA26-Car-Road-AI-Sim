@@ -111,7 +111,6 @@ private:
         D_Normal,       // 일반 주행
         D_WaitSignal,   // 신호대기
         D_WaitObstacle, // 움직이는 장애물이 진로를 비울 때까지 정지 대기
-        D_EmergBrake,   // 전방 위험이 상용제동 거리 안으로 들어옴 -- IDM 대신 최대제동, 안전해지면 복귀
         D_Avoid,        // 장애물 회피(차로 중심을 벗어난 오프셋 주행)
         // 옆 차로 중심으로 이동 중(차로 '중심'으로 가므로 D_Avoid와 다르다). 회피용 차선변경(DecideAvoidance
         // -> UpdateLaneChange, 커밋된 매뉴버)과 MOBIL의 일반 차선변경(UpdateDrivePlan, 매 틱 재평가) 둘 다
@@ -136,8 +135,6 @@ private:
             return "WaitSignal";
         case SubMode::D_WaitObstacle:
             return "WaitObstacle";
-        case SubMode::D_EmergBrake:
-            return "EmergBrake";
         case SubMode::D_Avoid:
             return "Avoid";
         case SubMode::D_LaneChange:
@@ -328,9 +325,6 @@ private:
     bool UpdateBackupState();               // (공통) 후진 매뉴버 진행/종료. 도는 동안 서브모드 틱을 건너뛴다
     void DecideAvoidance();                 // D_Normal: 위협을 분류해 다음 서브모드를 고른다
     void UpdateWaitObstacle();              // D_WaitObstacle: 정지 대기 유지/해제
-    void UpdateEmergBrake();                // D_EmergBrake: 최대제동 유지/해제
-    // 전방 위험까지의 거리가 상용제동 정지거리 + extraGap 안인가. 진입/해제에 다른 여유를 줘 채터링을 막는다.
-    bool IsEmergencyHazard(float extraGap) const;
     void UpdateAvoid();                     // D_Avoid: 오프셋 회피 재계획/복귀/종료
     void UpdateLaneChange();                // D_LaneChange: 차선변경 진행/취소/완료
     void HandleAvoidStuck();                // 회피 불가: 그 자리 정지 + 뒤가 비었으면 후진(최초 탐색/재탐색 실패가 공유)
@@ -447,9 +441,6 @@ private:
     static constexpr float BEHAVIOR_SAFETY_HORIZON = 3.0f; // 주변 차 수집 반경 산정용 미래 시야(초, 사람의 3초 룰)
     static constexpr float MIN_SAFE_GAP = 2.0f;            // 앞차/정지선과 유지할 표준 범퍼 gap(m). IDM s0로도 쓴다.
     static constexpr float DESIRED_HEADWAY = 2.0f;         // 디버그 표시용 목표 시간헤드웨이(s).
-    // 비상제동(D_EmergBrake) 진입/해제 여유(m). 해제를 더 크게 잡아 임계 근처에서 제동/재가속이 떠는 걸 막는다.
-    static constexpr float EMERG_TRIGGER_GAP = MIN_SAFE_GAP * 0.5f;
-    static constexpr float EMERG_RELEASE_GAP = MIN_SAFE_GAP * 1.5f;
 
     // IDM(종방향) / MOBIL(차선변경) 파라미터. 이타성(politeness)은 m_personality에서 옴(D. 양보).
     static constexpr float IDM_TIME_HEADWAY = 1.5f; // IDM T 기본값: 앞차와 원하는 시간 간격(s). m_personality.headwayFactor를 곱해 씀.
@@ -515,7 +506,7 @@ private:
     // 물리/판단이 서로 다른 틱이라 즉시 처리 대신 이렇게 걸어둔다.
     bool m_contactPending = false;
 
-    SensorScan m_sensor; // 이번 프레임 레이 스캔 결과 (UpdateSensors가 갱신, IsEmergencyHazard가 비상제동 판단에 참조)
+    SensorScan m_sensor; // 이번 프레임 레이 스캔 결과 (UpdateSensors가 갱신)
     AvoidState m_avoid;
     WaitState m_wait;
     // 이번 프레임 레이/OBB 판정 대상 목록. UpdateSensors가 만들고 UpdateBehaviorPlan(차선변경 궤적 검증)이 재사용.
