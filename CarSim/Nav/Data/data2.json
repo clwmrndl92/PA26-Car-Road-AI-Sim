@@ -20,7 +20,7 @@
       ],
       "center_mark": { "type": "solid", "color": "white", "width": 0.15 },
       "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 100, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }] }],
-      "link": { "predecessor": { "type": "road", "id": -1, "contact": "start" }, "successor": { "type": "road", "id": 103, "contact": "end" } }
+      "link": { "predecessor": { "type": "road", "id": -1, "contact": "end" }, "successor": { "type": "road", "id": 103, "contact": "start" } }
     },
     {
       "id": 102,
@@ -34,7 +34,7 @@
       ],
       "center_mark": { "type": "solid", "color": "white", "width": 0.15 },
       "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 100, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }] }],
-      "link": { "predecessor": { "type": "road", "id": 108, "contact": "start" }, "successor": { "type": "road", "id": 104, "contact": "end" } }
+      "link": { "predecessor": { "type": "road", "id": 108, "contact": "end" }, "successor": { "type": "road", "id": 104, "contact": "start" } }
     },
     {
       "id": 103,
@@ -54,7 +54,7 @@
       ],
       "center_mark": { "type": "solid", "color": "white", "width": 0.15 },
       "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 50, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }] }],
-      "link": { "predecessor": { "type": "road", "id": 101, "contact": "start" }, "successor": { "type": "road", "id": 105, "contact": "end" } }
+      "link": { "predecessor": { "type": "road", "id": 101, "contact": "end" }, "successor": { "type": "road", "id": 105, "contact": "start" } }
     },
     {
       "id": 104,
@@ -74,7 +74,7 @@
       ],
       "center_mark": { "type": "solid", "color": "white", "width": 0.15 },
       "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 50, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }] }],
-      "link": { "predecessor": { "type": "road", "id": 102, "contact": "start" }, "successor": { "type": "road", "id": 109, "contact": "end" } }
+      "link": { "predecessor": { "type": "road", "id": 102, "contact": "end" }, "successor": { "type": "road", "id": 109, "contact": "start" } }
     },
     {
       "id": 105,
@@ -88,12 +88,12 @@
       ],
       "center_mark": { "type": "solid", "color": "white", "width": 0.15 },
       "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 100, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }] }],
-      "link": { "predecessor": { "type": "road", "id": 103, "contact": "start" }, "successor": { "type": "road", "id": 106, "contact": "end" } }
+      "link": { "predecessor": { "type": "road", "id": 103, "contact": "end" }, "successor": { "type": "road", "id": 106, "contact": "start" } }
     },
     {
       "id": 106,
       "name": "road",
-      "speed_limit": 30,
+      "speed_limit": 20,
       "reference_line": [
         [-149.0, 10.0, 150.0],
         [-150.0, 10.0, 150.0],
@@ -104,7 +104,7 @@
       ],
       "center_mark": { "type": "solid", "color": "white", "width": 0.15 },
       "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 100, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }] }],
-      "link": { "predecessor": { "type": "road", "id": 105, "contact": "start" }, "successor": { "type": "road", "id": 107, "contact": "end" } }
+      "link": { "predecessor": { "type": "road", "id": 105, "contact": "end" }, "successor": { "type": "road", "id": 107, "contact": "start" } }
     },
     {
       "id": 107,
@@ -118,12 +118,12 @@
       ],
       "center_mark": { "type": "solid", "color": "white", "width": 0.15 },
       "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 100, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }] }],
-      "link": { "predecessor": { "type": "road", "id": 106, "contact": "start" }, "successor": { "type": "road", "id": 108, "contact": "end" } }
+      "link": { "predecessor": { "type": "road", "id": 106, "contact": "end" }, "successor": { "type": "road", "id": 108, "contact": "start" } }
     },
     {
       "id": 108,
       "name": "road",
-      "speed_limit": 30,
+      "speed_limit": 20,
       "reference_line": [
         [-160.0, 10.0, 11.0],
         [-160.0, 10.0, 10.0],
@@ -134,7 +134,7 @@
       ],
       "center_mark": { "type": "solid", "color": "white", "width": 0.15 },
       "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 100, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }] }],
-      "link": { "predecessor": { "type": "road", "id": 107, "contact": "start" }, "successor": { "type": "road", "id": 102, "contact": "end" } }
+      "link": { "predecessor": { "type": "road", "id": 107, "contact": "end" }, "successor": { "type": "road", "id": 102, "contact": "start" } }
     },
     {
       "id": 109,
@@ -148,12 +148,12 @@
       ],
       "center_mark": { "type": "solid", "color": "white", "width": 0.15 },
       "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 100, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }] }],
-      "link": { "predecessor": { "type": "road", "id": 104, "contact": "start" }, "successor": { "type": "road", "id": 110, "contact": "end" } }
+      "link": { "predecessor": { "type": "road", "id": 104, "contact": "end" }, "successor": { "type": "road", "id": 110, "contact": "start" } }
     },
     {
       "id": 110,
       "name": "road",
-      "speed_limit": 30,
+      "speed_limit": 20,
       "reference_line": [
         [150.0, 0.0, -149.0],
         [150.0, 0.0, -150.0],
@@ -164,7 +164,7 @@
       ],
       "center_mark": { "type": "solid", "color": "white", "width": 0.15 },
       "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 100, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }] }],
-      "link": { "predecessor": { "type": "road", "id": 109, "contact": "start" }, "successor": { "type": "road", "id": 111, "contact": "end" } }
+      "link": { "predecessor": { "type": "road", "id": 109, "contact": "end" }, "successor": { "type": "road", "id": 111, "contact": "start" } }
     },
     {
       "id": 111,
@@ -178,12 +178,12 @@
       ],
       "center_mark": { "type": "solid", "color": "white", "width": 0.15 },
       "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 100, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }] }],
-      "link": { "predecessor": { "type": "road", "id": 110, "contact": "start" }, "successor": { "type": "road", "id": 112, "contact": "end" } }
+      "link": { "predecessor": { "type": "road", "id": 110, "contact": "end" }, "successor": { "type": "road", "id": 112, "contact": "start" } }
     },
     {
       "id": 112,
       "name": "road",
-      "speed_limit": 30,
+      "speed_limit": 20,
       "reference_line": [
         [11.0, 0.0, -160.0],
         [10.0, 0.0, -160.0],
@@ -194,7 +194,7 @@
       ],
       "center_mark": { "type": "solid", "color": "white", "width": 0.15 },
       "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 100, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }] }],
-      "link": { "predecessor": { "type": "road", "id": 111, "contact": "start" }, "successor": { "type": "road", "id": 101, "contact": "end" } }
+      "link": { "predecessor": { "type": "road", "id": 111, "contact": "end" }, "successor": { "type": "road", "id": 101, "contact": "start" } }
     }
   ],
   "junctions": []
