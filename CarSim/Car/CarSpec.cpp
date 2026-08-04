@@ -7,6 +7,15 @@ const CarSpec &GetCarSpec(CarType type)
                 JPH::Vec3(0.0f, 0.96f, 1.5f), 3.0f, 1300.0f),
         CarSpec("Car_1", "Model\\car_2.obj", JPH::Vec3(1.3421f, 0.9073f, 2.8342f), JPH::Vec3(0.0f, 0.0f, 1.5f),
                 JPH::Vec3(0.0f, 0.9f, 1.5f), 3.40f, 1600.0f),
+        CarSpec("Car_Jeep", "Model\\car_jeep.obj", JPH::Vec3(1.3952f, 0.9922f, 2.5856f), JPH::Vec3(0.0f, 0.0f, 1.65f),
+                JPH::Vec3(0.0f, 0.99f, 1.65f), 3.26f, 1900.0f),
+        CarSpec("Car_LittleTruck", "Model\\car_littletruck.obj", JPH::Vec3(1.1088f, 1.1468f, 2.6419f),
+                JPH::Vec3(0.0f, 0.0f, 1.72f), JPH::Vec3(0.0f, 1.15f, 1.72f), 3.42f, 1850.0f),
+        // car_truck.obj는 원본 메시가 전방(-Z)/후방(+Z)이 다른 모델과 반대라 정점을 180도 회전시켜 정리함
+        CarSpec("Car_Truck", "Model\\car_truck.obj", JPH::Vec3(1.5596f, 1.6568f, 5.3268f), JPH::Vec3(0.0f, 0.0f, 3.79f),
+                JPH::Vec3(0.0f, 1.66f, 3.79f), 7.39f, 8000.0f),
+        CarSpec("Car_Van", "Model\\car_van.obj", JPH::Vec3(1.1859f, 0.9729f, 2.8078f), JPH::Vec3(0.0f, 0.0f, 1.8f),
+                JPH::Vec3(0.0f, 0.97f, 1.8f), 3.58f, 2000.0f),
     };
     return specs[static_cast<size_t>(type)];
 }

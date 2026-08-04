@@ -38,6 +38,10 @@ enum class CarType
 {
     Car0,
     Car1,
+    Jeep,
+    LittleTruck,
+    Truck,
+    Van,
     Count,
 };
 enum class CarPersonalityType
