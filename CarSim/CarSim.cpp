@@ -44,7 +44,7 @@ bool CarSim::Init()
     if (!GameApp::Init())
         return false;
 
-    m_RoadDataManager.Init(NAV_DATA_DIR "/data.json");
+    m_RoadDataManager.Init(NAV_DATA_DIR "/data3.json");
     m_MarkingDataManager.Init(NAV_DATA_DIR "/marking2.json");
 
     if (!InitResource())
@@ -122,7 +122,7 @@ bool CarSim::InitResource()
     // Car 1
     {
         auto car = std::make_shared<Car>();
-        car->Init(GetCarSpec(CarType::Car0), &m_SimState, JPH::Vec3(0.0f, 0.1f, -30.0f));
+        car->Init(GetCarSpec(CarType::Car0), GetCarPersonality(CarPersonalityType::Normal), &m_SimState, JPH::Vec3(0.0f, 0.1f, -30.0f));
 
         // car->SetDestination(m_RoadDataManager.GetNode(1));
         // std::shared_ptr<RoadNode> dest = m_RoadDataManager.GetRandomDestNode();
@@ -150,7 +150,7 @@ bool CarSim::InitResource()
     return true;
 }
 
-void CarSim::SpawnCar(CarType type)
+void CarSim::SpawnCar(CarType type, CarPersonalityType personality)
 {
     auto spawnNode = m_RoadDataManager.GetRandomDestNode();
     auto destNode = m_RoadDataManager.GetRandomDestNode();
@@ -161,7 +161,7 @@ void CarSim::SpawnCar(CarType type)
     Vec3 direction(std::sin(yaw), 0.0f, std::cos(yaw));
 
     auto car = std::make_shared<Car>();
-    car->Init(GetCarSpec(type), &m_SimState,
+    car->Init(GetCarSpec(type), GetCarPersonality(personality), &m_SimState,
               JPH::Vec3(spawnNode->position.GetX(), 0.1f, spawnNode->position.GetZ()));
     // car->SetRotation(direction);
     car->SetRotation(spawnNode->direction);
@@ -332,16 +332,6 @@ void CarSim::UpdateUI(float dt)
             ImGui::Text("Picked: %s", m_PickedObjectName.c_str());
 
         ImGui::Separator();
-        ImGui::Text("Spawn Car");
-        for (int i = 0; i < static_cast<int>(CarType::Count); ++i)
-        {
-            CarType type = static_cast<CarType>(i);
-            ImGui::Text("%s", GetCarSpec(type).name);
-            ImGui::SameLine();
-            if (ImGui::Button(("Spawn##spawnCar" + std::to_string(i)).c_str()))
-                SpawnCar(type);
-        }
-        ImGui::Separator();
         std::shared_ptr<Car> carToRemove;
         for (auto &obj : m_CarObjects)
         {
@@ -357,6 +347,25 @@ void CarSim::UpdateUI(float dt)
         }
         if (carToRemove)
             RemoveCar(carToRemove);
+    }
+    ImGui::End();
+
+    ImGui::SetNextWindowPos(ImVec2(280.0f, 100.0f), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Spawn Car"))
+    {
+        static const char *kPersonalityNames[] = {"Normal", "Aggressive", "Cautious"};
+        ImGui::Combo("Personality", &m_SpawnPersonalityIndex, kPersonalityNames, IM_ARRAYSIZE(kPersonalityNames));
+        CarPersonalityType personality = static_cast<CarPersonalityType>(m_SpawnPersonalityIndex);
+
+        ImGui::Separator();
+        for (int i = 0; i < static_cast<int>(CarType::Count); ++i)
+        {
+            CarType type = static_cast<CarType>(i);
+            ImGui::Text("%s", GetCarSpec(type).name);
+            ImGui::SameLine();
+            if (ImGui::Button(("Spawn##spawnCar" + std::to_string(i)).c_str()))
+                SpawnCar(type, personality);
+        }
     }
     ImGui::End();
 
@@ -578,28 +587,32 @@ void CarSim::InitRoadRenderer()
         }
     }
 
-    // road 그래프의 successor 연결(road 참조선 끝 -> 다음 road 시작)을 노란 선으로 시각화한다.
+    // road 그래프의 successor 연결(진행방향 끝 -> 다음 road의 진행방향 시작)을 노란 선으로 시각화한다.
+    // 왕복 도로는 방향마다 나가는 곳이 다르므로 두 방향을 모두 그린다.
     m_RoadEdgeRenders.clear();
     int linkIndex = 0;
     for (const auto &road : m_RoadDataManager.GetRoads())
     {
-        const std::vector<Vec3> &fromPts = road->GetReferenceLine().GetSplinePoints();
-        if (fromPts.size() < 2)
+        if (road->GetReferenceLine().GetSplinePoints().size() < 2)
             continue;
-        Vec3 from = fromPts.back() + Vec3(0.0f, EDGE_LINE_HEIGHT, 0.0f);
-        for (const auto &succ : m_RoadDataManager.GetRoadSuccessors(road->GetId()))
+        for (LaneDirection travel : {LaneDirection::Forward, LaneDirection::Backward})
         {
-            const std::vector<Vec3> &toPts = succ->GetReferenceLine().GetSplinePoints();
-            if (toPts.size() < 2)
-                continue;
-            Vec3 to = toPts.front() + Vec3(0.0f, EDGE_LINE_HEIGHT, 0.0f);
+            Vec3 from = m_RoadDataManager.GetTravelEnd(road, travel) + Vec3(0.0f, EDGE_LINE_HEIGHT, 0.0f);
+            for (const RoadRef &succ : m_RoadDataManager.GetRoadSuccessors(road->GetId(), travel))
+            {
+                if (succ.road->GetReferenceLine().GetSplinePoints().size() < 2)
+                    continue;
+                // 다음 road의 '진행방향 시작' = 반대 방향으로 봤을 때의 끝.
+                Vec3 to = m_RoadDataManager.GetTravelEnd(succ.road, GetOppositeDirection(succ.direction)) +
+                          Vec3(0.0f, EDGE_LINE_HEIGHT, 0.0f);
 
-            Model *pLine = m_ModelManager.CreateFromGeometry("edge_line" + std::to_string(linkIndex++), Geometry::CreateLine(ToXMFLOAT3(from), ToXMFLOAT3(to)));
-            pLine->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f));
-            pLine->materials[0].Set<float>("$Opacity", 1.0f);
+                Model *pLine = m_ModelManager.CreateFromGeometry("edge_line" + std::to_string(linkIndex++), Geometry::CreateLine(ToXMFLOAT3(from), ToXMFLOAT3(to)));
+                pLine->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f));
+                pLine->materials[0].Set<float>("$Opacity", 1.0f);
 
-            RenderObject &edgeRender = m_RoadEdgeRenders.emplace_back();
-            edgeRender.SetModel(pLine);
+                RenderObject &edgeRender = m_RoadEdgeRenders.emplace_back();
+                edgeRender.SetModel(pLine);
+            }
         }
     }
 

@@ -850,6 +850,8 @@ void EditApp::SaveToJson()
                     jb["width"] = round2(b.width);
                     jb["type"] = b.type;
                     jb["speed_limit"] = b.speedLimit;
+                    if (b.backward)
+                        jb["direction"] = "backward"; // 기본값(forward)은 안 적어 기존 데이터와 diff가 안 생기게
                     jb["boundary_mark"] = markToJson(b.boundaryMark);
                     bands.push_back(jb);
                 }
@@ -998,6 +1000,7 @@ void EditApp::LoadFromJson(const std::filesystem::path &path)
                 b.width = jb.value("width", 3.5f);
                 copyStr(b.type, sizeof(b.type), jb.value("type", std::string("driving")));
                 b.speedLimit = jb.value("speed_limit", 40);
+                b.backward = jb.value("direction", std::string("forward")) == "backward";
                 if (jb.contains("boundary_mark"))
                     b.boundaryMark = parseMark(jb["boundary_mark"]);
                 sec.bands.push_back(b);
@@ -1698,6 +1701,7 @@ void EditApp::DrawRoadEditWindow()
                 ImGui::SetNextItemWidth(90.0f);
                 ImGui::InputInt("spd", &b.speedLimit);
                 ImGui::InputText("type##b", b.type, sizeof(b.type));
+                ImGui::Checkbox("backward (reverse lane)", &b.backward);
                 editMark("bandmark", b.boundaryMark);
             }
             ImGui::Separator();

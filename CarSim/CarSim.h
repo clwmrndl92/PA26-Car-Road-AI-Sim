@@ -33,7 +33,7 @@ private:
     void InitRoadColliders();     // 고가(높이>0) 레인을 따라 lane 폭만큼 static 도로 GameObject 생성
     void InitObstacleColliders(); // data.json의 obstacle 위치/크기/회전으로 static 큐브(차량과 충돌) 생성
     void InitDynamicObstacleRenders(); // dynamic_obstacles 개수만큼 로컬박스 렌더 생성(위치는 매프레임 UpdateScene이 갱신)
-    void SpawnCar(CarType type);
+    void SpawnCar(CarType type, CarPersonalityType personality);
     void RemoveCar(const std::shared_ptr<Car> &car);
     void UpdateSignalMarkers();
 
@@ -48,6 +48,7 @@ private:
     std::string m_PickedObjectName;
     std::weak_ptr<Car> m_pPickedObject;
     int m_carIDCounter = 1;
+    int m_SpawnPersonalityIndex = 0;
 
     std::vector<RenderObject> m_RoadRenders;
     std::vector<RenderObject> m_RoadEdgeRenders;

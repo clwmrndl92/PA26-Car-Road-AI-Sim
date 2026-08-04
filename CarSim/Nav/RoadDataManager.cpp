@@ -151,6 +151,11 @@ void RoadDataManager::BuildRoadData(const string &filePath)
                 auto typeIt = laneTypeByName.find(bandJson.value("type", "driving"));
                 band.type = typeIt != laneTypeByName.end() ? typeIt->second : LaneType::Driving;
 
+                // direction(optional): 없으면 forward -- 방향을 안 적은 기존 단방향 데이터가 그대로 동작해야 한다.
+                const auto &laneDirByName = GetLaneDirectionByName();
+                auto dirIt = laneDirByName.find(bandJson.value("direction", "forward"));
+                band.direction = dirIt != laneDirByName.end() ? dirIt->second : LaneDirection::Forward;
+
                 if (bandJson.contains("boundary_mark"))
                     band.boundaryMark = ParseBoundaryMark(bandJson["boundary_mark"]);
 
@@ -325,34 +330,44 @@ void RoadDataManager::UpdateDynamicObstacles(float dt)
 
 void RoadDataManager::BuildRoadSuccessors()
 {
-    // 명시 링크(track A)로 successor 그래프를 구성한다. successor가 road면 그 road,
-    // junction이면 그 junction의 connection 중 incomingRoad==현재인 connectingRoad들로 팬아웃.
+    // 명시 링크(track A)로 방향별 successor 그래프를 구성한다. 정방향 주행은 road의 end에서 나가므로 successor를,
+    // 역방향 주행은 start에서 나가므로 predecessor를 탄다. 링크가 road면 그 road, junction이면 그 junction의
+    // connection 중 incomingRoad==현재인 connectingRoad들로 팬아웃.
+    // 다음 road를 어느 방향으로 달릴지는 '대상의 어느 끝에 붙는가'(contact)가 정한다 -- start에 붙으면 정방향,
+    // end에 붙으면 역방향. junction 링크는 road 링크의 contact가 아니라 connection마다의 contact가 기준이다.
     m_roadSuccessors.clear();
+    auto directionFromContact = [](ContactPoint contact)
+    { return contact == ContactPoint::End ? LaneDirection::Backward : LaneDirection::Forward; };
+
     for (const shared_ptr<Road> &road : m_roads)
     {
-        const RoadLink &succ = road->GetSuccessor();
-        if (!succ.valid)
-            continue;
+        for (LaneDirection travel : {LaneDirection::Forward, LaneDirection::Backward})
+        {
+            const RoadLink &exit = (travel == LaneDirection::Forward) ? road->GetSuccessor() : road->GetPredecessor();
+            if (!exit.valid)
+                continue;
 
-        if (succ.type == ElementType::Road)
-        {
-            if (shared_ptr<Road> next = GetRoad(succ.elementId))
-                m_roadSuccessors[road->GetId()].push_back(next);
-        }
-        else if (const Junction *junction = GetJunction(succ.elementId))
-        {
-            for (const Connection &conn : junction->connections)
-                if (conn.incomingRoad == road->GetId())
-                    if (shared_ptr<Road> connecting = GetRoad(conn.connectingRoad))
-                        m_roadSuccessors[road->GetId()].push_back(connecting);
+            vector<RoadRef> &successors = m_roadSuccessors[SuccessorKey(road->GetId(), travel)];
+            if (exit.type == ElementType::Road)
+            {
+                if (shared_ptr<Road> next = GetRoad(exit.elementId))
+                    successors.push_back({next, directionFromContact(exit.contact)});
+            }
+            else if (const Junction *junction = GetJunction(exit.elementId))
+            {
+                for (const Connection &conn : junction->connections)
+                    if (conn.incomingRoad == road->GetId())
+                        if (shared_ptr<Road> connecting = GetRoad(conn.connectingRoad))
+                            successors.push_back({connecting, directionFromContact(conn.contact)});
+            }
         }
     }
 }
 
-const vector<shared_ptr<Road>> &RoadDataManager::GetRoadSuccessors(int roadId) const
+const vector<RoadRef> &RoadDataManager::GetRoadSuccessors(int roadId, LaneDirection direction) const
 {
-    static const vector<shared_ptr<Road>> empty;
-    auto it = m_roadSuccessors.find(roadId);
+    static const vector<RoadRef> empty;
+    auto it = m_roadSuccessors.find(SuccessorKey(roadId, direction));
     return it != m_roadSuccessors.end() ? it->second : empty;
 }
 
@@ -370,8 +385,14 @@ shared_ptr<RoadNode> RoadDataManager::GetSignalNodeForRoad(int roadId) const
 
 RoadPose RoadDataManager::GetClosestRoad(const Vec3 &position) const
 {
+    return GetClosestRoad(position, Vec3::sZero());
+}
+
+RoadPose RoadDataManager::GetClosestRoad(const Vec3 &position, const Vec3 &heading) const
+{
     RoadPose best;
     best.dist = numeric_limits<float>::max();
+    Vec3 bestTangent = Vec3::sZero();
     for (const shared_ptr<Road> &road : m_roads)
     {
         const Spline &ref = road->GetReferenceLine();
@@ -385,31 +406,42 @@ RoadPose RoadDataManager::GetClosestRoad(const Vec3 &position) const
             best.dist = dist;
             best.road = road;
             best.t = t;
-            // d 부호: 진행방향 오른쪽(+). right=(dir.z,0,-dir.x).
+            // d 부호: 참조선 진행방향 오른쪽(+). right=(dir.z,0,-dir.x). 역주행 차로도 이 프레임을 그대로 쓴다.
             Vec3 dir = ref.GetDirectionAt(t);
             Vec3 rightN(dir.GetZ(), 0.0f, -dir.GetX());
             best.d = (position - onRef).Dot(rightN);
+            bestTangent = dir;
         }
     }
     if (best.dist == numeric_limits<float>::max())
-        best = RoadPose{};
+        return RoadPose{};
+
+    best.direction = bestTangent.Dot(heading) < 0.0f ? LaneDirection::Backward : LaneDirection::Forward;
+    // 그 방향 차로가 없는 단방향 도로면 있는 쪽으로 맞춘다 -- 방향을 안 적은 데이터에서 역주행으로 새지 않게.
+    if (GetDrivingBands(best.road, best.direction).empty())
+    {
+        LaneDirection other = GetOppositeDirection(best.direction);
+        if (!GetDrivingBands(best.road, other).empty())
+            best.direction = other;
+    }
     return best;
 }
 
-Spline RoadDataManager::BuildOffsetSpline(const shared_ptr<Road> &road, float d) const
+Spline RoadDataManager::BuildOffsetSpline(const shared_ptr<Road> &road, float d, LaneDirection direction) const
 {
     if (road == nullptr)
         return Spline();
 
     const Spline &ref = road->GetReferenceLine();
-    if (std::abs(d) < 1e-3f)
-        return ref; // 오프셋 0이면 참조선 그대로(data2가 이 경우 = 정확)
+    bool reversed = direction == LaneDirection::Backward;
+    if (std::abs(d) < 1e-3f && !reversed)
+        return ref; // 오프셋 0 + 정방향이면 참조선 그대로(data2가 이 경우 = 정확)
 
     const vector<Vec3> &samples = ref.GetSplinePoints();
     if (samples.size() < 2)
         return ref;
 
-    // 참조선의 이미 계산된 샘플점을 진행방향 오른쪽 법선으로 d만큼 밀기만 한다(재적합 없음).
+    // 참조선의 이미 계산된 샘플점을 참조선 기준 오른쪽 법선으로 d만큼 밀기만 한다(재적합 없음).
     // Catmull-Rom을 다시 돌리지 않고 FromPoints로 그대로 감싸 O(n) — EditApp OffsetReferencePolyline과 동일 규약.
     vector<Vec3> offset;
     offset.reserve(samples.size());
@@ -425,6 +457,9 @@ Spline RoadDataManager::BuildOffsetSpline(const shared_ptr<Road> &road, float d)
         float rz = len > 1e-5f ? -tx / len : 0.0f;
         offset.push_back(Vec3(samples[i].GetX() + rx * d, samples[i].GetY(), samples[i].GetZ() + rz * d));
     }
+    // 역주행 차로는 같은 곡선을 반대로 달린다: 점 순서만 뒤집으면 t/접선/lookahead가 전부 진행방향 기준이 된다.
+    if (reversed)
+        reverse(offset.begin(), offset.end());
     return Spline::FromPoints(std::move(offset));
 }
 
@@ -464,59 +499,158 @@ const Junction *RoadDataManager::GetJunction(int junctionId) const
     return it != m_junctions.end() ? &it->second : nullptr;
 }
 
-vector<shared_ptr<Road>> RoadDataManager::FindPath(const shared_ptr<Road> &startRoad, const shared_ptr<Road> &destRoad) const
+const LaneBand *RoadDataManager::FindNearestBand(const shared_ptr<Road> &road, float d, LaneDirection direction) const
 {
-    if (startRoad == nullptr || destRoad == nullptr)
+    const LaneSection *sec = GetLateralProfile(road, 0.0f);
+    if (sec == nullptr || sec->bands.empty())
+        return nullptr;
+
+    // 1순위 방향+driving 일치, 2순위 driving, 3순위 아무 밴드 -- 방향을 안 적은 데이터도 굴러가야 한다.
+    for (int pass = 0; pass < 3; ++pass)
+    {
+        const LaneBand *best = nullptr;
+        for (const LaneBand &b : sec->bands)
+        {
+            if (pass < 2 && b.type != LaneType::Driving)
+                continue;
+            if (pass < 1 && b.direction != direction)
+                continue;
+            if (best == nullptr || std::abs(d - b.centerOffset) < std::abs(d - best->centerOffset))
+                best = &b;
+        }
+        if (best != nullptr)
+            return best;
+    }
+    return nullptr;
+}
+
+vector<const LaneBand *> RoadDataManager::GetDrivingBands(const shared_ptr<Road> &road, LaneDirection direction) const
+{
+    vector<const LaneBand *> bands;
+    const LaneSection *sec = GetLateralProfile(road, 0.0f);
+    if (sec == nullptr)
+        return bands;
+
+    for (const LaneBand &b : sec->bands)
+        if (b.type == LaneType::Driving && b.direction == direction)
+            bands.push_back(&b);
+    sort(bands.begin(), bands.end(), [](const LaneBand *a, const LaneBand *b)
+         { return a->centerOffset < b->centerOffset; });
+    return bands;
+}
+
+Vec3 RoadDataManager::GetTravelEnd(const shared_ptr<Road> &road, LaneDirection direction) const
+{
+    if (road == nullptr)
+        return Vec3::sZero();
+    const vector<Vec3> &points = road->GetReferenceLine().GetSplinePoints();
+    if (points.empty())
+        return Vec3::sZero();
+    return direction == LaneDirection::Backward ? points.front() : points.back();
+}
+
+float RoadDataManager::ResolveConnectingOffset(const RoadRef &from, const RoadRef &to, float fromOffset) const
+{
+    if (from.road == nullptr || to.road == nullptr)
+        return fromOffset;
+
+    const Junction *junction = GetJunction(to.road->GetJunctionId());
+    if (junction == nullptr)
+        return fromOffset;
+
+    const Connection *conn = nullptr;
+    for (const Connection &c : junction->connections)
+    {
+        if (c.incomingRoad == from.road->GetId() && c.connectingRoad == to.road->GetId())
+        {
+            conn = &c;
+            break;
+        }
+    }
+    if (conn == nullptr || conn->laneLinks.empty())
+        return fromOffset;
+
+    const LaneSection *fromSection = GetLateralProfile(from.road, 0.0f);
+    const LaneSection *toSection = GetLateralProfile(to.road, 0.0f);
+    if (fromSection == nullptr || toSection == nullptr || fromSection->bands.empty() || toSection->bands.empty())
+        return fromOffset;
+
+    // lane_links의 from/to는 bands 배열의 원본 인덱스다(진행방향으로 거른 목록이 아니라).
+    const LaneBand *fromBand = FindNearestBand(from.road, fromOffset, from.direction);
+    if (fromBand == nullptr)
+        return fromOffset;
+    int fromIndex = static_cast<int>(fromBand - fromSection->bands.data());
+
+    for (const LaneLink &link : conn->laneLinks)
+    {
+        if (link.from != fromIndex || link.to < 0 || link.to >= (int)toSection->bands.size())
+            continue;
+        const LaneBand &toBand = toSection->bands[link.to];
+        if (toBand.direction != to.direction)
+            continue; // 마주 오는 차로로 인계하는 링크는 무시
+        return toBand.centerOffset;
+    }
+    return fromOffset;
+}
+
+vector<RoadRef> RoadDataManager::FindPath(const RoadRef &start, const shared_ptr<Road> &destRoad) const
+{
+    if (start.road == nullptr || destRoad == nullptr)
         return {};
-    if (startRoad->GetId() == destRoad->GetId())
-        return {startRoad};
+    if (start.road->GetId() == destRoad->GetId())
+        return {start};
 
-    priority_queue<pair<float, shared_ptr<Road>>, vector<pair<float, shared_ptr<Road>>>, greater<pair<float, shared_ptr<Road>>>> openList;
-    openList.emplace(0.0f, startRoad);
+    // 노드는 (road, 진행방향). 왕복 도로는 같은 road라도 방향이 다르면 갈 수 있는 곳이 완전히 다르다.
+    int startKey = SuccessorKey(start.road->GetId(), start.direction);
+    priority_queue<pair<float, int>, vector<pair<float, int>>, greater<pair<float, int>>> openList;
+    openList.emplace(0.0f, startKey);
 
-    map<int, float> gScore = {{startRoad->GetId(), 0.0f}};
-    map<int, shared_ptr<Road>> cameFrom = {{startRoad->GetId(), nullptr}};
+    map<int, float> gScore = {{startKey, 0.0f}};
+    map<int, RoadRef> nodeByKey = {{startKey, start}};
+    map<int, int> cameFrom = {{startKey, -1}};
     unordered_set<int> visited;
 
+    // 목적지 방향은 정하지 않는다(어느 쪽으로 도착하든 도착) -- 휴리스틱은 참조선 양끝 중 가까운 쪽으로.
     const vector<Vec3> &destPts = destRoad->GetReferenceLine().GetSplinePoints();
-    const Vec3 goal = destPts.empty() ? Vec3::sZero() : destPts.back();
+    const Vec3 goalA = destPts.empty() ? Vec3::sZero() : destPts.front();
+    const Vec3 goalB = destPts.empty() ? Vec3::sZero() : destPts.back();
 
     while (!openList.empty())
     {
-        shared_ptr<Road> current = openList.top().second;
+        int currentKey = openList.top().second;
         openList.pop();
 
-        if (visited.count(current->GetId()))
+        if (visited.count(currentKey))
             continue;
-        visited.insert(current->GetId());
+        visited.insert(currentKey);
 
-        if (current->GetId() == destRoad->GetId())
+        const RoadRef current = nodeByKey[currentKey];
+        if (current.road->GetId() == destRoad->GetId())
         {
-            vector<shared_ptr<Road>> path;
-            for (shared_ptr<Road> road = current; road;)
-            {
-                path.push_back(road);
-                road = cameFrom[road->GetId()];
-            }
+            vector<RoadRef> path;
+            for (int key = currentKey; key >= 0; key = cameFrom[key])
+                path.push_back(nodeByKey[key]);
             reverse(path.begin(), path.end());
             return path;
         }
 
-        // 진행: 현재 road를 끝까지 달려(참조선 길이만큼 비용) 후속 road로.
-        for (const shared_ptr<Road> &neighbor : GetRoadSuccessors(current->GetId()))
+        // 진행: 현재 road를 끝까지 달려(참조선 길이만큼 비용) 후속 (road, 방향)으로.
+        for (const RoadRef &neighbor : GetRoadSuccessors(current.road->GetId(), current.direction))
         {
-            if (!neighbor)
+            if (!neighbor.road)
                 continue;
-            float tentative = gScore[current->GetId()] + current->GetLength();
-            float known = gScore.count(neighbor->GetId()) ? gScore[neighbor->GetId()] : INFINITY;
-            if (tentative < known)
-            {
-                gScore[neighbor->GetId()] = tentative;
-                cameFrom[neighbor->GetId()] = current;
-                const vector<Vec3> &nbPts = neighbor->GetReferenceLine().GetSplinePoints();
-                float h = nbPts.empty() ? 0.0f : (nbPts.back() - goal).Length();
-                openList.emplace(tentative + h, neighbor);
-            }
+            int neighborKey = SuccessorKey(neighbor.road->GetId(), neighbor.direction);
+            float tentative = gScore[currentKey] + current.road->GetLength();
+            float known = gScore.count(neighborKey) ? gScore[neighborKey] : INFINITY;
+            if (tentative >= known)
+                continue;
+
+            gScore[neighborKey] = tentative;
+            cameFrom[neighborKey] = currentKey;
+            nodeByKey[neighborKey] = neighbor;
+            Vec3 nbEnd = GetTravelEnd(neighbor.road, neighbor.direction);
+            float h = destPts.empty() ? 0.0f : std::min((nbEnd - goalA).Length(), (nbEnd - goalB).Length());
+            openList.emplace(tentative + h, neighborKey);
         }
     }
     return {};

@@ -75,10 +75,11 @@ private:
     // s의 함수로 본 도로 횡단면의 한 띠(차로 하나). RoadDataManager::LaneBand와 매칭.
     struct EditBand
     {
-        float centerOffset = 1.75f; // 참조선 기준 d (+오른쪽, -왼쪽)
+        float centerOffset = 1.75f; // 참조선 기준 d (+오른쪽, -왼쪽). 방향과 무관하게 참조선 프레임.
         float width = 3.5f;
         char type[16] = "driving"; // "driving" | "none"
         int speedLimit = 40;
+        bool backward = false;         // 참조선 s를 거슬러 달리는 차로(왕복 도로의 마주 오는 쪽)
         EditBoundaryMark boundaryMark; // 바깥쪽 경계(|d| 큰 쪽)에 그려지는 마킹
     };
 

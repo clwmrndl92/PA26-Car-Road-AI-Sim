@@ -20,7 +20,7 @@ class Spline;
 class Car : public GameObject
 {
 public:
-    void Init(const CarSpec &spec, SimulationState *simState, JPH::Vec3 position = JPH::Vec3::sZero());
+    void Init(const CarSpec &spec, const CarPersonality &personality, SimulationState *simState, JPH::Vec3 position = JPH::Vec3::sZero());
 
     void UpdatePhysics(float dt) override; // 고정 물리 dt
     void Update(float dt) override;        // 매프레임
@@ -159,15 +159,20 @@ private:
 
     VehicleCollision::VehicleShape BuildVehicleShape() const;
     void UpdateFindPath();
-    void SetCurrentRoad(const shared_ptr<Road> &road, float offset); // m_currentRoad/Offset/Spline을 항상 이 함수로 세팅.
-    bool ShouldStopForSignal(const shared_ptr<Road> &road) const;    // CheckPath(Drive)와 ScanRoadSpeedConstraints(BehaviorPlan)이 공유.
+    // m_currentRoad/Offset/Dir/Spline을 항상 이 함수로 세팅.
+    void SetCurrentRoad(const shared_ptr<Road> &road, float offset, LaneDirection direction);
+    // 참조선 s를 진행방향으로 증가하는 부호로 바꾸는 계수(+1 정방향 / -1 역방향).
+    float TravelSign() const { return GetTravelSign(m_travelDir); }
+    RoadRef CurrentRoadRef() const { return RoadRef{m_currentRoad, m_travelDir}; }
+    // CheckPath(Drive)와 ScanRoadSpeedConstraints(BehaviorPlan)이 공유.
+    bool ShouldStopForSignal(const shared_ptr<Road> &road, LaneDirection direction) const;
     bool TryFindPathAndSetRoad();
 
     // 배회(roaming) 모드: 목적지 없이 랜덤 후속 road로 계속 주행. m_path를 랜덤 successor로 채워 유지한다.
-    void EnsureRoamingPath();                                                           // currentRoad/초기 path 세팅 + 유지
-    void MaintainRoamingPath();                                                         // 지나온 앞부분 트림 + 앞쪽 버퍼 채우기
-    shared_ptr<Road> PickRandomSuccessor(const shared_ptr<Road> &road) const;           // successor 중 랜덤(없으면 nullptr)
-    vector<shared_ptr<Road>> BuildRoamingPath(const shared_ptr<Road> &startRoad) const; // startRoad + 랜덤 후속 몇 개
+    void EnsureRoamingPath();                                         // currentRoad/초기 path 세팅 + 유지
+    void MaintainRoamingPath();                                       // 지나온 앞부분 트림 + 앞쪽 버퍼 채우기
+    RoadRef PickRandomSuccessor(const RoadRef &road) const;           // successor 중 랜덤(없으면 road==nullptr)
+    vector<RoadRef> BuildRoamingPath(const RoadRef &startRoad) const; // startRoad + 랜덤 후속 몇 개
 
     void UpdatePark();
     void BeginParkPlan();
@@ -227,18 +232,19 @@ private:
                                  float distanceOffset) const;
     // road의 targetOffset 근처 밴드로 진입해도 뒤차에게 안전한지 MOBIL 안전기준(강제 차선변경)으로 판정.
     // 도로 밖에서 처음 진입(UpdateFindPath/EnsureRoamingPath)과 다음 road로 합류(ShouldHoldForMerge)가 공유.
-    bool IsSafeLaneEntry(const shared_ptr<Road> &road, float targetOffset, const std::vector<NearbyCar> &nearby) const;
+    bool IsSafeLaneEntry(const RoadRef &road, float targetOffset, const std::vector<NearbyCar> &nearby) const;
     // nextRoad 진입(합류)이 지금 뒤차에게 안전한지 판정(IsSafeLaneEntry + m_lastNearbyCars).
     // CheckPath(Drive)와 ScanRoadSpeedConstraints(BehaviorPlan)이 공유.
-    bool ShouldHoldForMerge(const shared_ptr<Road> &nextRoad) const;
+    bool ShouldHoldForMerge(const RoadRef &nextRoad) const;
     std::vector<NearbyCar> CollectNearbyCars() const;
     bool IsTurningAhead() const;                  // 교차로 우선순위: 직진 > 회전 판정용
     bool HasPriorityOver(const Car *other) const; // 우선순위 직진 > 회전, 동급이면 이름 비교
     void AppendCarConstraintSamples(std::vector<RoadSpeedSample> &samples,
                                     const std::vector<NearbyCar> &nearbyCars, float lookDistance) const; // nearbyCars 중 내 예정 경로 코리도 안의 차를 도로제약 샘플(가상 리더)로 변환해 추가
     // nearby 중 refLine 기준 bandCenter 밴드에 속한 차들에서 egoS 앞/뒤 가장 가까운 leader/follower를 MOBIL 상태로.
+    // s는 전부 TravelS(진행방향으로 증가)로 재므로 역주행 차로에서도 앞/뒤가 뒤집히지 않는다.
     LaneNeighbors GatherLaneNeighbors(const std::vector<NearbyCar> &nearby, const Spline &refLine,
-                                      float bandCenter, float bandHalfWidth, float egoS) const;
+                                      float bandCenter, float bandHalfWidth, float egoS, float dirSign) const;
     // 현재 오프셋에서 가장 가까운 driving 밴드 중심(MOBIL 판정 없이 밴드 조회만).
     float CurrentLaneCenter() const;
     // 현재 밴드 유지 vs MOBIL 판정 인접 밴드로 변경 -> 목표 횡오프셋 d.
@@ -249,8 +255,9 @@ private:
     std::vector<RoadSpeedSample> ScanRoadSpeedConstraints(float lookDistance) const;
     // 레이에 잡힌 전방 장애물을 IDM 가상 리더(정적 제약)로 samples에 추가한다.
     void AppendSensorConstraintSample(std::vector<RoadSpeedSample> &samples) const;
-    // road 횡단면(GetLateralProfile)에서 차체가 도로 밖으로 안 나가는 drivable d 범위. 밴드 없으면 참조선 중심 좁은 범위.
-    void ComputeDrivableRange(const shared_ptr<Road> &road, float &outMin, float &outMax) const;
+    // road 횡단면에서 차체가 도로 밖으로 안 나가는 drivable d 범위. 마주 오는 차로로 새지 않게 진행방향
+    // 밴드만 본다. 밴드 없으면 참조선 중심 좁은 범위.
+    void ComputeDrivableRange(const RoadRef &road, float &outMin, float &outMax) const;
 #pragma endregion
 
 #pragma region Avoid
@@ -406,9 +413,11 @@ private:
     SubMode m_subMode = SubMode::D_Normal; // DriveMode::Drive 안에서만 의미 있음
     VehicleController m_vehicleController; // DriveMode가 세운 계획(세그먼트)을 실제로 실행
     shared_ptr<Road> m_destRoad;
+    LaneDirection m_destDir = LaneDirection::Forward; // destRoad를 어느 방향으로 달려 도착하는가(도착 판정 끝점)
     shared_ptr<Road> m_currentRoad;
-    float m_currentOffset = 0.0f; // 계획된(committed) 횡오프셋 d -- 실측이 아니라 리플랜 기준 상태
-    Spline m_currentSpline;       // 현재 주행 스플라인(참조선 offset d) 캐시
+    LaneDirection m_travelDir = LaneDirection::Forward; // 현재 road의 진행방향. d는 이것과 무관하게 항상 참조선 프레임.
+    float m_currentOffset = 0.0f;                       // 계획된(committed) 횡오프셋 d -- 실측이 아니라 리플랜 기준 상태
+    Spline m_currentSpline;                             // 현재 주행 스플라인(참조선 offset d, 역방향이면 뒤집힌 것) 캐시
 
     shared_ptr<RoadNode> m_parkSpot;        // 예약된 목표 주차칸(있는 동안은 "이 자리에 주차 중/주차 예정")
     shared_ptr<RoadNode> m_pendingParkNode; // 예약 전, 도착하면 그때 주차칸을 예약할 목표 Park 노드
@@ -421,7 +430,7 @@ private:
     bool m_roaming = true;                         // 배회 모드: 목적지 없이 랜덤 후속 road로 계속 주행
     static constexpr size_t ROAMING_MIN_AHEAD = 3; // 배회 시 현재 road 앞으로 항상 유지할 최소 road 버퍼 수
 
-    vector<shared_ptr<Road>> m_path;
+    vector<RoadRef> m_path;
     size_t m_pathIndex = 0;
     float m_currentTime = 0.0f;
     // 노란불 때 "정지거리 안쪽이라 통과" 확정한 신호 id(초록될 때까지 유지). 없으면 -1.

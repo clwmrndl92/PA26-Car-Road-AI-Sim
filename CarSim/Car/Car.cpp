@@ -11,7 +11,7 @@
 #include "Utill/DebugConsole.h"
 #include "Utill/Assert.h"
 
-void Car::Init(const CarSpec &spec, SimulationState *simState, JPH::Vec3 position)
+void Car::Init(const CarSpec &spec, const CarPersonality &personality, SimulationState *simState, JPH::Vec3 position)
 {
     SetName(spec.name);
     m_carModel = ModelManager::Get().CreateFromFile(spec.modelPath);
@@ -19,7 +19,7 @@ void Car::Init(const CarSpec &spec, SimulationState *simState, JPH::Vec3 positio
     SetRenderOffset(ToXMFLOAT3(spec.renderOffset));
     m_wheelbase = spec.wheelbase;
     m_halfExtents = spec.halfExtents;
-    m_personality = spec.personality;
+    m_personality = personality;
     m_jerkUp = m_personality.jerkUp;
     m_jerkDown = m_personality.jerkDown;
 
@@ -254,18 +254,19 @@ void Car::Destroy()
     GameObject::Destroy();
 }
 
-void Car::SetCurrentRoad(const shared_ptr<Road> &road, float offset)
+void Car::SetCurrentRoad(const shared_ptr<Road> &road, float offset, LaneDirection direction)
 {
-    if (m_currentRoad == road && m_currentOffset == offset)
+    if (m_currentRoad == road && m_currentOffset == offset && m_travelDir == direction)
         return;
     m_currentRoad = road;
     m_currentOffset = offset;
-    m_currentSpline = RoadDataManager::Get().BuildOffsetSpline(road, offset);
+    m_travelDir = direction;
+    m_currentSpline = RoadDataManager::Get().BuildOffsetSpline(road, offset, direction);
 
     RebuildSplineRender();
 }
 
-bool Car::ShouldStopForSignal(const shared_ptr<Road> &road) const
+bool Car::ShouldStopForSignal(const shared_ptr<Road> &road, LaneDirection direction) const
 {
     if (!road)
         return false;
@@ -273,9 +274,11 @@ bool Car::ShouldStopForSignal(const shared_ptr<Road> &road) const
     if (!signalNode)
         return false;
 
+    // t는 참조선 기준이므로 역주행이면 '지났다'의 부등호가 뒤집힌다 -- 진행방향 부호를 곱해 맞춘다.
     const Spline &spline = road->GetReferenceLine();
-    float nodeT = spline.GetSplinePosition(signalNode->position);
-    float myT = spline.GetSplinePosition(GetPosition());
+    float sign = GetTravelSign(direction);
+    float nodeT = spline.GetSplinePosition(signalNode->position) * sign;
+    float myT = spline.GetSplinePosition(GetPosition()) * sign;
     if (myT > nodeT)
     {
         if (m_committedYellowNodeId == signalNode->id)
@@ -491,16 +494,17 @@ bool Car::KnowsRedSignalAhead() const
 {
     for (size_t i = m_pathIndex; i < m_path.size(); ++i)
     {
-        const shared_ptr<Road> &road = m_path[i];
-        shared_ptr<RoadNode> signalNode = RoadDataManager::Get().GetSignalNodeForRoad(road->GetId());
+        const RoadRef &road = m_path[i];
+        shared_ptr<RoadNode> signalNode = RoadDataManager::Get().GetSignalNodeForRoad(road.road->GetId());
         if (signalNode == nullptr)
             continue;
 
         // 현재 road의 신호는 이미 정지선을 지났으면 건너뛴다(지난 신호엔 안 걸린다).
         if (i == m_pathIndex)
         {
-            const Spline &spline = road->GetReferenceLine();
-            if (spline.GetSplinePosition(GetPosition()) > spline.GetSplinePosition(signalNode->position))
+            const Spline &spline = road.road->GetReferenceLine();
+            float sign = GetTravelSign(road.direction);
+            if (spline.GetSplinePosition(GetPosition()) * sign > spline.GetSplinePosition(signalNode->position) * sign)
                 continue;
         }
 
