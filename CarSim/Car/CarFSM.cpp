@@ -535,12 +535,16 @@ void Car::DriveControl()
     float lookaheadDistance = m_currentSpline.IsStraight() ? m_speed * LOOKAHEAD_TIME : 5;
     Vec3 target = spline.GetLookaheadPoint(GetRigidbodyPosition(), lookaheadDistance);
     float targetSteer = PurePursuit(target);
+    // Stanley 조향 (다시 쓸 수도 있어 주석으로 남겨둠)
+    // float targetSteer = Stanley(spline);
     Steer(targetSteer);
 
     // 종방향: 리더/제약 목록은 행동 계획(UpdateBehaviorPlan, 0.2초 주기)이 스캔해두지만, IDM 가속도 자체는
     // 매프레임 다시 계산한다(앞차 속도/가속도/gap을 그때그때 최신값으로) -- ComputeIdmAcceleration 참고.
+    SpeedLimitDebug prevLimitDebug = m_limitDebug; // kind/목표속도가 바뀔 때만 로그를 찍기 위한 이전 프레임 값
     float distanceOffset = (GetPosition() - m_planScanPosition).Length(); // 스캔 이후 이동거리(정적 제약 gap 보정용)
-    float accelIDM = ComputeIdmAcceleration(m_lastRoadSamples, m_lastIdmParams, distanceOffset);
+    float elapsedTime = m_currentTime - m_lastBehaviorPlanTime;          // 스캔 이후 지난 시간(정적 제약의 가상 리더 전진 보정용)
+    float accelIDM = ComputeIdmAcceleration(m_lastRoadSamples, m_lastIdmParams, distanceOffset, elapsedTime, &m_limitDebug);
 
     // 회피/정지대기가 건 종방향 상한. IDM을 끄는 대신 '그 속도로 가는 가상 리더'를 하나 더 두는 형태라,
     // 신호/앞차/제한속도 제약이 그대로 살아 있고 감속도 저크제한을 타고 부드럽게 붙는다. m_speedCap은
@@ -548,19 +552,51 @@ void Car::DriveControl()
     if (m_speedCap >= 0.0f && m_speed > m_speedCap)
     {
         float capGap = std::max(1.0f, (m_speed * m_speed - m_speedCap * m_speedCap) / (2.0f * m_maxBrake) + MIN_SAFE_GAP);
-        accelIDM = std::min(accelIDM, IDM::CalculateAcceleration(m_speed, m_acceleration, m_speedCap, 0.0f,
-                                                                 capGap, m_lastIdmParams));
+        float capAccel = IDM::CalculateAcceleration(m_speed, m_acceleration, m_speedCap, 0.0f, capGap, m_lastIdmParams);
+        if (capAccel < accelIDM)
+        {
+            accelIDM = capAccel;
+            m_limitDebug = SpeedLimitDebug{"speedCap", m_speedCap, capGap};
+        }
     }
 
     float steerSpeedCap = CalcMaxSpeed(targetSteer); // 이번 프레임 조향각이 물리적으로 허용하는 한계속도(커브 안에서 반응형 유지)
-    if (m_speed > steerSpeedCap)
-        accelIDM = std::min(accelIDM, -m_maxBrake);
+    if (m_speed > steerSpeedCap && -m_maxBrake < accelIDM)
+    {
+        accelIDM = -m_maxBrake;
+        m_limitDebug = SpeedLimitDebug{"steerCap", steerSpeedCap, 0.0f};
+    }
+
+    // kind 또는 목표속도(0.5km/h 이상)가 바뀐 프레임만 로그 -- 매프레임 찍으면 콘솔이 묻힌다.
+    constexpr float LOG_TARGET_SPEED_EPS = 0.5f / 3.6f;
+    if (m_limitDebug.label != prevLimitDebug.label ||
+        std::fabs(m_limitDebug.targetSpeed - prevLimitDebug.targetSpeed) > LOG_TARGET_SPEED_EPS)
+    {
+        // v/accel: 이 전환이 실제로 일어난 순간의 차 속도/가속도 -- 라벨이 "free"로 풀렸어도 저크제한 때문에
+        // 실제 가속도가 아직 음수(관성으로 계속 감속 중)인지 여기서 바로 보인다.
+        DebugConsole::Log(GetName() + ": limit " + prevLimitDebug.label + "(" + ToString(prevLimitDebug.targetSpeed * 3.6f) +
+                          "km/h) -> " + m_limitDebug.label + "(" + ToString(m_limitDebug.targetSpeed * 3.6f) +
+                          "km/h) | v=" + ToString(m_speed * 3.6f) + "km/h accel=" + ToString(accelIDM));
+    }
+
+    // 라벨이 안 바뀐 채로(=위 로그 없이) 속도만 흘러내려 0 근처까지 처음 떨어지는 순간을 따로 잡는다 --
+    // 저크제한 관성으로 계속 감속 중인데 원인 라벨은 이미 다른 값으로 바뀌어 있는 경우를 위 로그만으론 못 잡는다.
+    constexpr float STALL_SPEED_EPS = 1.0f / 3.6f; // 1km/h
+    if (m_speed < STALL_SPEED_EPS && m_prevSpeedForStallLog >= STALL_SPEED_EPS)
+    {
+        DebugConsole::Log(GetName() + ": STALLED (v->0) under limit " + m_limitDebug.label + "(" +
+                          ToString(m_limitDebug.targetSpeed * 3.6f) + "km/h) accel=" + ToString(accelIDM) +
+                          " actualAccel=" + ToString(m_acceleration));
+    }
+    m_prevSpeedForStallLog = m_speed;
 
     // IDM이 뱉은 목표가속도를 저크제한으로만 수렴
     Accelerate(accelIDM);
 
-    // Debug : Pure Pursuit 목표점(전방주시 지점) 표시
-    DirectX::XMFLOAT3 targetMarkerPos = ToXMFLOAT3(target);
+    // Debug : Stanley 경로투영점(앞축 기준) 표시
+    float pathT = spline.GetSplinePosition(GetPosition());
+    Vec3 pathPoint = spline.GetPositionAt(pathT);
+    DirectX::XMFLOAT3 targetMarkerPos = ToXMFLOAT3(pathPoint);
     targetMarkerPos.y = GetPosition().GetY() + 0.2f;
     m_targetMarker.GetTransform().SetPosition(targetMarkerPos);
 }
@@ -599,7 +635,7 @@ std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistan
         Assert(currentNodeT >= 0.0f); // ScanRoadSpeedConstraints 호출 전엔 항상 m_currentSpline이 세팅되어 있어야 함
         float currentNodeDistance = m_currentSpline.GetLength() * (1.0f - currentNodeT);
         float currentNodeSpeed = (m_currentRoad == m_destRoad) ? 0.0f : std::min(m_currentRoad->GetSpeedLimit(), m_maxSpeed);
-        samples.push_back({splineEnd(&m_currentSpline), currentNodeDistance, currentNodeSpeed});
+        samples.push_back({splineEnd(&m_currentSpline), currentNodeDistance, currentNodeSpeed, nullptr, 0.0f, "curRoadEnd"});
     }
     {
         // 앞쪽 road는 '진행방향으로 본' 주행선(역방향이면 뒤집힌 것)을 써야 t/거리 계산이 그대로 성립한다.
@@ -629,7 +665,7 @@ std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistan
                         float nodeDistance = (segment.road == m_currentRoad)
                                                  ? (signalNode->position - calPosition).Length()
                                                  : traveledDistance + (nodeT - startT) * splineLength;
-                        samples.push_back({signalNode->position, nodeDistance - MIN_SAFE_GAP, 0.0f});
+                        samples.push_back({signalNode->position, nodeDistance - MIN_SAFE_GAP, 0.0f, nullptr, 0.0f, "signal"});
                     }
                 }
             }
@@ -644,21 +680,21 @@ std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistan
             {
                 // 경로가 여기서 끝난다는 것은 이 road가 destRoad라는 뜻: 진짜 정지 지점인 road 끝에 0속도를 박는다.
                 if (segment.road == m_destRoad)
-                    samples.push_back({splineEnd(spline), traveledDistance, 0.0f});
+                    samples.push_back({splineEnd(spline), traveledDistance, 0.0f, nullptr, 0.0f, "destEnd"});
                 break;
             }
 
             // CheckPath와 같은 기준(MOBIL 안전판정)으로 합류 대기 중이면, 실제로 넘어가지 않을 이 경계에서 멈춘다.
             if (ShouldHoldForMerge(nextRoad))
             {
-                samples.push_back({splineEnd(spline), traveledDistance - MIN_SAFE_GAP, 0.0f});
+                samples.push_back({splineEnd(spline), traveledDistance - MIN_SAFE_GAP, 0.0f, nullptr, 0.0f, "mergeWait"});
                 break;
             }
 
             float nextNodeSpeed = std::min(nextRoad.road->GetSpeedLimit(), m_maxSpeed);
             segmentLine = RoadDataManager::Get().BuildOffsetSpline(nextRoad.road, 0.0f, nextRoad.direction);
             Vec3 nextStart = segmentLine.GetSplinePoints().empty() ? segmentStart : segmentLine.GetSplinePoints().front();
-            samples.push_back({nextStart, traveledDistance, nextNodeSpeed});
+            samples.push_back({nextStart, traveledDistance, nextNodeSpeed, nullptr, 0.0f, "roadLimit"});
 
             segment = nextRoad;
             segmentStart = nextStart;
@@ -832,11 +868,13 @@ IDM::Params Car::BuildIdmParams(const shared_ptr<Road> &road) const
 
 // 스캔 주기 0.2초, gap/속도/가속도는 매 프레임 계산
 float Car::ComputeIdmAcceleration(const std::vector<RoadSpeedSample> &samples, const IDM::Params &params,
-                                  float distanceOffset) const
+                                  float distanceOffset, float elapsedTime, SpeedLimitDebug *outDebug) const
 {
     // 리더가 하나도 없으면 자유주행 가속(a_free) -- IDM 자유흐름식과 동일.
     float speedRatio = std::min(1.0f, m_speed / std::max(0.1f, params.v0));
     float bestAccel = params.a * (1.0f - std::pow(speedRatio, params.delta));
+    if (outDebug != nullptr)
+        *outDebug = SpeedLimitDebug{"free", params.v0, 0.0f};
 
     for (const RoadSpeedSample &sample : samples)
     {
@@ -852,8 +890,11 @@ float Car::ComputeIdmAcceleration(const std::vector<RoadSpeedSample> &samples, c
         }
         else
         {
-            // 정적 제약(신호/정지선/커브속도)은 스캔 당시 값 그대로, gap만 그 이후 이동거리로 보정.
-            float remaining = sample.distance - distanceOffset;
+            // 정적 제약(신호/정지선/커브속도)의 가상 리더가 스캔 이후 sample.speed로 실제 전진한 것처럼 gap을 보정.
+            // 안 그러면 gap이 상대속도가 아니라 내 속도 그대로 줄어들어(=리더가 못 박힌 정지물처럼 보여) 필요
+            // 이상으로 세게 감속하다 s0 근처에서 급제동, 저크제한 때문에 그 관성으로 목표속도 밑까지 밀린다.
+            // sample.speed==0(신호/정지선)이면 이 항이 0이라 기존과 동일한 고정점 취급.
+            float remaining = sample.distance - distanceOffset + sample.speed * elapsedTime;
             bool hardStop = sample.speed <= 0.0f; // 정지선/장애물은 gap<0(표준간격 침범)이어도 강제 제동
             if (!hardStop && (remaining <= 0.0f || m_speed <= sample.speed))
                 continue;
@@ -863,7 +904,12 @@ float Car::ComputeIdmAcceleration(const std::vector<RoadSpeedSample> &samples, c
             gap = remaining + MIN_SAFE_GAP;
         }
         float a = IDM::CalculateAcceleration(m_speed, m_acceleration, leaderSpeed, leaderAccel, gap, params);
-        bestAccel = std::min(bestAccel, a);
+        if (a < bestAccel)
+        {
+            bestAccel = a;
+            if (outDebug != nullptr)
+                *outDebug = SpeedLimitDebug{sample.leader != nullptr ? "car:" + sample.leader->GetName() : sample.kind, leaderSpeed, gap};
+        }
     }
     return bestAccel;
 }
@@ -999,14 +1045,18 @@ void Car::UpdateDrivePlan()
     m_lastBehaviorPlanTime = m_currentTime;
 
     constexpr float MIN_LOOK_DISTANCE = 20.0f; // 정지 상태에서도 바로 앞 신호/제한속도는 보이게 하는 최소치
-    float lookDistance = std::max(MIN_LOOK_DISTANCE, m_speed / 2 * (m_speed / m_maxBrake));
+    m_lastIdmParams = BuildIdmParams(m_currentRoad);
+
+    // 스캔 거리 = IDM 상호작용 거리 s*(정지 대상 최악치) + 다음 스캔까지 갈 거리. 더 늦게 보이면 쾌적감속 구간이 없어 최대제동으로 슬램한다.
+    float interactGap = m_lastIdmParams.s0 + m_speed * m_lastIdmParams.T +
+                        m_speed * m_speed / (2.0f * std::sqrt(std::max(0.0001f, m_lastIdmParams.a * m_lastIdmParams.b)));
+    float lookDistance = std::max(MIN_LOOK_DISTANCE, interactGap + m_speed * BEHAVIOR_PLAN_INTERVAL);
 
     // ScanRoadSpeedConstraints가 내부에서 ShouldHoldForMerge(→ m_lastNearbyCars)를 참조하므로 먼저 갱신해둔다.
     m_lastNearbyCars = CollectNearbyCars();
     m_lastRoadSamples = ScanRoadSpeedConstraints(lookDistance);
     AppendCarConstraintSamples(m_lastRoadSamples, m_lastNearbyCars, lookDistance);
     AppendSensorConstraintSample(m_lastRoadSamples);
-    m_lastIdmParams = BuildIdmParams(m_currentRoad);
     m_planScanPosition = GetPosition(); // DriveControl이 매프레임 여기 대비 이동거리로 정적 제약 gap을 보정
 
     // ---- 횡방향: MOBIL 차선변경 판정 + Lerp ----
@@ -1134,12 +1184,12 @@ void Car::AppendSensorConstraintSample(std::vector<RoadSpeedSample> &samples) co
     // 차로 코리도 판정(AppendCarConstraintSamples)으로는 안 잡히는 갓 끼어든 차가 여기서 처리된다.
     // frontDistance는 앞범퍼 기준이라 차 길이를 뺄 필요가 없다.
     if (m_sensor.frontDistance >= 0.0f)
-        samples.push_back({m_sensor.frontHitPosition, m_sensor.frontDistance - MIN_SAFE_GAP, m_sensor.frontHitSpeed});
+        samples.push_back({m_sensor.frontHitPosition, m_sensor.frontDistance - MIN_SAFE_GAP, m_sensor.frontHitSpeed, nullptr, 0.0f, "sensorFront"});
 
     // 차체 스윕이 예고한 접촉. 정지한 대상만 넣어 잰 거리이므로 speed 0(정지 제약)으로 건다.
     // bodyContactDistance는 '차체가 닿을 때까지 더 갈 수 있는 거리' 자체라 그대로 gap으로 쓸 수 있다.
     if (m_sensor.bodyContactDistance >= 0.0f)
-        samples.push_back({GetPosition(), m_sensor.bodyContactDistance - MIN_SAFE_GAP, 0.0f});
+        samples.push_back({GetPosition(), m_sensor.bodyContactDistance - MIN_SAFE_GAP, 0.0f, nullptr, 0.0f, "bodySweep"});
 }
 
 #pragma endregion

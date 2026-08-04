@@ -220,6 +220,12 @@ void Car::AccelerateVel(float desiredVelocity)
 void Car::Accelerate(float desiredAccel)
 {
     float aTarget = std::clamp(desiredAccel, -m_maxBrake, m_maxAccel);
+    // 목표 부호가 현재 가속도와 반대로 바뀌면(감속 중 제약이 풀려 가속으로 전환 등) 저크램프로 반대
+    // 부호 구간을 천천히 거쳐가지 않고 0으로 스냅한다 -- 안 그러면 관성으로 남은 반대부호 가속도가
+    // m_jerkUp/m_jerkDown 속도로만 빠지면서, 제약이 이미 풀렸는데도 한동안 계속 밀린다.
+    if ((aTarget >= 0.0f) != (m_acceleration >= 0.0f))
+        m_acceleration = 0.0f;
+
     float jerkLimit = (aTarget > m_acceleration) ? m_jerkUp : m_jerkDown;
     float maxStep = jerkLimit * m_deltaTime;
     m_acceleration += std::clamp(aTarget - m_acceleration, -maxStep, maxStep);
@@ -539,6 +545,9 @@ void Car::UpdateDebugWindow()
 
         // 행동계획(0.2초마다 UpdateBehaviorPlan이 갱신): IDM 목표가속도, 속도 캡, 현재 횡오프셋.
         ImGui::Text("Plan accel(IDM): %.2f m/s^2", m_planAccelDebug);
+        // 위 가속도를 결정한 근거(매프레임 DriveControl이 갱신) -- "free"면 제약 없음, 그 외엔 samples 중 최소가속을 낸 항목/speedCap/steerCap.
+        ImGui::Text("Limit cause: %s (target %.1f km/h, gap %.1f m)", m_limitDebug.label.c_str(),
+                    m_limitDebug.targetSpeed * 3.6f, m_limitDebug.gap);
         ImGui::Text("Cur offset d: %.2f m", m_currentOffset);
 
         // 회피(레이 스캔 + Avoid 상태)

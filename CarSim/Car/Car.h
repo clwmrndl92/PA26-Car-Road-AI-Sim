@@ -206,6 +206,15 @@ private:
         float speed;
         Car *leader = nullptr;            // 이 샘플이 앞차(리더)면 그 차, 정적 제약(신호/커브/정지선 등)이면 nullptr
         float leaderLateralOffset = 0.0f; // road 참조선 기준 리더의 d(횡오프셋). leader!=nullptr일 때만 유효 -- 후보가 이 리더를 옆으로 피할 수 있는지 판단용
+        const char *kind = "";             // 디버그용 정적 제약 종류 표시("signal"/"destEnd"/"mergeWait"/"roadLimit"/"curRoadEnd"/"sensorFront"/"bodySweep"). leader!=nullptr면 안 씀.
+    };
+
+    // 이번 프레임 IDM 목표가속도를 결정한 근거(디버그 UI 표시용). DriveControl이 매프레임 채운다.
+    struct SpeedLimitDebug
+    {
+        std::string label = "free"; // "free"(자유흐름) / RoadSpeedSample::kind / "car:<이름>" / "speedCap" / "steerCap"
+        float targetSpeed = 0.0f;
+        float gap = 0.0f;
     };
 
     struct NearbyCar
@@ -226,10 +235,14 @@ private:
     void UpdateDrivePlan();
     IDM::Params BuildIdmParams(const shared_ptr<Road> &road) const; // road 제한속도를 v0로 반영한 IDM 파라미터
     // samples를 IDM 가상 리더로 보고 각각의 IDM 가속도 중 최솟값을 반환(매프레임 호출 가능). 실제 앞차(leader!=nullptr)는
-    // 그 차의 현재 속도/가속도/거리를 매번 새로 읽고, 정적 제약(신호/커브 등)은 distanceOffset(스캔 이후 이동거리)만큼
-    // gap을 보정한다 -- samples 자체(리더가 '누구인지')는 0.2초 스캔 결과를 재사용해도 된다.
+    // 그 차의 현재 속도/가속도/거리를 매번 새로 읽는다. 정적 제약(신호/커브 등)은 스캔 시점 위치에서 sample.speed로
+    // 그동안 실제로 전진한 것처럼 gap을 보정한다(distanceOffset=내가 움직인 거리, elapsedTime=스캔 이후 지난 시간) --
+    // 안 그러면 gap이 상대속도(내 속도-리더속도)가 아니라 내 속도 그대로 줄어들어 리더가 못 박힌 정지물처럼 취급된다.
+    // sample.speed==0(신호/정지선)이면 elapsedTime 항이 0이 되어 기존처럼 고정점으로 자연히 남는다.
+    // samples 자체(리더가 '누구인지')는 0.2초 스캔 결과를 재사용해도 된다.
+    // outDebug!=nullptr이면 최솟값을 낸 샘플의 근거(리더 이름/제약 종류/목표속도/gap)를 채운다(디버그 UI용, 매프레임 호출이라 비용 최소화 위해 선택적).
     float ComputeIdmAcceleration(const std::vector<RoadSpeedSample> &samples, const IDM::Params &params,
-                                 float distanceOffset) const;
+                                 float distanceOffset, float elapsedTime, SpeedLimitDebug *outDebug = nullptr) const;
     // road의 targetOffset 근처 밴드로 진입해도 뒤차에게 안전한지 MOBIL 안전기준(강제 차선변경)으로 판정.
     // 도로 밖에서 처음 진입(UpdateFindPath/EnsureRoamingPath)과 다음 road로 합류(ShouldHoldForMerge)가 공유.
     bool IsSafeLaneEntry(const RoadRef &road, float targetOffset, const std::vector<NearbyCar> &nearby) const;
@@ -459,6 +472,8 @@ private:
 
     float m_lastBehaviorPlanTime = -1000.0f;        // 처음 Drive 진입 시 바로 첫 판단이 돌도록 충분히 과거로 초기화
     float m_planAccelDebug = 0.0f;                  // DriveControl이 매프레임 계산한 IDM 목표가속도(디버그 UI 표시용 캐시)
+    SpeedLimitDebug m_limitDebug;                   // 위 목표가속도를 결정한 근거(디버그 UI 표시용 캐시)
+    float m_prevSpeedForStallLog = 0.0f;            // 정지 감지 로그(DriveControl)용 -- 직전 프레임 속도
     std::vector<NearbyCar> m_lastNearbyCars;        // UpdateBehaviorPlan이 마지막으로 수집한 주변 차 목록 -- ShouldHoldForMerge가 매 프레임 재사용(재수집 비용 회피)
     std::vector<RoadSpeedSample> m_lastRoadSamples; // UpdateBehaviorPlan이 마지막으로 스캔한 리더/제약 목록 -- DriveControl이 매프레임 IDM 가속도 재계산에 재사용
     IDM::Params m_lastIdmParams;                    // 위 스캔 시점의 IDM 파라미터(v0 등) 캐시
