@@ -53,6 +53,13 @@ void Car::Update(float dt)
 {
     m_deltaTime = dt;
     m_currentTime += dt;
+
+    if (m_isManual)
+    {
+        UpdateWithControl();
+        return;
+    }
+
     UpdateMode();
     m_wantSegmentTick = false;
     switch (m_mode)
@@ -365,9 +372,9 @@ void Car::UpdateWithControl()
     // Acceleration / Brake
 
     if (m_isFocused && ImGui::IsKeyDown(ImGuiKey_DownArrow)) // Brake
-        AccelerateVel(-1);
+        Accelerate(-m_maxBrake);
     else if (m_isFocused && ImGui::IsKeyDown(ImGuiKey_UpArrow)) // Accelerate
-        AccelerateVel(1);
+        Accelerate(m_maxAccel);
     else
         AccelerateVel(0);
 

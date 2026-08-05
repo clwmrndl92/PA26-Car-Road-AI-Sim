@@ -47,6 +47,9 @@ public:
     }
     void SetDestination(const shared_ptr<RoadNode> &parkNode);
     void SetRoaming(bool roaming) { m_roaming = roaming; } // 배회 모드 on/off
+    // 사용자 조작 차: true면 AI FSM(UpdateMode 이하)을 전부 건너뛰고 UpdateWithControl만 돈다.
+    void SetManual(bool manual) { m_isManual = manual; }
+    bool IsManual() const { return m_isManual; }
     float GetAcceleration() const { return m_acceleration; }
     float GetLength() const { return m_halfExtents.GetZ() * 2.0f; }
     float GetHalfWidth() const { return m_halfExtents.GetX(); }
@@ -444,6 +447,7 @@ private:
 
     bool m_wantSegmentTick = false;
     bool m_isFocused = false; // 포커스 여부 (입력 처리용)
+    bool m_isManual = false;  // 사용자 조작 차 여부 (true면 AI FSM 대신 UpdateWithControl로 구동)
 
     // 컴포넌트 및 AI 상태 (Components & Systems)
     SimulationState *m_SimState = nullptr;

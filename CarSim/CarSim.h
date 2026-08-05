@@ -36,6 +36,10 @@ private:
     void SpawnCar(CarType type, CarPersonalityType personality);
     void RemoveCar(const std::shared_ptr<Car> &car);
     void UpdateSignalMarkers();
+    // 사용자 조작 차: 기존 것이 있으면 그 자리(위치/방향)에 새 차종으로 갈아끼우고 포커싱한다.
+    void SpawnManualCar(CarType type);
+    void RemoveManualCar();
+    void DrawManualCarWindow();
 
 private:
     RoadDataManager m_RoadDataManager;
@@ -49,6 +53,9 @@ private:
     std::weak_ptr<Car> m_pPickedObject;
     int m_carIDCounter = 1;
     int m_SpawnPersonalityIndex = 0;
+
+    std::shared_ptr<Car> m_ManualCar;   // 사용자 조작 차 (없으면 nullptr)
+    int m_ManualCarTypeIndex = 0;       // "User Car" 창 드롭다운 선택 인덱스
 
     std::vector<RenderObject> m_RoadRenders;
     std::vector<RenderObject> m_RoadEdgeRenders;

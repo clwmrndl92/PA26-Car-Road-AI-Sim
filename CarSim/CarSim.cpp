@@ -180,10 +180,50 @@ void CarSim::RemoveCar(const std::shared_ptr<Car> &car)
         m_pPickedObject.reset();
         m_PickedObjectName = "";
     }
+    if (m_ManualCar == car)
+        m_ManualCar.reset();
 
     car->Destroy();
     m_CarObjects.erase(std::remove(m_CarObjects.begin(), m_CarObjects.end(), car), m_CarObjects.end());
     m_GameObjects.erase(std::remove(m_GameObjects.begin(), m_GameObjects.end(), car), m_GameObjects.end());
+}
+
+void CarSim::SpawnManualCar(CarType type)
+{
+    // 기존 사용자 조작 차가 있으면 그 자리(위치/방향)를 기억해두고 제거한 뒤 같은 자리에 새 차종으로 소환한다.
+    // 처음 소환하는 경우엔 초기 AI 차(Car 1, (0,0.1,-30) 부근에서 -X 방향)와 안 겹치도록 그 뒤(+X쪽)에 둔다.
+    JPH::Vec3 spawnPos(15.0f, 0.1f, -30.0f);
+    Vec3 spawnDir(-1.0f, 0.0f, 0.0f);
+    if (m_ManualCar)
+    {
+        Vec3 pos = m_ManualCar->GetPosition();
+        spawnPos = JPH::Vec3(pos.GetX(), pos.GetY(), pos.GetZ());
+        spawnDir = m_ManualCar->GetForwardAxis();
+        // 복사본으로 넘긴다: RemoveCar가 내부에서 m_ManualCar를 reset하므로, 멤버를 그대로 참조로 넘기면
+        // reset 직후 같은 객체를 가리키는 참조가 null이 되어 곧이은 car->Destroy()가 크래시난다.
+        std::shared_ptr<Car> oldManualCar = m_ManualCar;
+        RemoveCar(oldManualCar);
+    }
+
+    auto car = std::make_shared<Car>();
+    car->Init(GetCarSpec(type), GetCarPersonality(CarPersonalityType::Normal), &m_SimState, spawnPos);
+    car->SetRotation(spawnDir);
+    car->SetManual(true);
+    car->SetName(car->GetName() + "_User");
+
+    m_GameObjects.push_back(car);
+    m_CarObjects.push_back(car);
+    m_ManualCar = car;
+    FocusOnObject(car);
+}
+
+void CarSim::RemoveManualCar()
+{
+    if (!m_ManualCar)
+        return;
+    // 복사본으로 넘긴다 (SpawnManualCar와 같은 이유: RemoveCar가 내부에서 m_ManualCar를 reset한다).
+    std::shared_ptr<Car> oldManualCar = m_ManualCar;
+    RemoveCar(oldManualCar);
 }
 
 void CarSim::FocusOnObject(const std::shared_ptr<Car> &obj)
@@ -370,7 +410,36 @@ void CarSim::UpdateUI(float dt)
     }
     ImGui::End();
 
+    DrawManualCarWindow();
+
     DebugConsole::Get().Draw();
+}
+
+void CarSim::DrawManualCarWindow()
+{
+    ImGui::SetNextWindowPos(ImVec2(280.0f, 320.0f), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("User Car"))
+    {
+        std::vector<const char *> typeNames;
+        for (int i = 0; i < static_cast<int>(CarType::Count); ++i)
+            typeNames.push_back(GetCarSpec(static_cast<CarType>(i)).name);
+        ImGui::Combo("Car Type", &m_ManualCarTypeIndex, typeNames.data(), static_cast<int>(typeNames.size()));
+
+        CarType selectedType = static_cast<CarType>(m_ManualCarTypeIndex);
+        if (ImGui::Button(m_ManualCar ? "Change" : "Spawn"))
+            SpawnManualCar(selectedType);
+        ImGui::SameLine();
+        if (ImGui::Button("Remove"))
+            RemoveManualCar();
+
+        ImGui::Separator();
+        if (m_ManualCar)
+            ImGui::Text("Driving: %s", m_ManualCar->GetName().c_str());
+        else
+            ImGui::Text("Driving: (none)");
+        ImGui::TextWrapped("Controls: Up/Down = accel/brake, Left/Right = steer, Z = gear, Space = reset");
+    }
+    ImGui::End();
 }
 void CarSim::DrawScene()
 {
