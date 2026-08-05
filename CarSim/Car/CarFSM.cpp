@@ -250,7 +250,6 @@ void Car::OnModeEnter(Mode prev)
         SetSubMode(prev == Mode::Stop ? SubMode::P_EXIT : SubMode::P_ENTER_LEG1);
         m_parkPlanPending = true;    // 도착 즉시 RS를 계산하지 않고, 완전히 멈출 때까지 기다린다 (UpdatePark에서 처리).
         m_parkSequenceActive = true; // 주차 시퀀스 시작 — 완료(UpdatePark)까지 Park 유지.
-        DebugConsole::Log(GetName() + ": Park plan pending: waiting for full stop before planning");
     }
     else if (m_mode == Mode::Stop)
     {
@@ -740,20 +739,19 @@ std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistan
             RoadRef nextRoad = (pathIndex + 1 < m_path.size()) ? m_path[pathIndex + 1] : RoadRef{};
             int nextRoadId = nextRoad.road != nullptr ? nextRoad.road->GetId() : -1;
 
-            // nodeT < startT면 이미 지나온 신호라 건너뛴다 (안 그러면 통과 직후 급제동).
-            if (shared_ptr<RoadNode> signalNode = RoadDataManager::Get().GetSignalNodeForRoad(segment.road->GetId(), nextRoadId))
+            // 신호로 서면 CheckPath가 이 road 끝을 안 넘긴다 -- mergeWait/junctionWait과 같은 규약으로 정지점도
+            // 정지선과 road 끝 중 앞선 쪽으로 잡고 스캔을 끊는다. 신호노드가 road 끝보다 뒤(다음 road 쪽)에 있으면
+            // 그 거리를 여유로 보고 road 끝을 지나쳐 크리핑하다 스플라인 끝을 벗어난다.
+            shared_ptr<RoadNode> signalNode = RoadDataManager::Get().GetSignalNodeForRoad(segment.road->GetId(), nextRoadId);
+            if (signalNode != nullptr && splineLength > 0.0f && ShouldStopForSignal(segment.road, segment.direction, nextRoadId))
             {
-                if (splineLength > 0.0f && ShouldStopForSignal(segment.road, segment.direction, nextRoadId))
-                {
-                    float nodeT = spline->GetSplinePosition(signalNode->position);
-                    if (nodeT >= startT)
-                    {
-                        float nodeDistance = (segment.road == m_currentRoad)
-                                                 ? (signalNode->position - calPosition).Length()
-                                                 : traveledDistance + (nodeT - startT) * splineLength;
-                        samples.push_back({signalNode->position, nodeDistance - MIN_SAFE_GAP, 0.0f, nullptr, 0.0f, "signal"});
-                    }
-                }
+                float nodeT = spline->GetSplinePosition(signalNode->position);
+                float nodeDistance = (segment.road == m_currentRoad)
+                                         ? (signalNode->position - calPosition).Length()
+                                         : traveledDistance + (nodeT - startT) * splineLength;
+                float stopDistance = std::min(nodeDistance, traveledDistance + segmentDistance);
+                samples.push_back({signalNode->position, stopDistance - MIN_SAFE_GAP, 0.0f, nullptr, 0.0f, "signal"});
+                break;
             }
 
             traveledDistance += walkDistance;

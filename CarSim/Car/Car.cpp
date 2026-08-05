@@ -294,12 +294,12 @@ bool Car::ShouldStopForSignal(const shared_ptr<Road> &road, LaneDirection direct
     if (!signalNode)
         return false;
 
-    // t는 참조선 기준이므로 역주행이면 '지났다'의 부등호가 뒤집힌다 -- 진행방향 부호를 곱해 맞춘다.
+    // 노드 접선에 대한 내 위치의 앞/뒤로 "지남"을 직접 판정 -- 참조선 재투영(myT)은 차가 끝점을 넘어가면 클램프돼 영원히 "안 지남"이 됨.
     const Spline &spline = road->GetReferenceLine();
     float sign = GetTravelSign(direction);
-    float nodeT = spline.GetSplinePosition(signalNode->position) * sign;
-    float myT = spline.GetSplinePosition(GetPosition()) * sign;
-    if (myT > nodeT)
+    float nodeT = spline.GetSplinePosition(signalNode->position);
+    Vec3 travelDir = spline.GetDirectionAt(nodeT) * sign;
+    if ((GetPosition() - signalNode->position).Dot(travelDir) > 0.0f)
     {
         if (m_committedYellowNodeId == signalNode->id)
             m_committedYellowNodeId = -1;
