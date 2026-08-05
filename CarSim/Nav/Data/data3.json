@@ -1,6 +1,12 @@
 {
   "lanes": [],
-  "nodes": [{ "id": 1, "position": [18.0, 0.0, -20.0], "direction": [0.0, 1.0, 0.0], "type": "unknown" }],
+  "nodes": [
+    { "id": 1, "position": [18.0, 0.0, -20.0], "direction": [0.0, 1.0, 0.0], "type": "unknown" },
+    { "id": 2, "position": [3.0, 0.0, -15.0], "direction": [0.0, 0.0, 1.0], "type": "traffic_light", "roads": [1], "phase_offset": 0.0, "movements": [101, 102], "red_duration": 36.0 },
+    { "id": 3, "position": [-3.0, 0.0, 15.0], "direction": [0.0, 0.0, -1.0], "type": "traffic_light", "roads": [3], "phase_offset": 12.0, "movements": [105, 101], "red_duration": 36.0 },
+    { "id": 4, "position": [-15.0, 0.0, -3.0], "direction": [1.0, 0.0, 0.0], "type": "traffic_light", "roads": [5], "phase_offset": 24.0, "movements": [107, 106], "red_duration": 36.0 },
+    { "id": 5, "position": [15.0, 0.0, 3.0], "direction": [-1.0, 0.0, 0.0], "type": "traffic_light", "roads": [7], "phase_offset": 36.0, "movements": [107, 103], "red_duration": 36.0 }
+  ],
   "obstacles": [],
   "dynamic_obstacles": [],
   "parking_lanes": [],
@@ -951,7 +957,7 @@
       "link": { "predecessor": { "type": "road", "id": 401, "contact": "end" }, "successor": { "type": "road", "id": 400, "contact": "end" } }
     },
     {
-      "id": 601,
+      "id": 141,
       "name": "J6_W_left",
       "speed_limit": 40,
       "reference_line": [
@@ -978,7 +984,7 @@
       "link": { "predecessor": { "type": "road", "id": 202, "contact": "end" }, "successor": { "type": "road", "id": 401, "contact": "start" } }
     },
     {
-      "id": 602,
+      "id": 142,
       "name": "J6_W_right",
       "speed_limit": 40,
       "reference_line": [
@@ -1005,7 +1011,7 @@
       "link": { "predecessor": { "type": "road", "id": 202, "contact": "end" }, "successor": { "type": "road", "id": 213, "contact": "start" } }
     },
     {
-      "id": 603,
+      "id": 143,
       "name": "J6_N_through",
       "speed_limit": 40,
       "reference_line": [
@@ -1054,7 +1060,7 @@
       "speed_limit": 50,
       "reference_line": [
         [-115.0, 0.0, -130.0],
-        [-115.0, 1.6, -205.0],
+        [-115.0, 0.0, -205.0],
         [-141.36, 1.6, -268.64],
         [-205.0, 3.3, -295.0],
         [-268.64, 5.0, -268.64],
@@ -1076,7 +1082,7 @@
       "link": { "predecessor": { "type": "road", "id": 403, "contact": "end" }, "successor": { "type": "road", "id": 400, "contact": "start" } }
     },
     {
-      "id": 701,
+      "id": 144,
       "name": "J7_W_left",
       "speed_limit": 40,
       "reference_line": [
@@ -1103,7 +1109,7 @@
       "link": { "predecessor": { "type": "road", "id": 205, "contact": "start" }, "successor": { "type": "road", "id": 403, "contact": "start" } }
     },
     {
-      "id": 702,
+      "id": 145,
       "name": "J7_W_right",
       "speed_limit": 40,
       "reference_line": [
@@ -1130,7 +1136,7 @@
       "link": { "predecessor": { "type": "road", "id": 205, "contact": "start" }, "successor": { "type": "road", "id": 211, "contact": "start" } }
     },
     {
-      "id": 703,
+      "id": 146,
       "name": "J7_N_through",
       "speed_limit": 40,
       "reference_line": [
@@ -1249,23 +1255,23 @@
     {
       "id": 6,
       "connections": [
-        { "incoming_road": 202, "connecting_road": 601, "contact": "start", "lane_links": [{ "from": 1, "to": 1 }] },
-        { "incoming_road": 401, "connecting_road": 601, "contact": "end", "lane_links": [{ "from": 0, "to": 0 }] },
-        { "incoming_road": 202, "connecting_road": 602, "contact": "start", "lane_links": [{ "from": 1, "to": 1 }] },
-        { "incoming_road": 213, "connecting_road": 602, "contact": "end", "lane_links": [{ "from": 0, "to": 0 }] },
-        { "incoming_road": 213, "connecting_road": 603, "contact": "start", "lane_links": [{ "from": 0, "to": 1 }] },
-        { "incoming_road": 401, "connecting_road": 603, "contact": "end", "lane_links": [{ "from": 0, "to": 0 }] }
+        { "incoming_road": 202, "connecting_road": 141, "contact": "start", "lane_links": [{ "from": 1, "to": 1 }] },
+        { "incoming_road": 401, "connecting_road": 141, "contact": "end", "lane_links": [{ "from": 0, "to": 0 }] },
+        { "incoming_road": 202, "connecting_road": 142, "contact": "start", "lane_links": [{ "from": 1, "to": 1 }] },
+        { "incoming_road": 213, "connecting_road": 142, "contact": "end", "lane_links": [{ "from": 0, "to": 0 }] },
+        { "incoming_road": 213, "connecting_road": 143, "contact": "start", "lane_links": [{ "from": 0, "to": 1 }] },
+        { "incoming_road": 401, "connecting_road": 143, "contact": "end", "lane_links": [{ "from": 0, "to": 0 }] }
       ]
     },
     {
       "id": 7,
       "connections": [
-        { "incoming_road": 205, "connecting_road": 701, "contact": "start", "lane_links": [{ "from": 0, "to": 1 }] },
-        { "incoming_road": 403, "connecting_road": 701, "contact": "end", "lane_links": [{ "from": 0, "to": 0 }] },
-        { "incoming_road": 205, "connecting_road": 702, "contact": "start", "lane_links": [{ "from": 0, "to": 1 }] },
-        { "incoming_road": 211, "connecting_road": 702, "contact": "end", "lane_links": [{ "from": 0, "to": 0 }] },
-        { "incoming_road": 211, "connecting_road": 703, "contact": "start", "lane_links": [{ "from": 0, "to": 1 }] },
-        { "incoming_road": 403, "connecting_road": 703, "contact": "end", "lane_links": [{ "from": 0, "to": 0 }] }
+        { "incoming_road": 205, "connecting_road": 144, "contact": "start", "lane_links": [{ "from": 0, "to": 1 }] },
+        { "incoming_road": 403, "connecting_road": 144, "contact": "end", "lane_links": [{ "from": 0, "to": 0 }] },
+        { "incoming_road": 205, "connecting_road": 145, "contact": "start", "lane_links": [{ "from": 0, "to": 1 }] },
+        { "incoming_road": 211, "connecting_road": 145, "contact": "end", "lane_links": [{ "from": 0, "to": 0 }] },
+        { "incoming_road": 211, "connecting_road": 146, "contact": "start", "lane_links": [{ "from": 0, "to": 1 }] },
+        { "incoming_road": 403, "connecting_road": 146, "contact": "end", "lane_links": [{ "from": 0, "to": 0 }] }
       ]
     }
   ]

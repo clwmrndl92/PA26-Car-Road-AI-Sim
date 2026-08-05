@@ -165,7 +165,8 @@ private:
     float TravelSign() const { return GetTravelSign(m_travelDir); }
     RoadRef CurrentRoadRef() const { return RoadRef{m_currentRoad, m_travelDir}; }
     // CheckPath(Drive)와 ScanRoadSpeedConstraints(BehaviorPlan)이 공유.
-    bool ShouldStopForSignal(const shared_ptr<Road> &road, LaneDirection direction) const;
+    // nextRoadId: 이 road를 나가서 실제로 타려는 다음 road(=이동/movement). 모르면 -1.
+    bool ShouldStopForSignal(const shared_ptr<Road> &road, LaneDirection direction, int nextRoadId = -1) const;
     bool TryFindPathAndSetRoad();
 
     // 배회(roaming) 모드: 목적지 없이 랜덤 후속 road로 계속 주행. m_path를 랜덤 successor로 채워 유지한다.
@@ -256,8 +257,11 @@ private:
                                     const std::vector<NearbyCar> &nearbyCars, float lookDistance) const; // nearbyCars 중 내 예정 경로 코리도 안의 차를 도로제약 샘플(가상 리더)로 변환해 추가
     // nearby 중 refLine 기준 bandCenter 밴드에 속한 차들에서 egoS 앞/뒤 가장 가까운 leader/follower를 MOBIL 상태로.
     // s는 전부 TravelS(진행방향으로 증가)로 재므로 역주행 차로에서도 앞/뒤가 뒤집히지 않는다.
-    LaneNeighbors GatherLaneNeighbors(const std::vector<NearbyCar> &nearby, const Spline &refLine,
-                                      float bandCenter, float bandHalfWidth, float egoS, float dirSign) const;
+    // road: 실제로 이 road에 있는 차만 후보로 본다 -- 아직 진입 전인 차를 GetSplinePosition의 최근접점
+    // 스냅으로 road 위에 있는 것처럼 오판하는 것(예: 아직 안 들어온 내 뒷차가 next road의 follower로 잡힘)을 막는다.
+    LaneNeighbors GatherLaneNeighbors(const std::vector<NearbyCar> &nearby, const shared_ptr<Road> &road,
+                                      const Spline &refLine, float bandCenter, float bandHalfWidth, float egoS,
+                                      float dirSign) const;
     // 현재 오프셋에서 가장 가까운 driving 밴드 중심(MOBIL 판정 없이 밴드 조회만).
     float CurrentLaneCenter() const;
     // 현재 밴드 유지 vs MOBIL 판정 인접 밴드로 변경 -> 목표 횡오프셋 d.

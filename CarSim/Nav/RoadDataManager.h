@@ -189,8 +189,10 @@ public:
     const BoundaryMark *GetCenterMark(const shared_ptr<Road> &road) const;
     // id로 junction 조회. 없으면 nullptr.
     const Junction *GetJunction(int junctionId) const;
-    // road에 걸린 신호 노드. 없으면 nullptr.
-    shared_ptr<RoadNode> GetSignalNodeForRoad(int roadId) const;
+    // road에 걸린 신호 노드. nextRoadId(경로상 다음 road = 실제로 타려는 이동)가 어느 phase의
+    // gatedMovements에 속하면 그 노드를, 없으면 gatedMovements가 비어있는(전체 적용) 노드를 돌려준다.
+    // nextRoadId<0(다음 road를 모름)이면 전체 적용 노드만 후보로 본다. 둘 다 없으면 nullptr.
+    shared_ptr<RoadNode> GetSignalNodeForRoad(int roadId, int nextRoadId = -1) const;
     // 그 방향으로 달릴 때의 후속 road들. Forward는 successor 링크, Backward는 predecessor 링크로 나간다.
     const vector<RoadRef> &GetRoadSuccessors(int roadId, LaneDirection direction) const;
 
@@ -235,7 +237,7 @@ private:
     unordered_map<int, vector<LaneSection>> m_laneSections;             // road id -> sStart 오름차순 횡단면들
     unordered_map<int, BoundaryMark> m_centerMarks;                     // road id -> 중앙선 마킹
     unordered_map<int, Junction> m_junctions;                          // junction id -> Junction
-    unordered_map<int, shared_ptr<RoadNode>> m_roadSignals;            // road id -> 신호 노드
+    unordered_map<int, vector<shared_ptr<RoadNode>>> m_roadSignals;    // road id -> 그 road에 걸린 신호 노드들(이동별 phase 여러 개 가능)
     unordered_map<int, vector<RoadRef>> m_roadSuccessors;              // SuccessorKey(road id, 방향) -> 후속 (road, 방향)들
 };
 
@@ -266,4 +268,12 @@ struct RoadNode
     RoadNodeType nodeType = RoadNodeType::Unkown;
     vector<weak_ptr<RoadNode>> children; // 예: Park 노드가 자기 소유의 ParkSpot 노드들을 참조
     float signalPhaseOffset = 0.0f;      // traffic_light 노드 전용
+    // traffic_light 노드 전용: 이 phase가 실제로 막는 "다음 road"(교차로 connecting road, 예: 직진/좌회전) id들.
+    // 비어있으면 접근도로(roads)에서 나가는 모든 이동에 적용(하위호환 기본값). 목록에 없는 이동(예: 우회전)은
+    // 이 신호로 안 막힌다 -- 걸고 싶으면 별도 traffic_light 노드를 그 이동 id로 추가하면 된다.
+    vector<int> gatedMovements;
+    // traffic_light 노드 전용: 신호 주기(초). 없으면 기본값(8/3/12)을 그대로 쓴다.
+    float signalGreenDuration = 8.0f;
+    float signalYellowDuration = 3.0f;
+    float signalRedDuration = 12.0f;
 };

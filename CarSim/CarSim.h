@@ -60,7 +60,7 @@ private:
     struct SignalMarker
     {
         Model *model = nullptr;
-        float phaseOffset = 0.0f;
+        shared_ptr<RoadNode> node; // phaseOffset/green/yellow/red 지속시간을 노드에서 그대로 읽는다
     };
     std::vector<SignalMarker> m_SignalMarkers;
 };

@@ -12,7 +12,9 @@ class SimulationState
 {
 public:
     void Tick(float dt) { m_simTime += dt; } // 전역 시뮬레이션 시계 누적
-    TrafficSignal::Color GetSignalColor(float phaseOffset) const;
+    // durations는 신호(RoadNode)마다 다르게 줄 수 있다 -- 이 클래스는 전역 시계(m_simTime)만 들고 있다.
+    TrafficSignal::Color GetSignalColor(float phaseOffset, float greenDuration, float yellowDuration,
+                                        float redDuration) const;
 
     // 시뮬레이션에 존재하는 모든 차
     void RegisterCar(Car *car) { m_cars.push_back(car); }
@@ -26,10 +28,6 @@ public:
     void ReleaseParkSpot(int spotNodeId);
 
 private:
-    static constexpr float SIGNAL_GREEN_DURATION = 8.0f;  // 초록불 지속 시간
-    static constexpr float SIGNAL_YELLOW_DURATION = 3.0f; // 노란불 지속 시간
-    static constexpr float SIGNAL_RED_DURATION = 12.0f;   // 빨간불 지속 시간
-
     std::unordered_set<int> m_reservedParkSpotIds; // 예약된(다른 차가 목표로 잡은) ParkSpot 노드 id
     std::vector<Car *> m_cars;
     float m_simTime = 0.0f; // Tick()으로만 누적되는 전역 시뮬레이션 시계.

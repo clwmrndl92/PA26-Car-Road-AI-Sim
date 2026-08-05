@@ -198,6 +198,13 @@ void RoadDataManager::BuildRoadData(const string &filePath)
         node->direction = direction;
         node->nodeType = nodeType;
         node->signalPhaseOffset = nodeJson.value("phase_offset", 0.0f); // traffic_light 전용, 없으면 0
+        // movements(optional, traffic_light 전용): 이 phase가 막는 connecting road id들. 없으면 접근도로의
+        // 모든 이동에 적용(하위호환).
+        for (const nlohmann::json &movementJson : nodeJson.value("movements", nlohmann::json::array()))
+            node->gatedMovements.push_back(movementJson.get<int>());
+        node->signalGreenDuration = nodeJson.value("green_duration", 8.0f);
+        node->signalYellowDuration = nodeJson.value("yellow_duration", 3.0f);
+        node->signalRedDuration = nodeJson.value("red_duration", 12.0f);
 
         m_nodes[id] = node;
     }
@@ -226,7 +233,7 @@ void RoadDataManager::BuildRoadData(const string &filePath)
             continue;
 
         for (const nlohmann::json &roadIdJson : nodeJson.value("roads", nlohmann::json::array()))
-            m_roadSignals[roadIdJson.get<int>()] = nodeIt->second;
+            m_roadSignals[roadIdJson.get<int>()].push_back(nodeIt->second);
     }
 
     // obstacles(임시): 실제 인식 파이프라인이 들어오기 전까지, 손으로 채운 사각형 장애물 목록.
@@ -377,10 +384,25 @@ shared_ptr<Road> RoadDataManager::GetRoad(int roadId) const
     return it != m_roadById.end() ? it->second : nullptr;
 }
 
-shared_ptr<RoadNode> RoadDataManager::GetSignalNodeForRoad(int roadId) const
+shared_ptr<RoadNode> RoadDataManager::GetSignalNodeForRoad(int roadId, int nextRoadId) const
 {
     auto it = m_roadSignals.find(roadId);
-    return it != m_roadSignals.end() ? it->second : nullptr;
+    if (it == m_roadSignals.end())
+        return nullptr;
+
+    shared_ptr<RoadNode> fallback = nullptr; // gatedMovements가 비어(=전체 적용) 더 구체적인 매칭이 없을 때 씀
+    for (const shared_ptr<RoadNode> &node : it->second)
+    {
+        if (node->gatedMovements.empty())
+        {
+            fallback = node;
+            continue;
+        }
+        if (nextRoadId >= 0 &&
+            find(node->gatedMovements.begin(), node->gatedMovements.end(), nextRoadId) != node->gatedMovements.end())
+            return node; // 이 이동을 명시적으로 gating하는 노드가 우선
+    }
+    return fallback;
 }
 
 RoadPose RoadDataManager::GetClosestRoad(const Vec3 &position) const

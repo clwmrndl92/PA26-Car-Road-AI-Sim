@@ -493,8 +493,9 @@ bool Car::CheckPath()
     float roadEndDistance = (roadEnd() - projectedPosition).Length();
     while (roadEndDistance < LANE_TRANSITION_THRESHOLD)
     {
-        // 신호로 서야 하면 road를 안 넘긴다
-        if (ShouldStopForSignal(m_currentRoad, m_travelDir))
+        // 신호로 서야 하면 road를 안 넘긴다. nextRoadId(다음 road=이동)를 알면 그 이동만 특정해서 gating.
+        int nextRoadId = (m_pathIndex + 1 < m_path.size()) ? m_path[m_pathIndex + 1].road->GetId() : -1;
+        if (ShouldStopForSignal(m_currentRoad, m_travelDir, nextRoadId))
             break;
 
         if (m_pathIndex + 1 >= m_path.size())
@@ -654,10 +655,13 @@ std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistan
             float segmentDistance = splineLength > 0.0f ? (1.0f - startT) * splineLength : 0.0f;
             float walkDistance = std::min(segmentDistance, remainingDistance);
 
+            RoadRef nextRoad = (pathIndex + 1 < m_path.size()) ? m_path[pathIndex + 1] : RoadRef{};
+            int nextRoadId = nextRoad.road != nullptr ? nextRoad.road->GetId() : -1;
+
             // nodeT < startT면 이미 지나온 신호라 건너뛴다 (안 그러면 통과 직후 급제동).
-            if (shared_ptr<RoadNode> signalNode = RoadDataManager::Get().GetSignalNodeForRoad(segment.road->GetId()))
+            if (shared_ptr<RoadNode> signalNode = RoadDataManager::Get().GetSignalNodeForRoad(segment.road->GetId(), nextRoadId))
             {
-                if (splineLength > 0.0f && ShouldStopForSignal(segment.road, segment.direction))
+                if (splineLength > 0.0f && ShouldStopForSignal(segment.road, segment.direction, nextRoadId))
                 {
                     float nodeT = spline->GetSplinePosition(signalNode->position);
                     if (nodeT >= startT)
@@ -675,7 +679,6 @@ std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistan
             if (remainingDistance <= 0.0f)
                 break;
 
-            RoadRef nextRoad = (pathIndex + 1 < m_path.size()) ? m_path[pathIndex + 1] : RoadRef{};
             if (!nextRoad.road)
             {
                 // 경로가 여기서 끝난다는 것은 이 road가 destRoad라는 뜻: 진짜 정지 지점인 road 끝에 0속도를 박는다.
@@ -917,8 +920,9 @@ float Car::ComputeIdmAcceleration(const std::vector<RoadSpeedSample> &samples, c
 // nearby 중 refLine 기준 bandCenter 밴드(±bandHalfWidth)에 속한 차들 + 그 밴드를 막고 있는 장애물
 // (m_sensorObstacles)에서 egoS 앞/뒤 가장 가까운 걸 MOBIL 상태로 뽑는다. position은 참조선 호길이 s.
 // 장애물은 리더 후보로만 쓴다(뒤차 역할은 못 함).
-Car::LaneNeighbors Car::GatherLaneNeighbors(const std::vector<NearbyCar> &nearby, const Spline &refLine,
-                                            float bandCenter, float bandHalfWidth, float egoS, float dirSign) const
+Car::LaneNeighbors Car::GatherLaneNeighbors(const std::vector<NearbyCar> &nearby, const shared_ptr<Road> &road,
+                                            const Spline &refLine, float bandCenter, float bandHalfWidth, float egoS,
+                                            float dirSign) const
 {
     LaneNeighbors out;
     float bestLeaderGap = std::numeric_limits<float>::max();
@@ -928,6 +932,8 @@ Car::LaneNeighbors Car::GatherLaneNeighbors(const std::vector<NearbyCar> &nearby
         if (!m_SimState->IsCarAlive(nb.car))
             continue; // 캐시된 뒤 삭제된 차(0.2초 주기 갱신 사이 delete됨) -- dangling 포인터
         Car *other = nb.car;
+        if (other->m_currentRoad != road)
+            continue; // 아직 이 road에 안 들어온 차 -- 최근접점 스냅으로 여기 있는 것처럼 보여도 후보 아님
         float d = ComputeReferenceOffset(refLine, other->GetPosition());
         if (std::fabs(d - bandCenter) > bandHalfWidth)
             continue; // 이 밴드 차로가 아님
@@ -1011,7 +1017,7 @@ bool Car::IsSafeLaneEntry(const RoadRef &road, float targetOffset, const std::ve
     const Spline &ref = road.road->GetReferenceLine();
     float dirSign = GetTravelSign(road.direction);
     float egoS = TravelS(ref, GetPosition(), dirSign);
-    LaneNeighbors nbr = GatherLaneNeighbors(nearby, ref, target->centerOffset, target->width * 0.5f, egoS, dirSign);
+    LaneNeighbors nbr = GatherLaneNeighbors(nearby, road.road, ref, target->centerOffset, target->width * 0.5f, egoS, dirSign);
     if (!nbr.hasFollower)
         return true; // 뒤에 아무도 없으면 항상 진입 가능
 
@@ -1140,7 +1146,7 @@ float Car::ComputeLateralTarget(const std::vector<NearbyCar> &nearbyCars, const 
     farLeader.position = egoS + 1000.0f;
     farLeader.length = 0.0f;
 
-    LaneNeighbors cur = GatherLaneNeighbors(nearbyCars, refLine, curBand.centerOffset, curBand.width * 0.5f, egoS, dirSign);
+    LaneNeighbors cur = GatherLaneNeighbors(nearbyCars, m_currentRoad, refLine, curBand.centerOffset, curBand.width * 0.5f, egoS, dirSign);
     const Mobil::VehicleState *curLeader = cur.hasLeader ? &cur.leader : &farLeader;
     const Mobil::VehicleState *oldFollower = cur.hasFollower ? &cur.follower : nullptr;
 
@@ -1169,7 +1175,7 @@ float Car::ComputeLateralTarget(const std::vector<NearbyCar> &nearbyCars, const 
             continue;
 
         const LaneBand &adjBand = *bands[adjIdx];
-        LaneNeighbors nbr = GatherLaneNeighbors(nearbyCars, refLine, adjBand.centerOffset, adjBand.width * 0.5f, egoS, dirSign);
+        LaneNeighbors nbr = GatherLaneNeighbors(nearbyCars, m_currentRoad, refLine, adjBand.centerOffset, adjBand.width * 0.5f, egoS, dirSign);
         const Mobil::VehicleState &newLeader = nbr.hasLeader ? nbr.leader : farLeader;
         const Mobil::VehicleState *newFollower = nbr.hasFollower ? &nbr.follower : nullptr;
         if (Mobil::EvaluateLaneChange(ego, oldFollower, egoLeader, newLeader, newFollower, mobil, idm))
@@ -1663,7 +1669,7 @@ bool Car::IsLaneEntryClear(float targetOffset) const
     const Spline &ref = m_currentRoad->GetReferenceLine();
     float dirSign = TravelSign();
     float egoS = TravelS(ref, GetPosition(), dirSign);
-    LaneNeighbors nbr = GatherLaneNeighbors(m_lastNearbyCars, ref, target->centerOffset, target->width * 0.5f, egoS, dirSign);
+    LaneNeighbors nbr = GatherLaneNeighbors(m_lastNearbyCars, m_currentRoad, ref, target->centerOffset, target->width * 0.5f, egoS, dirSign);
 
     if (nbr.hasLeader)
     {

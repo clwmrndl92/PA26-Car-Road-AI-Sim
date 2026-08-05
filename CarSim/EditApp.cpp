@@ -771,6 +771,14 @@ void EditApp::SaveToJson()
             jn["roads"] = n.roads;
         if (n.phaseOffset != 0.0f)
             jn["phase_offset"] = n.phaseOffset;
+        if (!n.movements.empty())
+            jn["movements"] = n.movements;
+        if (n.greenDuration != 8.0f)
+            jn["green_duration"] = n.greenDuration;
+        if (n.yellowDuration != 3.0f)
+            jn["yellow_duration"] = n.yellowDuration;
+        if (n.redDuration != 12.0f)
+            jn["red_duration"] = n.redDuration;
         root["nodes"].push_back(jn);
     }
 
@@ -1082,6 +1090,11 @@ void EditApp::LoadFromJson(const std::filesystem::path &path)
         for (const auto &roadIdJson : jn.value("roads", nlohmann::json::array()))
             n.roads.push_back(roadIdJson.get<int>());
         n.phaseOffset = jn.value("phase_offset", 0.0f);
+        for (const auto &movementIdJson : jn.value("movements", nlohmann::json::array()))
+            n.movements.push_back(movementIdJson.get<int>());
+        n.greenDuration = jn.value("green_duration", 8.0f);
+        n.yellowDuration = jn.value("yellow_duration", 3.0f);
+        n.redDuration = jn.value("red_duration", 12.0f);
         m_Nodes.push_back(n);
     }
 
@@ -1959,8 +1972,49 @@ void EditApp::DrawNodeEditWindow()
             node.roads.push_back(0);
 
         ImGui::Separator();
+        ImGui::Text("Movements (traffic_light only; empty = blocks every movement out of Governed Roads)");
+        {
+            // Governed Roads(접근도로)를 incomingRoad로 갖는 junction connection들의 connectingRoad가 후보.
+            std::vector<int> candidates;
+            for (int approachId : node.roads)
+            {
+                for (const EditJunction &junction : m_Junctions)
+                {
+                    for (const EditConnection &conn : junction.connections)
+                    {
+                        if (conn.incomingRoad == approachId &&
+                            std::find(candidates.begin(), candidates.end(), conn.connectingRoad) == candidates.end())
+                            candidates.push_back(conn.connectingRoad);
+                    }
+                }
+            }
+
+            if (candidates.empty())
+                ImGui::TextDisabled("(Governed Roads를 incoming_road로 갖는 junction connection이 없음)");
+
+            for (int connectingId : candidates)
+            {
+                bool checked = std::find(node.movements.begin(), node.movements.end(), connectingId) != node.movements.end();
+                std::string label = "-> road " + std::to_string(connectingId);
+                ImGui::PushID(connectingId);
+                if (ImGui::Checkbox(label.c_str(), &checked))
+                {
+                    if (checked)
+                        node.movements.push_back(connectingId);
+                    else
+                        node.movements.erase(std::remove(node.movements.begin(), node.movements.end(), connectingId),
+                                             node.movements.end());
+                }
+                ImGui::PopID();
+            }
+        }
+
+        ImGui::Separator();
         ImGui::DragFloat("Phase Offset (traffic_light only)", &node.phaseOffset, 0.5f, 0.0f, 0.0f, "%.1f");
         ImGui::TextDisabled("(seconds; same value on multiple signals = in sync)");
+        ImGui::DragFloat("Green (s)", &node.greenDuration, 0.5f, 0.1f, 300.0f, "%.1f");
+        ImGui::DragFloat("Yellow (s)", &node.yellowDuration, 0.5f, 0.0f, 300.0f, "%.1f");
+        ImGui::DragFloat("Red (s)", &node.redDuration, 0.5f, 0.1f, 300.0f, "%.1f");
     }
     ImGui::End();
 

@@ -1,9 +1,10 @@
 #include "SimulationState.h"
 #include "RoadDataManager.h"
 
-TrafficSignal::Color SimulationState::GetSignalColor(float phaseOffset) const
+TrafficSignal::Color SimulationState::GetSignalColor(float phaseOffset, float greenDuration, float yellowDuration,
+                                                     float redDuration) const
 {
-    return TrafficSignal::GetColor(SIGNAL_GREEN_DURATION, SIGNAL_YELLOW_DURATION, SIGNAL_RED_DURATION, phaseOffset, m_simTime);
+    return TrafficSignal::GetColor(greenDuration, yellowDuration, redDuration, phaseOffset, m_simTime);
 }
 
 std::shared_ptr<RoadNode> SimulationState::TryReserveParkSpot(int parkNodeId, const std::unordered_set<int> &excludeIds)

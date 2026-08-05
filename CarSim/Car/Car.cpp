@@ -272,11 +272,11 @@ void Car::SetCurrentRoad(const shared_ptr<Road> &road, float offset, LaneDirecti
     RebuildSplineRender();
 }
 
-bool Car::ShouldStopForSignal(const shared_ptr<Road> &road, LaneDirection direction) const
+bool Car::ShouldStopForSignal(const shared_ptr<Road> &road, LaneDirection direction, int nextRoadId) const
 {
     if (!road)
         return false;
-    shared_ptr<RoadNode> signalNode = RoadDataManager::Get().GetSignalNodeForRoad(road->GetId());
+    shared_ptr<RoadNode> signalNode = RoadDataManager::Get().GetSignalNodeForRoad(road->GetId(), nextRoadId);
     if (!signalNode)
         return false;
 
@@ -292,7 +292,8 @@ bool Car::ShouldStopForSignal(const shared_ptr<Road> &road, LaneDirection direct
         return false;
     }
 
-    TrafficSignal::Color color = m_SimState->GetSignalColor(signalNode->signalPhaseOffset);
+    TrafficSignal::Color color = m_SimState->GetSignalColor(signalNode->signalPhaseOffset, signalNode->signalGreenDuration,
+                                                            signalNode->signalYellowDuration, signalNode->signalRedDuration);
     float gap = (signalNode->position - GetPosition()).Length();
     float emergStopDistance = (m_speed * m_speed) / (2.0f * m_maxBrake);
     if (color == TrafficSignal::Color::Green)
@@ -501,7 +502,8 @@ bool Car::KnowsRedSignalAhead() const
     for (size_t i = m_pathIndex; i < m_path.size(); ++i)
     {
         const RoadRef &road = m_path[i];
-        shared_ptr<RoadNode> signalNode = RoadDataManager::Get().GetSignalNodeForRoad(road.road->GetId());
+        int nextRoadId = (i + 1 < m_path.size()) ? m_path[i + 1].road->GetId() : -1;
+        shared_ptr<RoadNode> signalNode = RoadDataManager::Get().GetSignalNodeForRoad(road.road->GetId(), nextRoadId);
         if (signalNode == nullptr)
             continue;
 
@@ -517,7 +519,9 @@ bool Car::KnowsRedSignalAhead() const
         // 경로상 가장 가까운(앞선) 신호가 판정 기준 -- 그 너머 신호는 이 신호를 지나야 만난다.
         if ((signalNode->position - GetPosition()).Length() > HORN_SIGNAL_AWARE_DISTANCE)
             return false; // 가장 가까운 신호가 너무 멀다 -- 신호 때문에 선 게 아님
-        return m_SimState->GetSignalColor(signalNode->signalPhaseOffset) == TrafficSignal::Color::Red;
+        return m_SimState->GetSignalColor(signalNode->signalPhaseOffset, signalNode->signalGreenDuration,
+                                          signalNode->signalYellowDuration, signalNode->signalRedDuration) ==
+               TrafficSignal::Color::Red;
     }
     return false;
 }

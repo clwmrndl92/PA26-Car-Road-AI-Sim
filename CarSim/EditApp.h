@@ -161,6 +161,13 @@ private:
         // traffic_light 노드 전용: TrafficSignal::GetColor의 phaseOffset. 신호마다 다르게 둬서
         // 교차로 안 서로 다른 방향끼리 엇갈리게(또는 여러 교차로를 동기화) 할 때 쓴다.
         float phaseOffset = 0.0f;
+        // traffic_light 노드 전용: 이 phase가 실제로 막는 connecting road(이동, 예: 직진/좌회전) id들.
+        // 비어있으면 roads의 모든 이동에 적용(하위호환). 목록에 없는 이동(예: 우회전)은 이 신호로 안 막힌다.
+        std::vector<int> movements;
+        // traffic_light 노드 전용: 신호 주기(초). RoadNode 기본값(8/3/12)과 동일.
+        float greenDuration = 8.0f;
+        float yellowDuration = 3.0f;
+        float redDuration = 12.0f;
     };
 
     // Freehand road-marking line (lane paint, median, shoulder), independent of EditLane's

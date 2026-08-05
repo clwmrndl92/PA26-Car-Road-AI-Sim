@@ -44,7 +44,7 @@ bool CarSim::Init()
     if (!GameApp::Init())
         return false;
 
-    m_RoadDataManager.Init(NAV_DATA_DIR "/data2.json");
+    m_RoadDataManager.Init(NAV_DATA_DIR "/data3.json");
     m_MarkingDataManager.Init(NAV_DATA_DIR "/marking2.json");
 
     if (!InitResource())
@@ -77,7 +77,8 @@ void CarSim::UpdateSignalMarkers()
     for (const SignalMarker &marker : m_SignalMarkers)
     {
         XMFLOAT4 color;
-        switch (m_SimState.GetSignalColor(marker.phaseOffset))
+        switch (m_SimState.GetSignalColor(marker.node->signalPhaseOffset, marker.node->signalGreenDuration,
+                                          marker.node->signalYellowDuration, marker.node->signalRedDuration))
         {
         case TrafficSignal::Color::Red:
             color = XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f);
@@ -583,7 +584,7 @@ void CarSim::InitRoadRenderer()
             pos.y += SIGNAL_MARKER_LIFT;
             signalRender.GetTransform().SetPosition(pos);
 
-            m_SignalMarkers.push_back({pMarker, node->signalPhaseOffset});
+            m_SignalMarkers.push_back({pMarker, node});
         }
     }
 
