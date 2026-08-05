@@ -484,6 +484,9 @@ void Car::SetDestination(const shared_ptr<RoadNode> &destNode)
 
 void Car::UpdateHorn(float dt)
 {
+    constexpr float HORN_INTERVAL = 5.0f;       // 막혀 있는 동안 경적 주기(초)
+    constexpr float HORN_FLASH_DURATION = 2.0f; // 경적 표시로 빨갛게 두는 시간(초)
+
     if (IsHornSituation())
     {
         m_hornStoppedDuration += dt;
@@ -513,6 +516,9 @@ bool Car::IsHornSituation() const
 
 bool Car::KnowsRedSignalAhead() const
 {
+    // 이 거리 안의 빨간 신호는 "알고 서 있다"고 보고 경적을 참는다(대기줄 커버, m)
+    constexpr float HORN_SIGNAL_AWARE_DISTANCE = 40.0f;
+
     for (size_t i = m_pathIndex; i < m_path.size(); ++i)
     {
         const RoadRef &road = m_path[i];
@@ -573,11 +579,11 @@ void Car::UpdateDebugWindow()
         ImGui::Text("Ray side: %s%s | rear %.1f m", m_sensor.leftBlocked ? "L" : "-",
                     m_sensor.rightBlocked ? "R" : "-", m_sensor.rearDistance);
         ImGui::Text("Body sweep: %.1f m", m_sensor.bodyContactDistance);
-        if (m_avoid.backingUp)
+        if (m_stuck.backingUp)
             ImGui::Text("Avoid: backing up");
         else if (m_subMode == SubMode::D_Avoid)
-            ImGui::Text("Avoid: shifted d %.2f -> %.2f", m_avoid.laneOffset, m_avoid.avoidOffset);
-        else if (m_avoid.stuck)
+            ImGui::Text("Avoid: shifted d %.2f -> %.2f", m_maneuver.laneOffset, m_maneuver.avoidOffset);
+        else if (m_stuck.stuck)
             ImGui::Text("Avoid: stuck (no gap)");
 
         ImGui::Separator();
@@ -598,13 +604,16 @@ void Car::UpdateTrail()
     if (!m_drawCollider) // only track/rebuild the trail for cars actually shown in debug view
         return;
 
+    constexpr float TRAIL_SAMPLE_DISTANCE = 0.5f;
+    constexpr size_t TRAIL_MAX_POINTS = 100;
+
     using namespace DirectX;
 
     XMFLOAT3 rearPos = m_transform.GetPosition();
     XMFLOAT3 fwd = m_transform.GetForwardAxis();
     XMFLOAT3 frontPos(rearPos.x + fwd.x * m_wheelbase, rearPos.y + fwd.y * m_wheelbase, rearPos.z + fwd.z * m_wheelbase);
 
-    auto recordPoint = [](std::deque<XMFLOAT3> &trail, const XMFLOAT3 &pos)
+    auto recordPoint = [TRAIL_SAMPLE_DISTANCE, TRAIL_MAX_POINTS](std::deque<XMFLOAT3> &trail, const XMFLOAT3 &pos)
     {
         if (!trail.empty())
         {

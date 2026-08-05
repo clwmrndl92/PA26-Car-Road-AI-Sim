@@ -896,7 +896,7 @@
     {
       "id": 400,
       "name": "road",
-      "speed_limit": 40,
+      "speed_limit": 100,
       "reference_line": [
         [-152.0, 10.0, -76.0],
         [-150.0, 10.0, -75.0],
@@ -908,8 +908,8 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
+            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 100, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
+            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 100, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
           ]
         }
       ],
