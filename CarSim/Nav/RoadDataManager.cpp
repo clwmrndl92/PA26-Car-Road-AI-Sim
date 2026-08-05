@@ -571,8 +571,11 @@ Vec3 RoadDataManager::GetTravelEnd(const shared_ptr<Road> &road, LaneDirection d
     return direction == LaneDirection::Backward ? points.front() : points.back();
 }
 
-float RoadDataManager::ResolveConnectingOffset(const RoadRef &from, const RoadRef &to, float fromOffset) const
+float RoadDataManager::ResolveConnectingOffset(const RoadRef &from, const RoadRef &to, float fromOffset, bool *outMapped) const
 {
+    if (outMapped != nullptr)
+        *outMapped = false;
+
     if (from.road == nullptr || to.road == nullptr)
         return fromOffset;
 
@@ -610,9 +613,43 @@ float RoadDataManager::ResolveConnectingOffset(const RoadRef &from, const RoadRe
         const LaneBand &toBand = toSection->bands[link.to];
         if (toBand.direction != to.direction)
             continue; // 마주 오는 차로로 인계하는 링크는 무시
+        if (outMapped != nullptr)
+            *outMapped = true;
         return toBand.centerOffset;
     }
     return fromOffset;
+}
+
+vector<const LaneBand *> RoadDataManager::GetEntryBands(const RoadRef &from, const RoadRef &to) const
+{
+    vector<const LaneBand *> bands;
+    if (from.road == nullptr || to.road == nullptr)
+        return bands;
+
+    const Junction *junction = GetJunction(to.road->GetJunctionId());
+    if (junction == nullptr)
+        return bands; // to가 junction 연결도로가 아님 = 차로 제약이 없는 직결 전이
+
+    const LaneSection *fromSection = GetLateralProfile(from.road, 0.0f);
+    if (fromSection == nullptr)
+        return bands;
+
+    for (const Connection &c : junction->connections)
+    {
+        if (c.incomingRoad != from.road->GetId() || c.connectingRoad != to.road->GetId())
+            continue;
+        // lane_links의 from은 bands 배열의 원본 인덱스다(GetDrivingBands의 필터+정렬 목록이 아니라).
+        for (const LaneLink &link : c.laneLinks)
+        {
+            if (link.from < 0 || link.from >= (int)fromSection->bands.size())
+                continue;
+            const LaneBand &band = fromSection->bands[link.from];
+            if (band.direction != from.direction || band.type != LaneType::Driving)
+                continue; // 마주 오는 차로에서 들어오는 링크는 내 진입 차로가 아니다
+            bands.push_back(&band);
+        }
+    }
+    return bands;
 }
 
 vector<RoadRef> RoadDataManager::FindPath(const RoadRef &start, const shared_ptr<Road> &destRoad) const

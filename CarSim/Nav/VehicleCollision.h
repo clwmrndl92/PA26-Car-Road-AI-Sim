@@ -24,6 +24,8 @@ namespace VehicleCollision
         float speed = 0.0f; // headingRad 방향 기준 스칼라 속도. 정적 장애물은 0(기본값)로 둔다.
         ObstacleType type = ObstacleType::Static;
         bool isVehicle = false; // Car를 변환해 넣은 항목인가 -- 다른 경로(nearby car 목록)로 이미 처리되는 걸 걸러내는 용도.
+        // 이 대상이 나에게 양보할 차인가. ego별로 만드는 센서 목록(BuildSensorObstacles)에서만 의미 있다.
+        bool yieldsToEgo = false;
     };
 
     struct VehicleShape

@@ -170,8 +170,12 @@ public:
                              LaneDirection direction = LaneDirection::Forward) const;
     // from->to 전환 시 오프셋 인계. to가 from을 incomingRoad로 둔 junction connecting road고 laneLinks가 있으면
     // fromOffset이 속한 진입 밴드에 매핑된 연결 밴드의 centerOffset을 돌려준다(다른 오프셋 연결 허용).
-    // 매핑이 없으면 fromOffset 그대로.
-    float ResolveConnectingOffset(const RoadRef &from, const RoadRef &to, float fromOffset) const;
+    // 매핑이 없으면 fromOffset 그대로 -- 두 road의 참조선이 이 지점에서 기하학적으로 안 맞을 수 있으니
+    // outMapped=false로 알려서 호출측이 실제 위치 투영 등 다른 수단으로 보정하게 한다.
+    float ResolveConnectingOffset(const RoadRef &from, const RoadRef &to, float fromOffset, bool *outMapped = nullptr) const;
+    // from에서 to로 넘어갈 수 있는 from.road 쪽 진입 밴드들(진행방향 driving만). 좌/우회전 전용 차로 판정용.
+    // 빈 벡터 = '갈 수 없음'이 아니라 '차로 제약이 없는 전이'(junction 밖 직결 등) -- 호출측이 구분해야 한다.
+    vector<const LaneBand *> GetEntryBands(const RoadRef &from, const RoadRef &to) const;
 
 public:
     const vector<shared_ptr<Road>> &GetRoads() const { return m_roads; }

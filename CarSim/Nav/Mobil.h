@@ -33,8 +33,10 @@ namespace Mobil
     // ego가 옆 차선으로 변경해도 되는지 판정한다.
     // egoLeader/newLeader는 항상 존재해야 한다 (실제 앞차가 없으면 호출부가 아주 먼 가상 리더를 넘긴다).
     // oldFollower/newFollower는 없으면 nullptr로 넘긴다 (뒤에 차가 없는 경우).
+    // bias: 유인 기준에 더할 가중치(m/s^2). 원논문의 Delta a_bias -- 경로상 이 차선으로 가야 하면 +,
+    // 벗어나는 방향이면 -를 넘겨 "이득은 없지만 가야 하는" 차선변경을 만든다. 안전 기준은 못 뚫는다.
     bool EvaluateLaneChange(const VehicleState &ego, const VehicleState *oldFollower,
                             const VehicleState &egoLeader, const VehicleState &newLeader,
                             const VehicleState *newFollower, const Params &p,
-                            const IDM::Params &cfParams);
+                            const IDM::Params &cfParams, float bias = 0.0f);
 }

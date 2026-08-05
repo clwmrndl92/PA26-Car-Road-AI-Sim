@@ -50,6 +50,9 @@ public:
     float GetAcceleration() const { return m_acceleration; }
     float GetLength() const { return m_halfExtents.GetZ() * 2.0f; }
     float GetHalfWidth() const { return m_halfExtents.GetX(); }
+    // 앞축(GetPosition)에서 앞/뒤 범퍼까지의 거리. 차종마다 콜라이더 오프셋이 달라 상수로 못 둔다.
+    float FrontOverhang() const { return m_colliderOffset.z + m_halfExtents.GetZ() - m_wheelbase; }
+    float RearOverhang() const { return m_wheelbase - m_colliderOffset.z + m_halfExtents.GetZ(); }
 
     // 조작 및 제어 인터페이스 (Control Interface)
     void AccelerateVel(float desiredVelocity);
@@ -191,6 +194,11 @@ private:
 
     void UpdateDrive();
     bool CheckPath();
+    // 지금 있는 차로가 next로 진입 가능한 차로인가. 차로 제약이 없는 전이면 항상 true.
+    bool CanEnterFromCurrentBand(const RoadRef &next) const;
+    // 진입 차로를 못 맞춰 계획된 다음 road로 못 가는 경우, 지금 차로에서 갈 수 있는 road로 경로를 다시 짠다.
+    // 갈 수 있는 곳이 아예 없으면 false(호출측이 도로 끝에서 정지).
+    bool RepathFromCurrentBand();
 
     // 경적: 장애물/차에 막혀 정지해 있으면 5초마다 한 번 울린다(2초간 차체를 빨갛게).
     void UpdateHorn(float dt);
@@ -208,6 +216,8 @@ private:
         Car *leader = nullptr;            // 이 샘플이 앞차(리더)면 그 차, 정적 제약(신호/커브/정지선 등)이면 nullptr
         float leaderLateralOffset = 0.0f; // road 참조선 기준 리더의 d(횡오프셋). leader!=nullptr일 때만 유효 -- 후보가 이 리더를 옆으로 피할 수 있는지 판단용
         const char *kind = "";             // 디버그용 정적 제약 종류 표시("signal"/"destEnd"/"mergeWait"/"roadLimit"/"curRoadEnd"/"sensorFront"/"bodySweep"). leader!=nullptr면 안 씀.
+        // 스캔 시점 리더 위치. 매프레임 gap을 '리더도 그동안 전진한 만큼' 되돌리는 기준(ComputeIdmAcceleration).
+        Vec3 leaderScanPosition = Vec3::sZero();
     };
 
     // 이번 프레임 IDM 목표가속도를 결정한 근거(디버그 UI 표시용). DriveControl이 매프레임 채운다.
@@ -264,6 +274,17 @@ private:
                                       float dirSign) const;
     // 현재 오프셋에서 가장 가까운 driving 밴드 중심(MOBIL 판정 없이 밴드 조회만).
     float CurrentLaneCenter() const;
+
+    // 경로상 다음 road로 가려면 어느 차로에 있어야 하는가. MOBIL 유인 기준에 가중치로 얹어 쓴다
+    // (경로 자체를 바꾸는 게 아니라 차선변경 판단 근거 하나로 들어간다).
+    struct RouteLaneGoal
+    {
+        bool active = false;       // 다음 road가 진입 차로를 제약하는가(아니면 아래 값들은 무의미)
+        float targetOffset = 0.0f; // 진입 가능한 밴드 중 지금 오프셋에서 가장 가까운 것의 중심 d
+        float urgency = 0.0f;      // 0~1. 남은 시간 대비 필요한 차선변경 시간. 교차로가 가까울수록 1에 붙는다
+        float bias = 0.0f;         // urgency를 MOBIL 유인 기준 단위(m/s^2)로 환산한 값
+    };
+    RouteLaneGoal ComputeRouteLaneGoal() const;
     // 현재 밴드 유지 vs MOBIL 판정 인접 밴드로 변경 -> 목표 횡오프셋 d.
     // outLaneCenter가 nullptr이 아니면 "지금 속한 차로의 중심 d"를 따로 써준다 -- 반환값과 다르면 MOBIL이
     // 차선변경을 하기로 했다는 뜻이라, 회피 판단(DecideAvoidance)이 이걸로 "정상 차선변경 가능"을 본다.
@@ -472,6 +493,11 @@ private:
     static constexpr float IDM_TIME_HEADWAY = 1.5f; // IDM T 기본값: 앞차와 원하는 시간 간격(s). m_personality.headwayFactor를 곱해 씀.
     static constexpr float MOBIL_B_SAFE = 3.0f;     // 뒤차에 강제 가능한 최대 안전 감속도(m/s^2)
     static constexpr float MOBIL_A_THR = 0.2f;      // 차선변경 최소 진입 장벽(m/s^2)
+    // 경로상 필요한 차로로 붙기 위해 MOBIL 유인 기준에 얹는 가중치(ComputeRouteLaneGoal).
+    static constexpr float ROUTE_BIAS_MAX = 3.0f;         // urgency=1일 때의 가중치(m/s^2). a_thr보다 훨씬 커야 이득 없이도 옮긴다.
+    static constexpr float ROUTE_LANE_CHANGE_TIME = 4.0f; // 차로 하나 옮기는 데 잡아두는 여유시간(s)
+    static constexpr float ROUTE_MIN_PLAN_SPEED = 2.0f;   // 남은 시간 환산 시 속도 하한(m/s) -- 정지 중에도 urgency가 발산하지 않게
+    static constexpr float ROUTE_BSAFE_RELAX = 1.0f;      // urgency=1일 때 b_safe를 이 비율만큼 더 완화(1.0=최대 2배)
     // 횡오프셋을 목표(밴드 중심)로 당기는 Lerp 비율. 리플랜(0.2초)마다 이만큼 목표 쪽으로 이동. m_personality.laneChangeLerpAlpha에서 옴.
 
     float m_lastBehaviorPlanTime = -1000.0f;        // 처음 Drive 진입 시 바로 첫 판단이 돌도록 충분히 과거로 초기화
@@ -494,6 +520,8 @@ private:
     static constexpr float AVOID_TTC_MARGIN = 1.5f;       // 동적 장애물이 진로를 비우는 시각보다 이만큼 더 늦게 닿아야 그냥 통과(s)
     static constexpr float AVOID_WAIT_TIMEOUT = 5.0f;     // 정지 대기가 이만큼 이어지면 '안 비켜준다'로 보고 정적 취급(회피 시도)
     static constexpr float AVOID_TRIGGER_DELAY = 0.6f;    // 전방이 이만큼 계속 막혀 있어야 회피 시작(s) -- 순간 오검출로 안 흔들리게
+    // 앞차가 내 진로를 막고 멈춘 채 이만큼 지나면 '정체 줄'이 아니라 '갇힌 차'로 보고 오프셋 회피를 연다(s).
+    static constexpr float AVOID_VEHICLE_BLOCK_DELAY = 2.0f;
     static constexpr float AVOID_CLEAR_DELAY = 0.5f;      // 레이가 이만큼 계속 깨끗해야 원래 차로로 복귀(s)
     static constexpr float AVOID_REPLAN_INTERVAL = 0.5f;  // 회피 중 오프셋 재탐색 최소 간격(s) -- 좌/우 진동 방지
     static constexpr float AVOID_RETURN_TOLERANCE = 0.3f; // 복귀 목표 오프셋에 이만큼 가까워지면 회피 종료(m)

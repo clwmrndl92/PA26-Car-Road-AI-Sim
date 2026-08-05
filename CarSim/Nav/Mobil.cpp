@@ -32,7 +32,7 @@ namespace Mobil
     bool EvaluateLaneChange(const VehicleState &ego, const VehicleState *oldFollower,
                             const VehicleState &egoLeader, const VehicleState &newLeader,
                             const VehicleState *newFollower, const Params &p,
-                            const IDM::Params &cfParams)
+                            const IDM::Params &cfParams, float bias)
     {
         // =============================================================
         // STEP 1: 현재 차로에서의 가속도 (Before Lane Change)
@@ -95,6 +95,6 @@ namespace Mobil
             neighborGain += (tilde_a_o - a_o); // 기존 차선 뒤차의 가속 이득 (일반적으로 양수)
         }
 
-        return myGain + p.politeness * neighborGain > p.a_thr;
+        return myGain + p.politeness * neighborGain + bias > p.a_thr;
     }
 }
