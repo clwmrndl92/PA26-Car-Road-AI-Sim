@@ -40,7 +40,6 @@ enum class CarType
     Car1,
     Jeep,
     LittleTruck,
-    Truck,
     Van,
     Count,
 };

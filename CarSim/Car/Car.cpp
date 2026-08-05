@@ -271,6 +271,13 @@ void Car::SetCurrentRoad(const shared_ptr<Road> &road, float offset, LaneDirecti
 {
     if (m_currentRoad == road && m_currentOffset == offset && m_travelDir == direction)
         return;
+
+    // Keep the reservation while entering its connecting road; release it when leaving that junction.
+    // CheckPath has already acquired the same junction id before the entry transition.
+    int nextJunctionId = road != nullptr ? road->GetJunctionId() : -1;
+    if (m_reservedJunctionId >= 0 && m_reservedJunctionId != nextJunctionId)
+        ReleaseJunctionReservation();
+
     m_currentRoad = road;
     m_currentOffset = offset;
     m_travelDir = direction;

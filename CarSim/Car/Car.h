@@ -263,6 +263,11 @@ private:
     // nextRoad 진입(합류)이 지금 뒤차에게 안전한지 판정(IsSafeLaneEntry + m_lastNearbyCars).
     // CheckPath(Drive)와 ScanRoadSpeedConstraints(BehaviorPlan)이 공유.
     bool ShouldHoldForMerge(const RoadRef &nextRoad) const;
+    // The behavior scan only checks availability; CheckPath reserves when it commits the road transition.
+    // Reservations are released as soon as the car exits the connecting road.
+    bool ShouldHoldForJunction(const RoadRef &nextRoad) const;
+    bool TryReserveJunction(const RoadRef &nextRoad);
+    void ReleaseJunctionReservation();
     std::vector<NearbyCar> CollectNearbyCars() const;
     bool IsTurningAhead() const;                  // 교차로 우선순위: 직진 > 회전 판정용
     bool HasPriorityOver(const Car *other) const; // 우선순위 직진 > 회전, 동급이면 이름 비교
@@ -341,6 +346,7 @@ private:
     {
         bool stuck = false;            // 좌우 어느 쪽으로도 못 피함 -- 정지(경적은 UpdateHorn이 알아서)
         bool backingUp = false;        // ReverseSegment 실행 중
+        float backupTraveled = 0.0f;   // 이번 스턱 사이클 동안 후진한 누적 거리(AVOID_MAX_BACKUP_DISTANCE 판단용)
         float laneOffset = 0.0f;       // 회피 시작 시점의 원래 차로 중심 d -- 재계획 기준점(방향/크기 계산용)
         float avoidOffset = 0.0f;      // 회피 목표 d
         float blockedTimer = 0.0f;     // 전방이 막힌 채로 지난 시간 (진입 트리거용)
@@ -396,6 +402,7 @@ private:
     // 레이캐스트 대상(장애물+차) 목록을 만들 때 쓰는 전반부.
     std::vector<VehicleCollision::Obstacle> CollectMapObstaclesInSensorRange() const;
     SensorScan ScanSensors(const std::vector<VehicleCollision::Obstacle> &obstacles) const;
+    bool IsParallelClearSensorVehicle() const;
     // 좌/우 후보 오프셋(차로 반폭 -> 한 폭 -> 두 폭)을 가까운 쪽부터 궤적 시뮬레이션해 첫 무충돌 오프셋을 고른다.
     bool FindAvoidOffset(const SensorScan &scan, const std::vector<VehicleCollision::Obstacle> &obstacles,
                          float laneCenter, float &outOffset) const;
@@ -474,6 +481,7 @@ private:
 
     vector<RoadRef> m_path;
     size_t m_pathIndex = 0;
+    int m_reservedJunctionId = -1; // conflict zone held while traversing a junction connecting road
     float m_currentTime = 0.0f;
     // 노란불 때 "정지거리 안쪽이라 통과" 확정한 신호 id(초록될 때까지 유지). 없으면 -1.
     mutable int m_committedYellowNodeId = -1;
@@ -508,6 +516,7 @@ private:
     float m_planAccelDebug = 0.0f;                  // DriveControl이 매프레임 계산한 IDM 목표가속도(디버그 UI 표시용 캐시)
     SpeedLimitDebug m_limitDebug;                   // 위 목표가속도를 결정한 근거(디버그 UI 표시용 캐시)
     float m_prevSpeedForStallLog = 0.0f;            // 정지 감지 로그(DriveControl)용 -- 직전 프레임 속도
+    float m_priorityStuckElapsed = 0.0f;            // 도로 코리도 IDM이 정지한 차를 리더로 잡은 채 버틴 시간(DriveControl이 매프레임 갱신, PRIORITY_STUCK_TIMEOUT)
     std::vector<NearbyCar> m_lastNearbyCars;        // UpdateBehaviorPlan이 마지막으로 수집한 주변 차 목록 -- ShouldHoldForMerge가 매 프레임 재사용(재수집 비용 회피)
     std::vector<RoadSpeedSample> m_lastRoadSamples; // UpdateBehaviorPlan이 마지막으로 스캔한 리더/제약 목록 -- DriveControl이 매프레임 IDM 가속도 재계산에 재사용
     IDM::Params m_lastIdmParams;                    // 위 스캔 시점의 IDM 파라미터(v0 등) 캐시
@@ -525,10 +534,14 @@ private:
     static constexpr float AVOID_WAIT_TIMEOUT = 5.0f;     // 정지 대기가 이만큼 이어지면 '안 비켜준다'로 보고 정적 취급(회피 시도)
     static constexpr float AVOID_TRIGGER_DELAY = 0.6f;    // 전방이 이만큼 계속 막혀 있어야 회피 시작(s) -- 순간 오검출로 안 흔들리게
     // 앞차가 내 진로를 막고 멈춘 채 이만큼 지나면 '정체 줄'이 아니라 '갇힌 차'로 보고 오프셋 회피를 연다(s).
-    static constexpr float AVOID_VEHICLE_BLOCK_DELAY = 2.0f;
+    // Crossing vehicle deadlocks clear through controlled backup, not the offset-avoid state.
+    static constexpr float INTERSECTION_YIELD_TIMEOUT = 2.0f;
     static constexpr float AVOID_CLEAR_DELAY = 0.5f;      // 레이가 이만큼 계속 깨끗해야 원래 차로로 복귀(s)
     static constexpr float AVOID_REPLAN_INTERVAL = 0.5f;  // 회피 중 오프셋 재탐색 최소 간격(s) -- 좌/우 진동 방지
     static constexpr float AVOID_RETURN_TOLERANCE = 0.3f; // 복귀 목표 오프셋에 이만큼 가까워지면 회피 종료(m)
+    // 서로 상대를 리더로 보고 멈춘 교착(둘 다 정지라 canClaimPriority가 안 풀림)을 끊는 타임아웃(s).
+    // AVOID_WAIT_TIMEOUT과 별개 -- 그건 센서가 잡은 위협 전용이고, 이건 도로 코리도 IDM 정지 전용.
+    static constexpr float PRIORITY_STUCK_TIMEOUT = INTERSECTION_YIELD_TIMEOUT;
     static constexpr float AVOID_MIN_SHIFT = 0.5f;        // 이보다 작은 횡이동은 회피 효과가 없다고 보고 후보에서 뺀다(m)
     // 전방 히트를 '내 진로 위'로 볼 기준: 주행 스플라인까지의 거리가 차체 반폭 + 이 여유 이내(m).
     // 회피를 걸지 말지(frontBlocked) 판단용이라 넉넉하게 -- 결과가 '옆으로 조금 비켜라'라서 싸다.
@@ -561,6 +574,12 @@ private:
     // 후진해도 되는지 볼 때 물러날 거리 뒤로 더 남아 있어야 하는 여유(m). 저속 직선 후진이라 주행 중
     // 표준 간격(MIN_SAFE_GAP)만큼 잡을 필요는 없다 -- 너무 크면 물러날 자리가 있어도 스턱에서 못 벗어난다.
     static constexpr float AVOID_BACKUP_CLEARANCE = 1.0f;
+    // 후진 한 스텝이 끝나도 전방 gap이 이보다 안 벌어졌으면(=다시 다가가면 바로 또 막힐 거리) 이어서
+    // 더 후진한다. 이게 없으면 "조금 물러났다 gap이 잠깐 벌어진 걸로 막힘 판정이 풀려 다시 전진 ->
+    // 바로 또 막혀서 후진"을 매 사이클 반복한다.
+    static constexpr float AVOID_BACKUP_TARGET_GAP = 8.0f;
+    // 후진 누적 거리 상한(m). 안전상 무한정 물러나지 않게 -- 넘으면 그 자리서 멈춰 대기(경적은 UpdateHorn).
+    static constexpr float AVOID_MAX_BACKUP_DISTANCE = 15.0f;
 
     // ApplyMotion(물리 틱)이 실제 충돌을 감지하면 세우고, HandleContactPending(프레임 틱)이 소비하며 지운다.
     // 물리/판단이 서로 다른 틱이라 즉시 처리 대신 이렇게 걸어둔다.

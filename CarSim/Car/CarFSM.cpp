@@ -19,6 +19,8 @@ namespace
     constexpr float SAME_DIRECTION_COS = 0.7071f;
     // 고가도로/지하차도 등 다른 층에 있는 대상 컷오프(m). 주변차 수집과 교차충돌 예측이 공유한다.
     constexpr float VERTICAL_SEPARATION = 3.0f;
+    constexpr float PARALLEL_SENSOR_HEADING_COS = 0.9659f; // within 15 degrees, including anti-parallel
+    constexpr float PARALLEL_SENSOR_LATERAL_CLEARANCE = 0.05f;
 
     // road의 진행방향 밴드 중 횡오프셋 d에 가장 가까운 밴드의 centerOffset. 밴드 없으면 d 그대로.
     float NearestBandOffset(const RoadRef &road, float d)
@@ -579,6 +581,11 @@ bool Car::CheckPath()
         // 다음 road로 합류(끼어들기)해도 뒤차에 안전한지 MOBIL 안전기준으로 판정 -- 안전하지 않으면 road 끝에서 대기.
         if (ShouldHoldForMerge(m_path[m_pathIndex + 1]))
             break;
+        // Reserve the junction only when committing this transition, never during look-ahead scanning.
+        // Vehicles entering from the same road share it and retain normal IDM headway.
+        // Other approaches wait at their own road end.
+        if (!TryReserveJunction(m_path[m_pathIndex + 1]))
+            break;
 
         ++m_pathIndex;
         const RoadRef &next = m_path[m_pathIndex];
@@ -609,9 +616,9 @@ void Car::DriveControl()
 
     // 종방향: 리더/제약 목록은 행동 계획(UpdateBehaviorPlan, 0.2초 주기)이 스캔해두지만, IDM 가속도 자체는
     // 매프레임 다시 계산한다(앞차 속도/가속도/gap을 그때그때 최신값으로) -- ComputeIdmAcceleration 참고.
-    SpeedLimitDebug prevLimitDebug = m_limitDebug; // kind/목표속도가 바뀔 때만 로그를 찍기 위한 이전 프레임 값
+    SpeedLimitDebug prevLimitDebug = m_limitDebug;                        // kind/목표속도가 바뀔 때만 로그를 찍기 위한 이전 프레임 값
     float distanceOffset = (GetPosition() - m_planScanPosition).Length(); // 스캔 이후 이동거리(정적 제약 gap 보정용)
-    float elapsedTime = m_currentTime - m_lastBehaviorPlanTime;          // 스캔 이후 지난 시간(정적 제약의 가상 리더 전진 보정용)
+    float elapsedTime = m_currentTime - m_lastBehaviorPlanTime;           // 스캔 이후 지난 시간(정적 제약의 가상 리더 전진 보정용)
     float accelIDM = ComputeIdmAcceleration(m_lastRoadSamples, m_lastIdmParams, distanceOffset, elapsedTime, &m_limitDebug);
 
     // 회피/정지대기가 건 종방향 상한. IDM을 끄는 대신 '그 속도로 가는 가상 리더'를 하나 더 두는 형태라,
@@ -634,6 +641,14 @@ void Car::DriveControl()
         accelIDM = -m_maxBrake;
         m_limitDebug = SpeedLimitDebug{"steerCap", steerSpeedCap, 0.0f};
     }
+
+    // 상대차가 완전히 멈추면 canClaimPriority(우선권 행사 조건)가 영원히 막혀 서로 교착될 수 있다 -- 그
+    // 상태로 이만큼 버티면 "상대가 움직이고 있어야 한다"는 조건을 풀어준다. yieldsToMe는 시간과 무관하게
+    // 둘 중 한쪽만 true이므로(HasPriorityOver가 만드는 전순서), 둘 다 타임아웃이 걸려도 실제로 진행하는
+    // 건 원래 우선권 있던 쪽 하나뿐이다 -- 양쪽이 동시에 끼어들어 부딪히는 경우는 안 생긴다.
+    bool stuckOnStoppedCar = m_limitDebug.label.rfind("car:", 0) == 0 &&
+                             m_limitDebug.targetSpeed < AVOID_BLOCK_SPEED && m_speed < AVOID_BLOCK_SPEED;
+    m_priorityStuckElapsed = stuckOnStoppedCar ? m_priorityStuckElapsed + m_deltaTime : 0.0f;
 
     // kind 또는 목표속도(0.5km/h 이상)가 바뀐 프레임만 로그 -- 매프레임 찍으면 콘솔이 묻힌다.
     constexpr float LOG_TARGET_SPEED_EPS = 0.5f / 3.6f;
@@ -755,9 +770,12 @@ std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistan
             }
 
             // CheckPath와 같은 기준(MOBIL 안전판정)으로 합류 대기 중이면, 실제로 넘어가지 않을 이 경계에서 멈춘다.
-            if (ShouldHoldForMerge(nextRoad))
+            bool holdForMerge = ShouldHoldForMerge(nextRoad);
+            bool holdForJunction = segment.road == m_currentRoad && ShouldHoldForJunction(nextRoad);
+            if (holdForMerge || holdForJunction)
             {
-                samples.push_back({splineEnd(spline), traveledDistance - MIN_SAFE_GAP, 0.0f, nullptr, 0.0f, "mergeWait"});
+                const char *kind = holdForJunction ? "junctionWait" : "mergeWait";
+                samples.push_back({splineEnd(spline), traveledDistance - MIN_SAFE_GAP, 0.0f, nullptr, 0.0f, kind});
                 break;
             }
 
@@ -848,7 +866,8 @@ void Car::AppendCarConstraintSamples(std::vector<RoadSpeedSample> &samples,
     const Spline *spline = &m_currentSpline;
     RoadRef segment = CurrentRoadRef(); // leaderLateralOffset 계산용 -- spline은 offset 주행경로라 참조선이 따로 필요
     size_t pathIndex = m_pathIndex;
-    float baseDistance = 0.0f; // 내 위치에서 이 세그먼트 시작(startT)까지의 누적 경로거리
+    float offset = m_currentOffset; // 뒤쪽 세그먼트 코리도 스플라인을 세울 차로 오프셋(아래에서 세그먼트마다 갱신)
+    float baseDistance = 0.0f;      // 내 위치에서 이 세그먼트 시작(startT)까지의 누적 경로거리
     float startT = spline->GetSplinePosition(GetPosition());
 
     while (spline != nullptr && baseDistance <= lookDistance)
@@ -860,6 +879,11 @@ void Car::AppendCarConstraintSamples(std::vector<RoadSpeedSample> &samples,
             if (!m_SimState->IsCarAlive(nearbyCar.car))
                 continue; // 캐시된 뒤 삭제된 차(0.2초 주기 갱신 사이 delete됨) -- dangling 포인터
             Car *other = nearbyCar.car;
+
+            // Opposite-direction traffic on this same road uses the other carriageway, not this path's leader lane.
+            if (other->m_currentRoad == segment.road && other->m_travelDir != segment.direction)
+                continue;
+
             float otherT = spline->GetSplinePosition(other->GetPosition());
             Vec3 projected = spline->GetPositionAt(otherT);
             float lateralOffset = (other->GetPosition() - projected).Length();
@@ -884,8 +908,11 @@ void Car::AppendCarConstraintSamples(std::vector<RoadSpeedSample> &samples,
             // 우선권은 상대가 실제로 비켜줄 수 있을 때만 행사한다. 이미 제동거리 안이거나 상대가 멈춰
             // 있으면(교차로에 갇혀 못 비킨다) 리더로 유지해야 한다 -- 여기서 지우면 IDM엔 감속 근거가 없고,
             // 회피 쪽은 ThreatKind::Vehicle이라 "IDM이 처리한다"며 손을 떼서 아무도 안 선다.
+            // 다만 상대가 완전히 멈춘 채 오래가면(둘 다 서로를 리더로 보는 교착) 이 조건 때문에 영영 못
+            // 풀린다 -- 내가 그 상태로 PRIORITY_STUCK_TIMEOUT 이상 버텼으면 정지 조건을 풀어준다.
             float brakingGap = m_speed * m_speed / (2.0f * m_maxBrake) + MIN_SAFE_GAP;
-            bool canClaimPriority = nearbyCar.yieldsToMe && other->GetSpeed() > AVOID_BLOCK_SPEED && gap > brakingGap;
+            bool priorityTimedOut = m_priorityStuckElapsed >= PRIORITY_STUCK_TIMEOUT;
+            bool canClaimPriority = nearbyCar.yieldsToMe && (other->GetSpeed() > AVOID_BLOCK_SPEED || priorityTimedOut) && gap > brakingGap;
 
             // yields(교차차 양보) 스킵은 "내 경로를 가로지르는" 차만. 커브 도는 앞차는 pathDir과 정렬돼 있으니 리더로 유지.
             const char *skip = (otherT < startT)            ? "behindOnSeg"
@@ -908,7 +935,10 @@ void Car::AppendCarConstraintSamples(std::vector<RoadSpeedSample> &samples,
         RoadRef nextRoad = (pathIndex + 1 < m_path.size()) ? m_path[pathIndex + 1] : RoadRef{};
         if (nextRoad.road == nullptr)
             break;
-        segmentLine = RoadDataManager::Get().BuildOffsetSpline(nextRoad.road, 0.0f, nextRoad.direction);
+        // 참조선(d=0)으로 세우면 반대 차로가 코리도 폭(ROAD_WIDTH/2 남짓) 안에 들어와 반대편 차를 리더로
+        // 잡는다 -- 실제로 타게 될 차로 오프셋으로 세워야 반대 차로가 corridor 밖으로 벌어진다.
+        offset = RoadDataManager::Get().ResolveConnectingOffset(segment, nextRoad, offset);
+        segmentLine = RoadDataManager::Get().BuildOffsetSpline(nextRoad.road, offset, nextRoad.direction);
         spline = &segmentLine;
         segment = nextRoad;
         startT = 0.0f;
@@ -918,7 +948,8 @@ void Car::AppendCarConstraintSamples(std::vector<RoadSpeedSample> &samples,
 
 void Car::ComputeDrivableRange(const RoadRef &road, float &outMin, float &outMax) const
 {
-    float halfW = GetHalfWidth();
+    // float halfW = GetHalfWidth();
+    float halfW = GetHalfWidth() * 0.5f;
     // 밴드가 없는 구간(주로 교차로 연결로)의 폴백. 차체 반폭(±1m 남짓)으로 조이면 앞을 막고 선 차를
     // 옆으로 지나갈 여지가 사실상 없어져 데드락이 풀리지 않는다 -- 한 차로 폭 안쪽까지는 허용한다.
     // 실제로 부딪히는지는 SimulateAvoidPath의 OBB 스윕이 따로 본다.
@@ -1140,6 +1171,35 @@ bool Car::ShouldHoldForMerge(const RoadRef &nextRoad) const
     return !IsSafeLaneEntry(nextRoad, targetOffset, m_lastNearbyCars);
 }
 
+bool Car::ShouldHoldForJunction(const RoadRef &nextRoad) const
+{
+    if (nextRoad.road == nullptr || m_currentRoad == nullptr || nextRoad.road->GetJunctionId() < 0 || m_SimState == nullptr)
+        return false;
+    return !m_SimState->IsJunctionAvailable(nextRoad.road->GetJunctionId(), m_currentRoad->GetId(), this);
+}
+
+bool Car::TryReserveJunction(const RoadRef &nextRoad)
+{
+    if (nextRoad.road == nullptr || m_currentRoad == nullptr || nextRoad.road->GetJunctionId() < 0 || m_SimState == nullptr)
+        return true;
+
+    int junctionId = nextRoad.road->GetJunctionId();
+    if (m_reservedJunctionId >= 0 && m_reservedJunctionId != junctionId)
+        ReleaseJunctionReservation();
+    if (!m_SimState->TryReserveJunction(junctionId, m_currentRoad->GetId(), this))
+        return false;
+
+    m_reservedJunctionId = junctionId;
+    return true;
+}
+
+void Car::ReleaseJunctionReservation()
+{
+    if (m_reservedJunctionId >= 0 && m_SimState != nullptr)
+        m_SimState->ReleaseJunction(m_reservedJunctionId, this);
+    m_reservedJunctionId = -1;
+}
+
 // BEHAVIOR_PLAN_INTERVAL(0.2초)마다 IDM(종방향)로 목표가속도를, MOBIL(횡방향)로 차선변경을 정한다.
 void Car::UpdateDrivePlan()
 {
@@ -1355,19 +1415,44 @@ void Car::AppendSensorConstraintSample(std::vector<RoadSpeedSample> &samples) co
     // 레이에 잡힌 전방 장애물을 IDM 가상 리더로 넣어 감속 근거로 삼는다. 도로 데이터의 정적 장애물이나,
     // 차로 코리도 판정(AppendCarConstraintSamples)으로는 안 잡히는 갓 끼어든 차가 여기서 처리된다.
     // frontDistance는 앞범퍼 기준이라 차 길이를 뺄 필요가 없다.
-    if (m_sensor.frontDistance >= 0.0f)
+    if (m_sensor.frontDistance >= 0.0f && !IsParallelClearSensorVehicle())
+    {
         samples.push_back({m_sensor.frontHitPosition, m_sensor.frontDistance - MIN_SAFE_GAP, m_sensor.frontHitSpeed, nullptr, 0.0f, "sensorFront"});
+    }
 
     // 차체 스윕이 예고한 접촉. 정지한 대상만 넣어 잰 거리이므로 speed 0(정지 제약)으로 건다.
     // bodyContactDistance는 '차체가 닿을 때까지 더 갈 수 있는 거리' 자체라 그대로 gap으로 쓸 수 있다.
     if (m_sensor.bodyContactDistance >= 0.0f)
-        samples.push_back({GetPosition(), m_sensor.bodyContactDistance - MIN_SAFE_GAP, 0.0f, nullptr, 0.0f, "bodySweep"});
+        samples.push_back({GetPosition(), m_sensor.bodyContactDistance, 0.0f, nullptr, 0.0f, "bodySweep"});
 }
 
 #pragma endregion
 
 #pragma region Avoid
 
+bool Car::IsParallelClearSensorVehicle() const
+{
+    if (!m_sensor.hasFrontHitObstacle || !m_sensor.frontHitObstacle.isVehicle ||
+        m_sensor.movingConflict || m_sensor.bodyContactDistance >= 0.0f)
+        return false;
+
+    const VehicleCollision::Obstacle &hit = m_sensor.frontHitObstacle;
+    if (m_speed >= 0.1f && hit.speed <= AVOID_BLOCK_SPEED)
+        return true; // The swept path does not contact this stopped vehicle.
+
+    Vec3 forward = GetForwardAxis();
+    Vec3 hitForward(cosf(hit.headingRad), 0.0f, sinf(hit.headingRad));
+    if (std::fabs(forward.Dot(hitForward)) < PARALLEL_SENSOR_HEADING_COS)
+        return false;
+
+    Vec3 right(forward.GetZ(), 0.0f, -forward.GetX());
+    Vec3 hitRight(hitForward.GetZ(), 0.0f, -hitForward.GetX());
+    float hitLateralHalfExtent = std::fabs(right.Dot(hitForward)) * hit.halfLength +
+                                  std::fabs(right.Dot(hitRight)) * hit.halfWidth;
+    float lateralClearance = std::fabs((hit.center - GetBodyCenter()).Dot(right)) -
+                             GetHalfWidth() - hitLateralHalfExtent;
+    return lateralClearance >= PARALLEL_SENSOR_LATERAL_CLEARANCE;
+}
 Vec3 Car::GetBodyCenter() const
 {
     // 콜라이더 오프셋은 차체 로컬(z=전방, x=오른쪽) 기준. 회전은 Y축 요만 있으므로 전방/오른쪽 축으로만 합성하면 된다.
@@ -1934,6 +2019,9 @@ void Car::UpdateSensors()
         m_sensor.hasFrontHitObstacle = true;
         m_sensor.movingConflict = true;
     }
+
+    if (IsParallelClearSensorVehicle())
+        m_sensor.frontBlocked = false;
 }
 
 // 실제 물리 충돌은 레이가 못 본 각도(대각선 꼭짓점 등)로 박은 경우까지 잡는 최후의 안전망이다.
@@ -1964,7 +2052,10 @@ bool Car::HandleContactPending()
     return false; // 회피/후진 중이 아니면 뒷수습할 게 없다
 }
 
-// 후진 매뉴버 중에는 아무 판단도 하지 않는다. 끝나면 정속주행 계획으로 되돌리고, 다음 프레임에 회피를 다시 시도한다.
+// 후진 매뉴버 중에는 아무 판단도 하지 않는다. 한 스텝이 끝났을 때 전방 gap이 아직 부족하면(=다시
+// 다가가면 바로 또 막힐 거리) 이어서 더 후진한다 -- 안 그러면 gap이 잠깐 벌어진 걸로 막힘 판정이 풀려
+// 전진 -> 바로 재차단 -> 후진을 매 사이클 반복하게 된다. gap이 충분해지거나 더 못 물러나면(뒤가 막히거나
+// 누적 상한) 정속주행 계획으로 되돌리고, 다음 프레임에 회피를 다시 시도한다.
 bool Car::UpdateBackupState()
 {
     if (!m_avoid.backingUp)
@@ -1972,9 +2063,24 @@ bool Car::UpdateBackupState()
     if (!m_vehicleController.IsFinished())
         return true;
 
+    bool gapEnough = m_sensor.frontDistance < 0.0f || m_sensor.frontDistance >= AVOID_BACKUP_TARGET_GAP;
+    float backupStep = GetLength() * 0.5f;
+    bool rearClear = m_sensor.rearDistance < 0.0f || m_sensor.rearDistance > backupStep + AVOID_BACKUP_CLEARANCE;
+    bool canBackMore = rearClear && m_avoid.backupTraveled + backupStep <= AVOID_MAX_BACKUP_DISTANCE;
+
+    if (!gapEnough && canBackMore)
+    {
+        m_avoid.backupTraveled += backupStep;
+        std::vector<std::unique_ptr<VehicleSegment>> segments;
+        segments.push_back(std::make_unique<ReverseSegment>(backupStep));
+        m_vehicleController.BeginPlan(std::move(segments));
+        return true;
+    }
+
     m_avoid.backingUp = false;
     m_avoid.stuck = false;
     m_avoid.blockedTimer = 0.0f;
+    m_avoid.backupTraveled = 0.0f;
     std::vector<std::unique_ptr<VehicleSegment>> segments;
     segments.push_back(std::make_unique<SplineFollowSegment>());
     m_vehicleController.BeginPlan(std::move(segments));
@@ -2063,6 +2169,44 @@ void Car::DecideAvoidance()
 
     if (threat == ThreatKind::None)
     {
+        constexpr float JUNCTION_LEADER_AVOID_LOOK_DISTANCE = 12.0f;
+        constexpr float JUNCTION_LEADER_RIGHT_SHIFT = 0.75f;
+        bool stoppedJunctionLeader = false;
+        if (m_currentRoad != nullptr && m_pathIndex + 1 < m_path.size() &&
+            m_path[m_pathIndex + 1].road != nullptr && m_path[m_pathIndex + 1].road->GetJunctionId() >= 0)
+        {
+            for (const RoadSpeedSample &sample : m_lastRoadSamples)
+            {
+                if (sample.leader == nullptr || !m_SimState->IsCarAlive(sample.leader))
+                    continue;
+                Car *leader = sample.leader;
+                if (leader->m_currentRoad == m_currentRoad || leader->GetSpeed() > AVOID_BLOCK_SPEED)
+                    continue; // Keep normal same-road queues in the IDM following path.
+                if (sample.distance > JUNCTION_LEADER_AVOID_LOOK_DISTANCE)
+                    continue;
+                stoppedJunctionLeader = true;
+                break;
+            }
+        }
+        if (stoppedJunctionLeader)
+        {
+            float laneCenter = CurrentLaneCenter();
+            float minOffset = 0.0f;
+            float maxOffset = 0.0f;
+            ComputeDrivableRange(CurrentRoadRef(), minOffset, maxOffset);
+            float rightOffset = std::clamp(laneCenter + TravelSign() * JUNCTION_LEADER_RIGHT_SHIFT, minOffset, maxOffset);
+            if (std::fabs(rightOffset - laneCenter) >= AVOID_MIN_SHIFT && SimulateAvoidPath(rightOffset, m_sensorObstacles))
+            {
+                m_avoid.laneOffset = laneCenter;
+                m_avoid.avoidOffset = rightOffset;
+                m_avoid.lastPlanTime = m_currentTime;
+                m_avoid.clearTimer = -AVOID_CLEAR_DELAY;
+                m_speedCap = AVOID_LOW_SPEED;
+                SetSubMode(SubMode::D_Avoid);
+                DebugConsole::Log(GetName() + ": junction leader -> right offset " + ToString(rightOffset));
+                return;
+            }
+        }
         m_avoid.blockedTimer = 0.0f; // 트리거는 '같은 대상이 계속' 잡혀야 성립한다
         m_avoid.stuck = false;
         return;
@@ -2085,21 +2229,34 @@ void Car::DecideAvoidance()
 
     if (threat == ThreatKind::Vehicle)
     {
+        if (IsParallelClearSensorVehicle())
+        {
+            m_avoid.blockedTimer = 0.0f;
+            m_avoid.stuck = false;
+            return;
+        }
         // 정상 주행하는 앞차와 정체/신호대기 줄은 IDM(추종)과 MOBIL(차선변경)이 맡는다 -- 줄을 회피로
         // 빠져나가면 안 된다. 다만 '내 진행방향과 어긋난 채 멈춰서 길을 막은' 차는 줄이 아니라 데드락이다:
         // 교차로 안에는 밴드가 없어 MOBIL이 돌지 않고, D_WaitObstacle은 비차량 전용이라 타임아웃도 없어
         // 양쪽 다 영구 정지한다. 이 경우만 아래 오프셋 회피로 넘긴다.
         Vec3 hitDir(cosf(m_sensor.frontHitObstacle.headingRad), 0.0f, sinf(m_sensor.frontHitObstacle.headingRad));
         bool crossing = GetForwardAxis().Dot(hitDir) <= SAME_DIRECTION_COS;
-        bool deadlocked = crossing && m_sensor.frontHitObstacle.speed <= AVOID_BLOCK_SPEED &&
+        bool mustYield = !m_sensor.frontHitObstacle.yieldsToEgo;
+        bool deadlocked = crossing && mustYield && m_sensor.frontHitObstacle.speed <= AVOID_BLOCK_SPEED &&
                           m_speed <= HORN_STOP_SPEED && !KnowsRedSignalAhead();
         m_avoid.blockedTimer = deadlocked ? m_avoid.blockedTimer + m_deltaTime : 0.0f;
-        if (m_avoid.blockedTimer < AVOID_VEHICLE_BLOCK_DELAY)
+        if (m_avoid.blockedTimer >= INTERSECTION_YIELD_TIMEOUT)
+        {
+            DebugConsole::Log(GetName() + ": yielding vehicle blocked -> clear by backing up");
+            HandleAvoidStuck();
+        }
+        else
         {
             m_avoid.stuck = false;
-            return;
         }
         // 성공하면 아래 "avoid d ..." 로그가, 실패하면 HandleAvoidStuck이 알아서 남긴다.
+        // Vehicle deadlocks do not fall through to the static-obstacle offset avoidance path.
+        return;
     }
     else
     {
@@ -2148,6 +2305,7 @@ void Car::HandleAvoidStuck()
 
     m_avoid.backingUp = true;
     m_avoid.blockedTimer = 0.0f;
+    m_avoid.backupTraveled = backupDistance; // UpdateBackupState가 이어서 상한까지 관리
     std::vector<std::unique_ptr<VehicleSegment>> segments;
     segments.push_back(std::make_unique<ReverseSegment>(backupDistance));
     m_vehicleController.BeginPlan(std::move(segments));
