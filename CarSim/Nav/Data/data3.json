@@ -34,10 +34,10 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -5.25, "width": 3.5, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "broken", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "broken", "color": "white", "width": 0.15 } },
-            { "center_offset": 5.25, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
+            { "center_offset": -6.0, "width": 4, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "broken", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "broken", "color": "white", "width": 0.15 } },
+            { "center_offset": 6.0, "width": 4, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -58,10 +58,10 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -5.25, "width": 3.5, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "broken", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "broken", "color": "white", "width": 0.15 } },
-            { "center_offset": 5.25, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
+            { "center_offset": -6.0, "width": 4, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "broken", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "broken", "color": "white", "width": 0.15 } },
+            { "center_offset": 6.0, "width": 4, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -82,10 +82,10 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -5.25, "width": 3.5, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "broken", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "broken", "color": "white", "width": 0.15 } },
-            { "center_offset": 5.25, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
+            { "center_offset": -6.0, "width": 4, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "broken", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "broken", "color": "white", "width": 0.15 } },
+            { "center_offset": 6.0, "width": 4, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -106,10 +106,10 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -5.25, "width": 3.5, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "broken", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "broken", "color": "white", "width": 0.15 } },
-            { "center_offset": 5.25, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
+            { "center_offset": -6.0, "width": 4, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "broken", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "broken", "color": "white", "width": 0.15 } },
+            { "center_offset": 6.0, "width": 4, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -130,8 +130,8 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -152,8 +152,8 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -174,8 +174,8 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -196,8 +196,8 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -218,8 +218,8 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -240,8 +240,8 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -262,8 +262,8 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -284,8 +284,8 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -311,8 +311,8 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 20, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -338,8 +338,8 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 20, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -359,10 +359,10 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -5.25, "width": 3.5, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
-            { "center_offset": 5.25, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
+            { "center_offset": -6.0, "width": 4, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
+            { "center_offset": 6.0, "width": 4, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -388,8 +388,8 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -5.25, "width": 3.5, "type": "driving", "speed_limit": 20, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
+            { "center_offset": -6.0, "width": 4, "type": "driving", "speed_limit": 20, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -415,8 +415,8 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
-            { "center_offset": 5.25, "width": 3.5, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 20, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
+            { "center_offset": 6.0, "width": 4, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -442,8 +442,8 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -5.25, "width": 3.5, "type": "driving", "speed_limit": 20, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
+            { "center_offset": -6.0, "width": 4, "type": "driving", "speed_limit": 20, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -469,8 +469,8 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
-            { "center_offset": 5.25, "width": 3.5, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 20, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
+            { "center_offset": 6.0, "width": 4, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -491,10 +491,10 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -5.25, "width": 3.5, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
-            { "center_offset": 5.25, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
+            { "center_offset": -6.0, "width": 4, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
+            { "center_offset": 6.0, "width": 4, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -516,7 +516,7 @@
         [-15.0, 0.0, 115.0],
         [-29.98, 0.0, 114.49]
       ],
-      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
+      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
       "junction": 2,
       "link": { "predecessor": { "type": "road", "id": 3, "contact": "end" }, "successor": { "type": "road", "id": 201, "contact": "end" } }
     },
@@ -535,7 +535,7 @@
         [18.5, 0.0, 115.0],
         [33.48, 0.0, 114.49]
       ],
-      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
+      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
       "junction": 2,
       "link": { "predecessor": { "type": "road", "id": 3, "contact": "end" }, "successor": { "type": "road", "id": 202, "contact": "start" } }
     },
@@ -554,7 +554,7 @@
         [-3.5, 0.0, 100.0],
         [-4.01, 0.0, 85.02]
       ],
-      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
+      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
       "junction": 2,
       "link": { "predecessor": { "type": "road", "id": 201, "contact": "end" }, "successor": { "type": "road", "id": 3, "contact": "end" } }
     },
@@ -572,8 +572,8 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -595,7 +595,7 @@
         [0.0, 0.0, 100.0],
         [0.51, 0.0, 85.02]
       ],
-      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
+      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
       "junction": 2,
       "link": { "predecessor": { "type": "road", "id": 202, "contact": "start" }, "successor": { "type": "road", "id": 3, "contact": "end" } }
     },
@@ -614,7 +614,7 @@
         [-18.5, 0.0, -115.0],
         [-33.48, 0.0, -114.49]
       ],
-      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
+      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
       "junction": 3,
       "link": { "predecessor": { "type": "road", "id": 1, "contact": "start" }, "successor": { "type": "road", "id": 205, "contact": "end" } }
     },
@@ -633,7 +633,7 @@
         [15.0, 0.0, -115.0],
         [29.98, 0.0, -114.49]
       ],
-      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
+      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
       "junction": 3,
       "link": { "predecessor": { "type": "road", "id": 1, "contact": "start" }, "successor": { "type": "road", "id": 207, "contact": "end" } }
     },
@@ -652,7 +652,7 @@
         [-0.0, 0.0, -100.0],
         [-0.51, 0.0, -85.02]
       ],
-      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
+      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
       "junction": 3,
       "link": { "predecessor": { "type": "road", "id": 205, "contact": "end" }, "successor": { "type": "road", "id": 1, "contact": "start" } }
     },
@@ -670,8 +670,8 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -693,7 +693,7 @@
         [3.5, 0.0, -100.0],
         [4.01, 0.0, -85.02]
       ],
-      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
+      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
       "junction": 3,
       "link": { "predecessor": { "type": "road", "id": 207, "contact": "end" }, "successor": { "type": "road", "id": 1, "contact": "start" } }
     },
@@ -712,7 +712,7 @@
         [-115.0, 0.0, 18.5],
         [-114.49, 0.0, 33.48]
       ],
-      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
+      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
       "junction": 4,
       "link": { "predecessor": { "type": "road", "id": 5, "contact": "start" }, "successor": { "type": "road", "id": 209, "contact": "end" } }
     },
@@ -731,7 +731,7 @@
         [-115.0, 0.0, -15.0],
         [-114.49, 0.0, -29.98]
       ],
-      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
+      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
       "junction": 4,
       "link": { "predecessor": { "type": "road", "id": 5, "contact": "start" }, "successor": { "type": "road", "id": 211, "contact": "end" } }
     },
@@ -750,7 +750,7 @@
         [-100.0, 0.0, 0.0],
         [-85.02, 0.0, 0.51]
       ],
-      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
+      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
       "junction": 4,
       "link": { "predecessor": { "type": "road", "id": 209, "contact": "end" }, "successor": { "type": "road", "id": 5, "contact": "start" } }
     },
@@ -768,8 +768,8 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -791,7 +791,7 @@
         [-100.0, 0.0, -3.5],
         [-85.02, 0.0, -4.01]
       ],
-      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
+      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
       "junction": 4,
       "link": { "predecessor": { "type": "road", "id": 211, "contact": "end" }, "successor": { "type": "road", "id": 5, "contact": "start" } }
     },
@@ -810,7 +810,7 @@
         [115.0, 0.0, 15.0],
         [114.49, 0.0, 29.98]
       ],
-      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
+      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
       "junction": 5,
       "link": { "predecessor": { "type": "road", "id": 7, "contact": "end" }, "successor": { "type": "road", "id": 213, "contact": "end" } }
     },
@@ -829,7 +829,7 @@
         [115.0, 0.0, -18.5],
         [114.49, 0.0, -33.48]
       ],
-      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
+      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
       "junction": 5,
       "link": { "predecessor": { "type": "road", "id": 7, "contact": "end" }, "successor": { "type": "road", "id": 215, "contact": "end" } }
     },
@@ -848,7 +848,7 @@
         [100.0, 0.0, 3.5],
         [85.02, 0.0, 4.01]
       ],
-      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
+      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
       "junction": 5,
       "link": { "predecessor": { "type": "road", "id": 213, "contact": "end" }, "successor": { "type": "road", "id": 7, "contact": "end" } }
     },
@@ -866,8 +866,8 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -889,7 +889,7 @@
         [100.0, 0.0, 0.0],
         [85.02, 0.0, -0.51]
       ],
-      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
+      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
       "junction": 5,
       "link": { "predecessor": { "type": "road", "id": 215, "contact": "end" }, "successor": { "type": "road", "id": 7, "contact": "end" } }
     },
@@ -908,8 +908,8 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 100, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 100, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 100, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 100, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -930,8 +930,8 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -957,8 +957,8 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 50, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 50, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -983,8 +983,8 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 20, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -1010,8 +1010,8 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 20, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -1032,8 +1032,8 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -1055,8 +1055,8 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -1082,8 +1082,8 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 50, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 50, "direction": "backward", "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "solid", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -1108,8 +1108,8 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 20, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -1135,8 +1135,8 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 20, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 20, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
           ]
         }
       ],
@@ -1157,8 +1157,8 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
-            { "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
+            { "center_offset": -2, "width": 4, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
+            { "center_offset": 2, "width": 4, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
           ]
         }
       ],

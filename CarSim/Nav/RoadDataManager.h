@@ -137,9 +137,9 @@ struct RoadRef
 struct RoadPose
 {
     shared_ptr<Road> road;
-    float t = 0.0f;    // 참조선 파라미터 [0,1]
-    float d = 0.0f;    // 참조선 기준 횡오프셋(+오른쪽)
-    float dist = 0.0f; // 참조선까지 거리(투영 잔차)
+    float t = 0.0f;                                   // 참조선 파라미터 [0,1]
+    float d = 0.0f;                                   // 참조선 기준 횡오프셋(+오른쪽)
+    float dist = 0.0f;                                // 참조선까지 거리(투영 잔차)
     LaneDirection direction = LaneDirection::Forward; // heading으로 고른 주행 방향
 };
 
@@ -209,7 +209,7 @@ public:
     Vec3 GetTravelEnd(const shared_ptr<Road> &road, LaneDirection direction) const;
 
 public:
-    static constexpr float ROAD_WIDTH = 3.5f; // 차선 폭
+    static constexpr float ROAD_WIDTH = 4.0f; // 차선 폭
 
 private:
     // 명시 링크(Forward=successor / Backward=predecessor, junction이면 connection)로 방향별 successor 그래프를 짠다.
@@ -236,13 +236,13 @@ private:
     unordered_map<int, shared_ptr<Road>> m_roadById;
     unordered_map<int, shared_ptr<RoadNode>> m_nodes; // node id -> RoadNode
     vector<VehicleCollision::Obstacle> m_obstacles;
-    vector<DynamicObstacleState> m_dynamicObstacleDefs; // dynamic_obstacles 로드 결과 + 런타임 진행상태
-    vector<VehicleCollision::Obstacle> m_dynamicObstacles; // UpdateDynamicObstacles가 매프레임 다시 채우는 현재 위치 스냅샷
-    unordered_map<int, vector<LaneSection>> m_laneSections;             // road id -> sStart 오름차순 횡단면들
-    unordered_map<int, BoundaryMark> m_centerMarks;                     // road id -> 중앙선 마킹
-    unordered_map<int, Junction> m_junctions;                          // junction id -> Junction
-    unordered_map<int, vector<shared_ptr<RoadNode>>> m_roadSignals;    // road id -> 그 road에 걸린 신호 노드들(이동별 phase 여러 개 가능)
-    unordered_map<int, vector<RoadRef>> m_roadSuccessors;              // SuccessorKey(road id, 방향) -> 후속 (road, 방향)들
+    vector<DynamicObstacleState> m_dynamicObstacleDefs;             // dynamic_obstacles 로드 결과 + 런타임 진행상태
+    vector<VehicleCollision::Obstacle> m_dynamicObstacles;          // UpdateDynamicObstacles가 매프레임 다시 채우는 현재 위치 스냅샷
+    unordered_map<int, vector<LaneSection>> m_laneSections;         // road id -> sStart 오름차순 횡단면들
+    unordered_map<int, BoundaryMark> m_centerMarks;                 // road id -> 중앙선 마킹
+    unordered_map<int, Junction> m_junctions;                       // junction id -> Junction
+    unordered_map<int, vector<shared_ptr<RoadNode>>> m_roadSignals; // road id -> 그 road에 걸린 신호 노드들(이동별 phase 여러 개 가능)
+    unordered_map<int, vector<RoadRef>> m_roadSuccessors;           // SuccessorKey(road id, 방향) -> 후속 (road, 방향)들
 };
 
 enum class RoadNodeType
