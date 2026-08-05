@@ -42,6 +42,11 @@ public:
     int GetJunctionId() const { return m_junctionId; } // -1=일반 도로, 아니면 소속 junction(내부 연결도로)
     void SetJunctionId(int id) { m_junctionId = id; }
 
+    // 주차장 통로(진입로) 여부. true면 일반 주행(roaming/routing/CheckPath 등)의 GetClosestRoad에서 제외되고,
+    // 오직 주차 시퀀스(FindBestParkingSpline/exit)만 GetClosestParkingRoad로 찾아 쓴다.
+    bool IsParkingRoad() const { return m_isParkingRoad; }
+    void SetParkingRoad(bool value) { m_isParkingRoad = value; }
+
     const RoadLink &GetPredecessor() const { return m_predecessor; }
     const RoadLink &GetSuccessor() const { return m_successor; }
     void SetPredecessor(const RoadLink &link) { m_predecessor = link; }
@@ -52,6 +57,7 @@ private:
     float m_speedLimit;
     Spline m_referenceLine;
     int m_junctionId = -1;
+    bool m_isParkingRoad = false;
     RoadLink m_predecessor;
     RoadLink m_successor;
 };

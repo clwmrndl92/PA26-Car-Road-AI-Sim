@@ -190,7 +190,8 @@ private:
     shared_ptr<RoadNode> GetParkTargetNode() const { return m_parkSpot ? m_parkSpot : m_pendingParkNode; }
 
     bool PlanEnterForCurrentSpot();
-    const Spline *FindBestParkingSpline() const;
+    // 스팟이 접한 도로(주차 통로)의 참조선. outDirection엔 그 통로를 타고 들어가는 진행방향이 담긴다.
+    const Spline *FindBestParkingSpline(LaneDirection *outDirection = nullptr) const;
     bool ComputeParkPrePose(Vec3 &outPos, float &outAngleRad) const;
     bool ReserveNextParkSpot();
     bool BeginParkEnterOrRetry();
@@ -405,6 +406,8 @@ private:
 
 public:
     static constexpr float ARRIVE_DISTANCE = 5.0f;
+    // Park 노드는 도로 끝이 아니라 주차장 한복판에 있으므로 도착 판정 반경을 따로 크게 잡는다.
+    static constexpr float PARK_ARRIVE_DISTANCE = 10.0f;
 
 private:
     // 설정 및 스펙 상수/변수 (Constants & Specifications)

@@ -470,6 +470,9 @@ float Car::Stanley(const Spline &spline)
 
 void Car::SetDestination(const shared_ptr<RoadNode> &destNode)
 {
+    if (destNode == nullptr || destNode->nodeType != RoadNodeType::Park)
+        return;
+
     m_destRoad = RoadDataManager::Get().GetClosestRoad(destNode->position).road;
     DebugConsole::Log(GetName() + ": SetDestination -> node " + std::to_string(destNode->id) +
                       " (road " + std::to_string(m_destRoad ? m_destRoad->GetId() : -1) + ")");

@@ -160,7 +160,10 @@ public:
     // 위치를 참조선에 투영해 가장 가까운 road를 찾는다. 없으면 road==nullptr. 방향은 밴드가 있는 쪽.
     RoadPose GetClosestRoad(const Vec3 &position) const;
     // 위와 같되 heading과 같은 쪽 차로 방향을 고른다. 그 방향 driving 밴드가 없는 단방향 도로면 있는 쪽으로 맞춘다.
+    // 주차장 통로(Road::IsParkingRoad)는 일반 주행용 탐색이라 대상에서 제외 -- roaming/routing이 주차장으로 새지 않게.
     RoadPose GetClosestRoad(const Vec3 &position, const Vec3 &heading) const;
+    // GetClosestRoad와 같되 주차장 통로만 대상으로 찾는다. 주차 시퀀스(FindBestParkingSpline/출차)가 쓴다.
+    RoadPose GetClosestParkingRoad(const Vec3 &position, const Vec3 &heading) const;
     // road 링크(successor) 그래프 A*. 노드는 (road, 진행방향) -- 왕복 도로는 방향마다 다음 road가 다르다.
     // 반환 = start~dest road 시퀀스(포함). 실패 시 빈 벡터.
     vector<RoadRef> FindPath(const RoadRef &start, const shared_ptr<Road> &destRoad) const;
@@ -183,6 +186,7 @@ public:
     const unordered_map<int, shared_ptr<RoadNode>> &GetNodes() const { return m_nodes; };
     const shared_ptr<RoadNode> GetNode(int nodeId) const;
     shared_ptr<RoadNode> GetRandomDestNode() const;
+    shared_ptr<RoadNode> GetRandomParkNode() const;
     const vector<VehicleCollision::Obstacle> &GetObstacles() const { return m_obstacles; }
     // UpdateDynamicObstacles가 매프레임 갱신하는 왕복 장애물의 현재 위치/헤딩/속도.
     const vector<VehicleCollision::Obstacle> &GetDynamicObstacles() const { return m_dynamicObstacles; }

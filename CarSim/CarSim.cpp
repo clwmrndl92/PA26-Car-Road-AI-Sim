@@ -151,22 +151,27 @@ bool CarSim::InitResource()
     return true;
 }
 
-void CarSim::SpawnCar(CarType type, CarPersonalityType personality)
+void CarSim::SpawnCar(CarType type, CarPersonalityType personality, bool roaming)
 {
     auto spawnNode = m_RoadDataManager.GetRandomDestNode();
-    auto destNode = m_RoadDataManager.GetRandomDestNode();
-    if (!spawnNode || !destNode)
+    if (!spawnNode)
         return;
 
-    float yaw = (static_cast<float>(rand()) / static_cast<float>(RAND_MAX)) * XM_2PI;
-    Vec3 direction(std::sin(yaw), 0.0f, std::cos(yaw));
+    std::shared_ptr<RoadNode> destNode;
+    if (!roaming)
+    {
+        destNode = m_RoadDataManager.GetRandomParkNode();
+        if (!destNode)
+            return;
+    }
 
     auto car = std::make_shared<Car>();
     car->Init(GetCarSpec(type), GetCarPersonality(personality), &m_SimState,
               JPH::Vec3(spawnNode->position.GetX(), 0.1f, spawnNode->position.GetZ()));
-    // car->SetRotation(direction);
     car->SetRotation(spawnNode->direction);
-    car->SetDestination(destNode);
+    car->SetRoaming(roaming);
+    if (!roaming)
+        car->SetDestination(destNode);
     car->SetName(car->GetName() + ToString(m_carIDCounter++));
 
     m_GameObjects.push_back(car);
@@ -397,6 +402,7 @@ void CarSim::UpdateUI(float dt)
         static const char *kPersonalityNames[] = {"Normal", "Aggressive", "Cautious"};
         ImGui::Combo("Personality", &m_SpawnPersonalityIndex, kPersonalityNames, IM_ARRAYSIZE(kPersonalityNames));
         CarPersonalityType personality = static_cast<CarPersonalityType>(m_SpawnPersonalityIndex);
+        ImGui::Checkbox("Roaming (no destination)", &m_SpawnRoaming);
 
         ImGui::Separator();
         for (int i = 0; i < static_cast<int>(CarType::Count); ++i)
@@ -405,7 +411,7 @@ void CarSim::UpdateUI(float dt)
             ImGui::Text("%s", GetCarSpec(type).name);
             ImGui::SameLine();
             if (ImGui::Button(("Spawn##spawnCar" + std::to_string(i)).c_str()))
-                SpawnCar(type, personality);
+                SpawnCar(type, personality, m_SpawnRoaming);
         }
     }
     ImGui::End();

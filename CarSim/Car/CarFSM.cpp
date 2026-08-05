@@ -184,7 +184,9 @@ Car::Mode Car::DecideNextMode(const char **reason) const
             return Mode::Stop; // m_currentRoad==nullptr: 목적지는 있지만 안전한 진입 지점을 기다리는 중(UpdateFindPath)
         }
         *reason = "go to Dest";
-        return Mode::Drive; // 주차 비활성: 출차(Park) 없이 바로 주행
+        // 출발은 항상 Park(P_EXIT)의 출차 판단을 거친다: 도로 진행방향과 정렬돼 있으면(도로 위 정차)
+        // RS 없이 즉시 Drive로 넘어가고, 주차칸에 꺾여 있으면 RS 출차 매뉴버를 수행한다.
+        return Mode::Park;
     }
     else if (m_mode == Mode::Park)
     {
@@ -214,9 +216,16 @@ Car::Mode Car::DecideNextMode(const char **reason) const
             Vec3 destEnd = RoadDataManager::Get().GetTravelEnd(m_destRoad, m_destDir);
             Vec3 projectedPosition = m_destRoad->GetReferenceLine().GetLookaheadPoint(GetPosition(), 0.0f);
             arrived = (destEnd - projectedPosition).Length() < ARRIVE_DISTANCE;
+            // Park 노드는 도로 끝이 아니라 통로 중간에 있을 수 있어 노드 반경으로도 도착을 인정한다.
+            if (m_pendingParkNode != nullptr)
+                arrived |= (m_pendingParkNode->position - GetPosition()).Length() < PARK_ARRIVE_DISTANCE;
         }
 
-        // 주차 비활성: 도착하면 그냥 Stop.
+        if (arrived && GetParkTargetNode() != nullptr)
+        {
+            *reason = "arrived at destination";
+            return Mode::Park; // 입차 시퀀스로
+        }
         if (m_destRoad == nullptr || arrived)
         {
             *reason = m_destRoad == nullptr ? "no destination road" : "arrived at destination";
@@ -257,6 +266,7 @@ void Car::OnModeEnter(Mode prev)
         SetSubMode(prev == Mode::Stop ? SubMode::P_EXIT : SubMode::P_ENTER_LEG1);
         m_parkPlanPending = true;    // 도착 즉시 RS를 계산하지 않고, 완전히 멈출 때까지 기다린다 (UpdatePark에서 처리).
         m_parkSequenceActive = true; // 주차 시퀀스 시작 — 완료(UpdatePark)까지 Park 유지.
+        DebugConsole::Log(GetName() + ": Park plan pending: waiting for full stop before planning");
     }
     else if (m_mode == Mode::Stop)
     {
@@ -378,36 +388,412 @@ void Car::MaintainRoamingPath()
 
 void Car::UpdatePark()
 {
-    // 주차 비활성(stub). Park 모드는 진입하지 않는다.
-    AccelerateVel(0.0f);
+    if (m_parkPlanPending)
+    {
+        // 완전히 정지할 때까지는 RS 계획을 세우지 않고 감속만 한다.
+        if (m_speed > 0.0f)
+        {
+            AccelerateVel(0.0f);
+            return;
+        }
+        m_parkPlanPending = false;
+        DebugConsole::Log(GetName() + ": Park plan pending resolved: fully stopped, beginning RS plan");
+        BeginParkPlan();
+    }
+
+    if (!m_vehicleController.IsFinished())
+    {
+        m_wantSegmentTick = true;
+        return;
+    }
+
+    if (m_subMode == SubMode::P_EXIT)
+    {
+        // 출차 완료: 이제 도로 위. 더 이상 이 주차칸에 있는 게 아니므로 예약을 풀고 비운다.
+        m_parkSequenceActive = false; // 시퀀스 종료 — 다음 프레임 Drive로 전환 허용.
+        if (m_parkSpot != nullptr)
+        {
+            m_SimState->ReleaseParkSpot(m_parkSpot->id);
+            m_parkSpot = nullptr;
+        }
+        // 안 지우면 다음 도로 정차 후 출발(P_EXIT) 때 이 주차장 기준으로 통로를 다시 찾아버린다.
+        m_parkNodeId = -1;
+
+        // TryFindPathAndSetRoad는 실패 시 dest/current를 지우므로, 방금 나온 도로를 잃지 않게 보존해뒀다 복원한다.
+        shared_ptr<Road> savedDestRoad = m_destRoad;
+        LaneDirection savedDestDir = m_destDir;
+        shared_ptr<Road> exitRoad = m_currentRoad;
+        float exitOffset = m_currentOffset;
+        LaneDirection exitDir = m_travelDir;
+        if (!TryFindPathAndSetRoad())
+        {
+            m_destRoad = savedDestRoad;
+            m_destDir = savedDestDir;
+            SetCurrentRoad(exitRoad, exitOffset, exitDir);
+            m_path.clear();
+            m_pathIndex = 0;
+        }
+        return;
+    }
+
+    if (m_parkSpot != nullptr)
+    {
+        // 입차 leg 1(-> 통로 위 진입점 P)이 끝났으면, 이제 P에서 스팟까지 leg 2를 이어 계획한다.
+        // (통로를 못 찾아 바로 스팟으로 간 경우엔 PlanEnterForCurrentSpot이 이미 leg2로 세팅해 건너뛴다.)
+        if (m_subMode == SubMode::P_ENTER_LEG1)
+        {
+            // leg 1처럼 완전히 멈춘 뒤 그 pose에서 leg 2를 계획한다(open-loop RS는 시작 pose 기준). 대기 중
+            // 컨트롤러가 finished여도 m_parkSequenceActive가 Park를 유지하므로 Drive로 새지 않는다.
+            if (m_speed > 0.0f)
+            {
+                AccelerateVel(0.0f);
+                return;
+            }
+
+            // 방금 끝난 leg가 진입점 중간 leg였을 수 있다: 아직 P에서 멀면 다시 P를 겨냥한다(leg 체인).
+            // 시도 횟수 상한으로 같은 자리를 맴도는 무한 체인은 끊는다.
+            constexpr int PARK_MAX_LEG_TRIES = 4;
+            constexpr float P_ARRIVE_DISTANCE = 2.0f;
+            Vec3 pPos;
+            float pAngleRad;
+            if (ComputeParkPrePose(pPos, pAngleRad) &&
+                (m_rigidbody.GetPosition() - pPos).Length() > P_ARRIVE_DISTANCE &&
+                m_parkLegTries < PARK_MAX_LEG_TRIES && PlanEnterForCurrentSpot())
+                return;
+
+            SetSubMode(SubMode::P_ENTER_LEG2);
+            BeginParkSpotLeg();
+            return;
+        }
+
+        // 스팟까지의 leg가 pure pursuit로 끝났으면, 실제로 도착한 pose 기준으로 같은 목표까지 RS를 한 번
+        // 더 계획해 추종 잔여 오차(주로 최종 헤딩)를 없앤다. exact=true라 이번엔 오차가 남지 않는다.
+        if (m_subMode == SubMode::P_ENTER_LEG2)
+        {
+            if (m_speed > 0.0f)
+            {
+                AccelerateVel(0.0f);
+                return;
+            }
+            SetSubMode(SubMode::P_ENTER_ALIGN);
+            Vec3 spotTarget = m_parkSpot->position - m_parkSpot->direction.Normalized() * m_wheelbase;
+            float spotAngleRad = DirectionToAngleRad(m_parkSpot->direction);
+            if (PlanParkLegTo(spotTarget, spotAngleRad, /*exact=*/true))
+                return;
+        }
+    }
+
+    if (m_subMode == SubMode::None || m_subMode == SubMode::P_ENTER_ALIGN)
+    {
+        m_parkSequenceActive = false; // 입차 시퀀스 종료 — 다음 프레임 Stop으로 전환 허용.
+        m_destRoad = nullptr;
+        SetCurrentRoad(nullptr, 0.0f, LaneDirection::Forward);
+        return;
+    }
 }
 
-void Car::BeginParkPlan() {}
+void Car::BeginParkPlan()
+{
+    float turningRadius = m_wheelbase / tanf(m_maxSteerAngle);
+    Vec3 rigidPosition = m_rigidbody.GetPosition();
+    float startAngleRad = DirectionToAngleRad(GetForwardAxis());
 
-const Spline *Car::FindBestParkingSpline() const { return nullptr; }
+    if (m_subMode == SubMode::P_EXIT)
+    {
+        // CheckPath와 기준 맞추려 앞바퀴 위치로 도로 검색. 통로(주차장 참조)가 있으면 그리로 먼저 나가고,
+        // 없으면(통로 없이 스팟에 바로 대둔 차 등) 가장 가까운 일반 도로로 직접 나간다.
+        Vec3 frontPos = GetPosition();
+        RoadPose exitPose;
+        if (m_parkSpot != nullptr && m_parkSpot->id >= 0)
+            exitPose = RoadDataManager::Get().GetClosestParkingRoad(frontPos, GetForwardAxis());
+        if (exitPose.road == nullptr)
+            exitPose = RoadDataManager::Get().GetClosestRoad(frontPos, GetForwardAxis());
+        if (exitPose.road == nullptr)
+        {
+            DebugConsole::Log(GetName() + ": BeginParkPlan: no road found to exit onto, abandoning this park attempt");
+            m_destRoad = nullptr;
+            SetSubMode(SubMode::None);
+            return;
+        }
 
+        const LaneBand *exitBand = RoadDataManager::Get().FindNearestBand(exitPose.road, exitPose.d, exitPose.direction);
+        SetCurrentRoad(exitPose.road, exitBand != nullptr ? exitBand->centerOffset : exitPose.d, exitPose.direction);
+
+        // 밴드 중심 주행선(역방향이면 이미 뒤집혀 있음)이 곧 출차 목표선이다.
+        const Spline &exitSpline = m_currentSpline;
+        Vec3 closestDir = exitSpline.GetDirectionAt(exitSpline.GetSplinePosition(frontPos));
+
+        // 진행 방향과 충분히 정렬돼 있으면 RS 출차 매뉴버 없이 바로 주행
+        constexpr float EXIT_HEADING_ALIGN_ANGLE = ToRadians(60.0f);
+        float headingDot = std::clamp(GetForwardAxis().Dot(closestDir), -1.0f, 1.0f);
+        if (std::acos(headingDot) <= EXIT_HEADING_ALIGN_ANGLE)
+        {
+            m_vehicleController.BeginPlan({});
+            return;
+        }
+
+        VehicleCollision::VehicleShape shape = BuildVehicleShape();
+        const std::vector<VehicleCollision::Obstacle> &obstacles = RoadDataManager::Get().GetObstacles();
+        auto isCollisionFree = [&](const ReedsShepp::Path &candidate)
+        {
+            for (const ReedsShepp::PoseSample &pose : ReedsShepp::GetPoses(candidate, rigidPosition, startAngleRad, turningRadius))
+            {
+                if (VehicleCollision::IsColliding(pose.position, pose.headingRad, obstacles, shape))
+                    return false;
+            }
+            return true;
+        };
+
+        constexpr float EXIT_LEAD_DISTANCES[] = {6.0f, 12.0f, 18.0f};
+        for (float leadDistance : EXIT_LEAD_DISTANCES)
+        {
+            Vec3 targetPos = exitSpline.GetLookaheadPoint(frontPos, leadDistance);
+            float targetAngleRad = DirectionToAngleRad(exitSpline.GetDirectionAt(exitSpline.GetSplinePosition(targetPos)));
+            ReedsShepp::Path path = ReedsShepp::GetOptimalPath(rigidPosition, startAngleRad, targetPos, targetAngleRad, turningRadius, isCollisionFree);
+            if (path.empty())
+                continue;
+            m_vehicleController.BeginPlan(BuildReedSheppSegments(path, rigidPosition, startAngleRad, turningRadius));
+            RebuildRSDebugRender(path, rigidPosition, startAngleRad, turningRadius, targetPos, targetAngleRad);
+            return;
+        }
+
+        // 모든 목표가 실패: 이미 차가 그 자리를 점유 중이므로 예약은 풀지 않고, 정렬된 셈 치고 주행 시작.
+        DebugConsole::Log(GetName() + ": BeginParkPlan: RS exit failed for all lead distances, driving as-is");
+        m_vehicleController.BeginPlan({});
+        return;
+    }
+
+    // ---- 이하 입차 ----
+    int parkNodeId = -1;
+    if (m_parkSpot == nullptr && m_pendingParkNode != nullptr)
+    {
+        parkNodeId = m_pendingParkNode->id;
+        shared_ptr<RoadNode> pendingNode = m_pendingParkNode;
+        m_parkSpot = m_SimState->TryReserveParkSpot(parkNodeId);
+        m_pendingParkNode = nullptr;
+        if (m_parkSpot == nullptr)
+        {
+            bool hasAnyParkSpot = std::any_of(pendingNode->children.begin(), pendingNode->children.end(),
+                                              [](const weak_ptr<RoadNode> &weakChild)
+                                              {
+                                                  shared_ptr<RoadNode> child = weakChild.lock();
+                                                  return child != nullptr && child->nodeType == RoadNodeType::ParkSpot;
+                                              });
+            if (hasAnyParkSpot)
+            {
+                // ParkSpot은 있지만 전부 예약 중
+                DebugConsole::Log(GetName() + ": Park spot reservation failed for node " + std::to_string(parkNodeId) +
+                                  ": all ParkSpot children reserved, abandoning destination");
+                m_parkSequenceActive = false; // 시퀀스 취소 — Park에 갇히지 않도록.
+                m_destRoad = nullptr;
+                return;
+            }
+            // 주차장이 아닌 노드(ParkSpot 자식이 아예 없음, 예: 길가 목적지)
+            // m_parkSpot을 그대로 이 노드로 취급한다(위치/방향만 쓰므로 실제 예약 스팟과 동일하게 동작).
+            m_parkSpot = pendingNode;
+        }
+        m_parkNodeId = parkNodeId;  // 재시도(다른 빈 자리)용으로 Park 노드 id 보관
+        m_triedParkSpotIds.clear(); // 새 입차 시퀀스 — 시도 목록 초기화
+    }
+
+    if (m_parkSpot == nullptr)
+    {
+        m_parkSequenceActive = false; // 스팟 정보가 없는 비정상 입차 -- Park에 갇히지 않게 취소
+        return;
+    }
+
+    // 주차 (BeginParkPlan은 Park 진입시 딱 한 번만 불리므로 여기 오는 시점의 subMode는 항상 leg1)
+    if (m_subMode == SubMode::P_ENTER_LEG1)
+    {
+        if (!BeginParkEnterOrRetry())
+        {
+            DebugConsole::Log(GetName() + ": BeginParkPlan: no reachable ParkSpot for node " + std::to_string(parkNodeId) +
+                              ", abandoning destination");
+            m_destRoad = nullptr;
+            m_parkSequenceActive = false;
+        }
+    }
+}
+
+// 옛 주차레인(parking_lanes)을 대신해, 스팟이 접한 주차장 통로(Road::IsParkingRoad)의 참조선을 쓴다.
+// GetClosestParkingRoad는 일반 도로를 후보에서 뺀다 -- 안 그러면 통로가 없는 스팟이 근처 큰길을
+// 통로로 오인해 엉뚱한 P점을 잡는다.
+const Spline *Car::FindBestParkingSpline(LaneDirection *outDirection) const
+{
+    if (m_parkSpot == nullptr)
+        return nullptr;
+
+    RoadPose pose = RoadDataManager::Get().GetClosestParkingRoad(m_parkSpot->position, GetForwardAxis());
+    if (pose.road == nullptr)
+        return nullptr;
+
+    if (outDirection != nullptr)
+    {
+        // RS 매뉴버로 heading이 돌아가도 P가 흔들리지 않게, 이미 그 통로 위면 진입 때 정한 진행방향을 쓴다.
+        *outDirection = (pose.road == m_currentRoad) ? m_travelDir : pose.direction;
+    }
+    return &pose.road->GetReferenceLine();
+}
+
+// P(스팟 앞 지점) pose: 통로 위 스팟 최근접점에서 진행방향으로 P_LEAD_DISTANCE만큼 더 간 점.
 bool Car::ComputeParkPrePose(Vec3 &outPos, float &outAngleRad) const
 {
-    (void)outPos;
-    (void)outAngleRad;
+    LaneDirection aisleDirection = LaneDirection::Forward;
+    const Spline *bestSpline = FindBestParkingSpline(&aisleDirection);
+    if (bestSpline == nullptr)
+        return false;
+
+    constexpr float P_LEAD_DISTANCE = 3.0f;
+    // 참조선은 항상 forward 프레임이라, 진행방향으로 나아가려면 부호를 곱해 s 증감을 뒤집는다.
+    float dirSign = GetTravelSign(aisleDirection);
+    outPos = bestSpline->GetLookaheadPoint(m_parkSpot->position, P_LEAD_DISTANCE * dirSign);
+    float pParam = bestSpline->GetSplinePosition(outPos);
+    outAngleRad = DirectionToAngleRad(bestSpline->GetDirectionAt(pParam) * dirSign);
+    return true;
+}
+
+// m_parkSpot로의 입차 시작 계획: 통로가 있으면 leg 1(-> 스팟 앞 P), 없으면 스팟으로 직접(leg 2 없음).
+// P까지 한 번에 RS가 안 나오면(진입로가 벽으로 막힌 pose 등 -- RS는 장애물을 "피해가는" 게 아니라
+// 후보를 "거부"만 하므로 좁은 입구에서 전멸할 수 있다) 통로에서 내 위치와 가장 가까운 점(=진입점)
+// 으로 먼저 가는 중간 leg를 계획한다. leg 완료 후 UpdatePark가 다시 P를 겨냥한다(leg 체인).
+// 계획을 시작했으면 true(+ m_subMode를 해당 leg로 설정), 이 자리로는 경로를 못 찾으면 false.
+bool Car::PlanEnterForCurrentSpot()
+{
+    LaneDirection aisleDirection = LaneDirection::Forward;
+    Vec3 pPos;
+    float pAngleRad;
+    if (ComputeParkPrePose(pPos, pAngleRad))
+    {
+        ++m_parkLegTries;
+        if (PlanParkLegTo(pPos, pAngleRad))
+        {
+            SetSubMode(SubMode::P_ENTER_LEG1); // leg 1 진행 중 — P 도착 후 UpdatePark가 leg 2를 잇는다.
+            return true;
+        }
+
+        // 진입점 중간 leg. 이미 진입점 근처인데도 P를 못 가는 거면 이 스팟은 접근 불가.
+        constexpr float ENTRY_MIN_DISTANCE = 2.0f;
+        const Spline *bestSpline = FindBestParkingSpline(&aisleDirection);
+        if (bestSpline == nullptr)
+            return false;
+        float dirSign = GetTravelSign(aisleDirection);
+        Vec3 rigidPosition = m_rigidbody.GetPosition();
+        float entryT = bestSpline->GetSplinePosition(rigidPosition);
+        Vec3 entryPos = bestSpline->GetPositionAt(entryT);
+        if ((entryPos - rigidPosition).Length() > ENTRY_MIN_DISTANCE)
+        {
+            float entryAngleRad = DirectionToAngleRad(bestSpline->GetDirectionAt(entryT) * dirSign);
+            if (PlanParkLegTo(entryPos, entryAngleRad))
+            {
+                DebugConsole::Log(GetName() + ": PlanEnterForCurrentSpot: P unreachable, detouring via aisle entry point");
+                SetSubMode(SubMode::P_ENTER_LEG1);
+                return true;
+            }
+        }
+        return false; // 이 스팟의 P까지 못 감 -> 다음 스팟
+    }
+
+    // 통로 없음 -> 스팟으로 직접. 단 RS는 도로를 무시한 직행 매뉴버이므로, 도착 판정이
+    // 노드에서 먼 곳에서 났다면(멀리 있는 도로 끝 등) 맵을 가로지르는 긴 직행이 나온다 --
+    // 상한을 넘으면 이 목적지는 포기한다 (호출자가 abandoning 처리).
+    constexpr float MAX_DIRECT_LEG_DISTANCE = 15.0f;
+    Vec3 spotTarget = m_parkSpot->position - m_parkSpot->direction.Normalized() * m_wheelbase;
+    float spotAngleRad = DirectionToAngleRad(m_parkSpot->direction);
+    if ((spotTarget - m_rigidbody.GetPosition()).Length() > MAX_DIRECT_LEG_DISTANCE)
+    {
+        DebugConsole::Log(GetName() + ": PlanEnterForCurrentSpot: direct park target too far (" +
+                          std::to_string((spotTarget - m_rigidbody.GetPosition()).Length()) + "m), giving up");
+        return false;
+    }
+    if (PlanParkLegTo(spotTarget, spotAngleRad))
+    {
+        SetSubMode(SubMode::P_ENTER_LEG2); // leg 1 없이 바로 leg 2
+        return true;
+    }
     return false;
 }
 
-bool Car::PlanEnterForCurrentSpot() { return false; }
+// 현재 m_parkSpot을 tried에 넣고 예약을 푼 뒤, 같은 Park의 다음 빈 자리를 예약한다. 남으면 true.
+bool Car::ReserveNextParkSpot()
+{
+    if (m_parkSpot != nullptr)
+    {
+        m_triedParkSpotIds.insert(m_parkSpot->id);
+        m_SimState->ReleaseParkSpot(m_parkSpot->id);
+    }
+    m_parkSpot = m_SimState->TryReserveParkSpot(m_parkNodeId, m_triedParkSpotIds);
+    return m_parkSpot != nullptr;
+}
 
-bool Car::ReserveNextParkSpot() { return false; }
+// 현재 스팟부터 입차를 시도하고, 실패하면 다음 빈 자리로 넘어가며 다 시도한다. 계획을 시작하면 true,
+// 모든 자리가 안 되면 false.
+bool Car::BeginParkEnterOrRetry()
+{
+    while (m_parkSpot != nullptr)
+    {
+        m_parkLegTries = 0; // 새 스팟 -- 진입 leg 체인 시도 횟수 리셋
+        if (PlanEnterForCurrentSpot())
+            return true;
+        if (!ReserveNextParkSpot())
+            return false;
+    }
+    return false;
+}
 
-bool Car::BeginParkEnterOrRetry() { return false; }
-
+// 현재 pose -> target 까지 Reeds-Shepp으로 계획해 실행시킨다. 못 찾으면 false.
+// exact=true면 Pure Pursuit(BuildReedSheppSegments) 대신 정지-조향-이동-정지 방식의 정밀 실행
+// (BuildExactSegments)을 쓴다 -- 짧은 최종 정렬 보정 등 추종 오차를 남기면 안 되는 경우에만 켠다.
 bool Car::PlanParkLegTo(const Vec3 &targetPos, float targetAngleRad, bool exact)
 {
-    (void)targetPos;
-    (void)targetAngleRad;
-    (void)exact;
-    return false;
+    Vec3 rigidPosition = m_rigidbody.GetPosition();
+    float startAngleRad = DirectionToAngleRad(GetForwardAxis());
+    float turningRadius = m_wheelbase / tanf(m_maxSteerAngle);
+
+    VehicleCollision::VehicleShape shape = BuildVehicleShape();
+    const std::vector<VehicleCollision::Obstacle> &obstacles = RoadDataManager::Get().GetObstacles();
+    auto isCollisionFree = [&](const ReedsShepp::Path &candidate)
+    {
+        for (const ReedsShepp::PoseSample &pose : ReedsShepp::GetPoses(candidate, rigidPosition, startAngleRad, turningRadius))
+        {
+            if (VehicleCollision::IsColliding(pose.position, pose.headingRad, obstacles, shape))
+                return false;
+        }
+        return true;
+    };
+
+    ReedsShepp::Path path = ReedsShepp::GetOptimalPath(rigidPosition, startAngleRad, targetPos, targetAngleRad, turningRadius, isCollisionFree);
+    if (path.empty())
+        return false;
+
+    if (exact)
+        m_vehicleController.BeginPlan(BuildExactSegments(path, m_maxSteerAngle));
+    else
+        m_vehicleController.BeginPlan(BuildReedSheppSegments(path, rigidPosition, startAngleRad, turningRadius));
+    RebuildRSDebugRender(path, rigidPosition, startAngleRad, turningRadius, targetPos, targetAngleRad);
+    return true;
 }
 
-void Car::BeginParkSpotLeg() {}
+// 입차 leg 2: 현재 pose(=P)에서 예약된 스팟까지 Reeds-Shepp. UpdatePark가 leg 1 완료 시 호출한다.
+// 못 들어가면 다음 빈 자리로 넘어가 leg 1부터 다시 시도하고, 모든 자리가 안 되면 멈춘다.
+void Car::BeginParkSpotLeg()
+{
+    Vec3 spotTarget = m_parkSpot->position - m_parkSpot->direction.Normalized() * m_wheelbase;
+    float spotAngleRad = DirectionToAngleRad(m_parkSpot->direction);
+    if (PlanParkLegTo(spotTarget, spotAngleRad))
+        return; // leg 2 성공
+
+    DebugConsole::Log(GetName() + ": BeginParkSpotLeg: can't tuck into ParkSpot " + std::to_string(m_parkSpot->id) +
+                      " from P, trying next spot");
+    // 이 자리 실패 -> 다음 빈 자리부터 leg 1부터 다시. PlanEnterForCurrentSpot이 새 자리에 맞는
+    // subMode(leg1 또는 통로 없으면 leg2)를 알아서 세팅한다.
+    if (ReserveNextParkSpot() && BeginParkEnterOrRetry())
+        return;
+
+    // 남은 자리 없음 -> 입차 종료(빈 플랜 -> 다음 프레임 UpdatePark 완료 처리, 현재 자리에 멈춤).
+    DebugConsole::Log(GetName() + ": BeginParkSpotLeg: no reachable ParkSpot left, stopping");
+    m_destRoad = nullptr;
+    m_vehicleController.BeginPlan({});
+}
 
 #pragma endregion
 
@@ -435,7 +821,7 @@ void Car::UpdateStop()
         return;
     }
 
-    std::shared_ptr<RoadNode> dest = RoadDataManager::Get().GetRandomDestNode();
+    std::shared_ptr<RoadNode> dest = RoadDataManager::Get().GetRandomParkNode();
     if (!dest)
         return;
     // GetRandomDestNode는 지금 위치와 무관하게 뽑으므로, 이미 도착 판정 거리 안인 노드(방금 왔던 곳과
@@ -625,9 +1011,6 @@ void Car::DriveControl()
     float elapsedTime = m_currentTime - m_lastBehaviorPlanTime;           // 스캔 이후 지난 시간(정적 제약의 가상 리더 전진 보정용)
     float accelIDM = ComputeIdmAcceleration(m_lastRoadSamples, m_lastIdmParams, distanceOffset, elapsedTime, &m_limitDebug);
 
-    // 회피/정지대기가 건 종방향 상한. IDM을 끄는 대신 '그 속도로 가는 가상 리더'를 하나 더 두는 형태라,
-    // 신호/앞차/제한속도 제약이 그대로 살아 있고 감속도 저크제한을 타고 부드럽게 붙는다. m_speedCap은
-    // 매프레임 갱신되므로 0.2초 주기 샘플 목록이 아니라 여기서 건다.
     if (m_speedCap >= 0.0f && m_speed > m_speedCap)
     {
         float capGap = std::max(1.0f, (m_speed * m_speed - m_speedCap * m_speedCap) / (2.0f * m_maxBrake) + MIN_SAFE_GAP);
@@ -654,27 +1037,17 @@ void Car::DriveControl()
                              m_limitDebug.targetSpeed < AVOID_BLOCK_SPEED && m_speed < AVOID_BLOCK_SPEED;
     m_priorityStuckElapsed = stuckOnStoppedCar ? m_priorityStuckElapsed + m_deltaTime : 0.0f;
 
-    // kind 또는 목표속도(0.5km/h 이상)가 바뀐 프레임만 로그 -- 매프레임 찍으면 콘솔이 묻힌다.
-    constexpr float LOG_TARGET_SPEED_EPS = 0.5f / 3.6f;
-    if (m_limitDebug.label != prevLimitDebug.label ||
-        std::fabs(m_limitDebug.targetSpeed - prevLimitDebug.targetSpeed) > LOG_TARGET_SPEED_EPS)
-    {
-        // v/accel: 이 전환이 실제로 일어난 순간의 차 속도/가속도 -- 라벨이 "free"로 풀렸어도 저크제한 때문에
-        // 실제 가속도가 아직 음수(관성으로 계속 감속 중)인지 여기서 바로 보인다.
-        DebugConsole::Log(GetName() + ": limit " + prevLimitDebug.label + "(" + ToString(prevLimitDebug.targetSpeed * 3.6f) +
-                          "km/h) -> " + m_limitDebug.label + "(" + ToString(m_limitDebug.targetSpeed * 3.6f) +
-                          "km/h) | v=" + ToString(m_speed * 3.6f) + "km/h accel=" + ToString(accelIDM));
-    }
+    // constexpr float LOG_TARGET_SPEED_EPS = 0.5f / 3.6f;
+    // if (m_limitDebug.label != prevLimitDebug.label ||
+    //     std::fabs(m_limitDebug.targetSpeed - prevLimitDebug.targetSpeed) > LOG_TARGET_SPEED_EPS)
+    // {
+    //     // v/accel: 이 전환이 실제로 일어난 순간의 차 속도/가속도 -- 라벨이 "free"로 풀렸어도 저크제한 때문에
+    //     // 실제 가속도가 아직 음수(관성으로 계속 감속 중)인지 여기서 바로 보인다.
+    //     DebugConsole::Log(GetName() + ": limit " + prevLimitDebug.label + "(" + ToString(prevLimitDebug.targetSpeed * 3.6f) +
+    //                       "km/h) -> " + m_limitDebug.label + "(" + ToString(m_limitDebug.targetSpeed * 3.6f) +
+    //                       "km/h) | v=" + ToString(m_speed * 3.6f) + "km/h accel=" + ToString(accelIDM));
+    // }
 
-    // 라벨이 안 바뀐 채로(=위 로그 없이) 속도만 흘러내려 0 근처까지 처음 떨어지는 순간을 따로 잡는다 --
-    // 저크제한 관성으로 계속 감속 중인데 원인 라벨은 이미 다른 값으로 바뀌어 있는 경우를 위 로그만으론 못 잡는다.
-    constexpr float STALL_SPEED_EPS = 1.0f / 3.6f; // 1km/h
-    if (m_speed < STALL_SPEED_EPS && m_prevSpeedForStallLog >= STALL_SPEED_EPS)
-    {
-        DebugConsole::Log(GetName() + ": STALLED (v->0) under limit " + m_limitDebug.label + "(" +
-                          ToString(m_limitDebug.targetSpeed * 3.6f) + "km/h) accel=" + ToString(accelIDM) +
-                          " actualAccel=" + ToString(m_acceleration));
-    }
     m_prevSpeedForStallLog = m_speed;
 
     // IDM이 뱉은 목표가속도를 저크제한으로만 수렴
@@ -1467,7 +1840,7 @@ bool Car::IsParallelClearSensorVehicle() const
     Vec3 right(forward.GetZ(), 0.0f, -forward.GetX());
     Vec3 hitRight(hitForward.GetZ(), 0.0f, -hitForward.GetX());
     float hitLateralHalfExtent = std::fabs(right.Dot(hitForward)) * hit.halfLength +
-                                  std::fabs(right.Dot(hitRight)) * hit.halfWidth;
+                                 std::fabs(right.Dot(hitRight)) * hit.halfWidth;
     float lateralClearance = std::fabs((hit.center - GetBodyCenter()).Dot(right)) -
                              GetHalfWidth() - hitLateralHalfExtent;
     return lateralClearance >= PARALLEL_SENSOR_LATERAL_CLEARANCE;

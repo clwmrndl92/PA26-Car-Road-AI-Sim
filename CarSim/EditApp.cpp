@@ -106,19 +106,12 @@ void EditApp::UpdateDrag()
     float radius = CP_RADIUS;
     float snap = GRID_SNAP;
 
-    if (m_Selection == Selection::Lane && m_SelectedLane >= 0 && m_SelectedLane < (int)m_Lanes.size())
-    {
-        for (auto &p : m_Lanes[m_SelectedLane].points)
-            pts.push_back(&p);
-        radius = CP_RADIUS;
-        snap = LANE_GRID_SNAP;
-    }
-    else if (m_Selection == Selection::Road && m_SelectedRoad >= 0 && m_SelectedRoad < (int)m_Roads.size())
+    if (m_Selection == Selection::Road && m_SelectedRoad >= 0 && m_SelectedRoad < (int)m_Roads.size())
     {
         for (auto &p : m_Roads[m_SelectedRoad].referenceLine)
             pts.push_back(&p);
         radius = CP_RADIUS;
-        snap = LANE_GRID_SNAP;
+        snap = ROAD_GRID_SNAP;
     }
     else if (m_Selection == Selection::Node && m_SelectedNode >= 0 && m_SelectedNode < (int)m_Nodes.size())
     {
@@ -146,8 +139,6 @@ void EditApp::UpdateDrag()
     }
     else
     {
-        // Nothing (draggable) selected -- leave pts empty so the click-handling below falls
-        // straight through to lane-spline picking instead of bailing out early.
         radius = CP_RADIUS;
         snap = GRID_SNAP;
     }
@@ -177,11 +168,6 @@ void EditApp::UpdateDrag()
             }
         }
         m_DraggingPoint = best;
-
-        // Missed every draggable control point: try picking a lane by its debug spline
-        // instead, so clicking the red line selects that lane in the Lane window.
-        if (best == -1)
-            PickLaneUnderMouse(ray);
     }
 
     // Continue the drag: intersect the ray with the point's horizontal plane,
@@ -208,19 +194,6 @@ void EditApp::UpdateDrag()
 
 namespace
 {
-    // XZ-plane distance from a point to a segment (splines are authored flat on y = 0, so the
-    // vertical component only matters for the initial ray/plane intersection, not for picking).
-    float DistancePointToSegmentXZ(const XMFLOAT3 &p, const XMFLOAT3 &a, const XMFLOAT3 &b)
-    {
-        float abx = b.x - a.x, abz = b.z - a.z;
-        float apx = p.x - a.x, apz = p.z - a.z;
-        float lenSq = abx * abx + abz * abz;
-        float t = lenSq > 1e-6f ? std::clamp((apx * abx + apz * abz) / lenSq, 0.0f, 1.0f) : 0.0f;
-        float dx = p.x - (a.x + abx * t);
-        float dz = p.z - (a.z + abz * t);
-        return std::sqrt(dx * dx + dz * dz);
-    }
-
     // 참조선 control points를 스플라인으로 샘플링해 각 점을 진행방향 오른쪽으로 d만큼 민 폴리라인.
     // 오른쪽 = (dir.z, 0, -dir.x) (북쪽 진행 시 +X). d>0=오른쪽, d<0=왼쪽. y는 liftY만큼 띄운다.
     std::vector<XMFLOAT3> OffsetReferencePolyline(const std::vector<XMFLOAT3> &refPoints, float d, float liftY)
@@ -256,102 +229,14 @@ namespace
     }
 }
 
-bool EditApp::PickLaneUnderMouse(const Ray &ray)
-{
-    // Splines are rendered lifted to y = 0.1f (RebuildRenderObjects); intersect the ray with
-    // that plane to get a world-space click point, then find the nearest lane polyline to it.
-    constexpr float SPLINE_RENDER_Y = 0.1f;
-    constexpr float LANE_PICK_RADIUS = 1.0f;
-
-    if (fabsf(ray.direction.y) <= 1e-5f)
-        return false;
-
-    float t = (SPLINE_RENDER_Y - ray.origin.y) / ray.direction.y;
-    if (t <= 0.0f)
-        return false;
-
-    XMFLOAT3 clickPoint(ray.origin.x + t * ray.direction.x, SPLINE_RENDER_Y, ray.origin.z + t * ray.direction.z);
-
-    float bestDist = LANE_PICK_RADIUS;
-    int best = -1;
-    for (int i = 0; i < (int)m_Lanes.size(); ++i)
-    {
-        const EditLane &lane = m_Lanes[i];
-        if (lane.points.size() < 4)
-            continue;
-
-        std::vector<Vec3> cps;
-        cps.reserve(lane.points.size());
-        for (const auto &p : lane.points)
-            cps.push_back(ToVec3(p));
-
-        Spline spline(cps);
-        const std::vector<Vec3> &samples = spline.GetSplinePoints();
-        for (size_t s = 0; s + 1 < samples.size(); ++s)
-        {
-            float dist = DistancePointToSegmentXZ(clickPoint, ToXMFLOAT3(samples[s]), ToXMFLOAT3(samples[s + 1]));
-            if (dist < bestDist)
-            {
-                bestDist = dist;
-                best = i;
-            }
-        }
-    }
-
-    if (best < 0)
-        return false;
-
-    m_Selection = Selection::Lane;
-    m_SelectedLane = best;
-    return true;
-}
-
 void EditApp::RebuildRenderObjects()
 {
     m_PointRenders.clear();
-    m_SplineRenders.clear();
     m_RoadRenders.clear();
     m_MarkingRenders.clear();
     m_ObstacleRenders.clear();
     m_DynamicObstacleRenders.clear();
     m_DynamicObstaclePathRenders.clear();
-
-    // Every lane's spline (red) is always shown, even while editing something else.
-    for (const auto &lane : m_Lanes)
-    {
-        if (lane.points.size() < 4)
-            continue;
-
-        std::vector<Vec3> cps;
-        cps.reserve(lane.points.size());
-        for (const auto &p : lane.points)
-            cps.push_back(ToVec3(p));
-
-        Spline spline(cps);
-        const std::vector<Vec3> &samples = spline.GetSplinePoints();
-
-        std::vector<XMFLOAT3> line;
-        line.reserve(samples.size());
-        for (const Vec3 &s : samples)
-        {
-            XMFLOAT3 f = ToXMFLOAT3(s);
-            f.y += 0.1f; // lift slightly above the ground so it isn't z-fighting
-            line.push_back(f);
-        }
-        if (line.size() < 2)
-            continue;
-
-        Model *pLine = m_ModelManager.CreateFromGeometry("edit_spline_" + std::to_string(lane.id),
-                                                         Geometry::CreatePolyline(line));
-        // 주행 레인 = 빨강, 주차레인 = 시안 (한눈에 구분).
-        XMFLOAT4 splineColor = lane.isParking ? XMFLOAT4(0.0f, 0.85f, 1.0f, 1.0f)
-                                              : XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f);
-        pLine->materials[0].Set<XMFLOAT4>("$DiffuseColor", splineColor);
-        pLine->materials[0].Set<float>("$Opacity", 1.0f);
-
-        RenderObject &ro = m_SplineRenders.emplace_back();
-        ro.SetModel(pLine);
-    }
 
     // Every road's reference line (green) + its band/center marks (ribbons) are always shown.
     // Marks are placed by offsetting the reference spline laterally (right = +, left = -).
@@ -396,7 +281,7 @@ void EditApp::RebuildRenderObjects()
             }
         }
 
-        // 참조선: 초록 리본(폭 0.15).
+        // 참조선: 초록 리본(폭 0.15). 주차장 통로는 시안(주차레인과 같은 색, 한눈에 구분).
         std::vector<XMFLOAT3> refLine = OffsetReferencePolyline(road.referenceLine, 0.0f, 0.05f);
         if (refLine.size() >= 2)
         {
@@ -404,7 +289,8 @@ void EditApp::RebuildRenderObjects()
             if (!geo.vertices.empty())
             {
                 Model *pRef = m_ModelManager.CreateFromGeometry("edit_refline_" + std::to_string(road.id), geo);
-                pRef->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.1f, 0.9f, 0.3f, 1.0f));
+                XMFLOAT4 refColor = road.isParking ? XMFLOAT4(0.0f, 0.85f, 1.0f, 1.0f) : XMFLOAT4(0.1f, 0.9f, 0.3f, 1.0f);
+                pRef->materials[0].Set<XMFLOAT4>("$DiffuseColor", refColor);
                 pRef->materials[0].Set<float>("$Opacity", 1.0f);
                 m_RoadRenders.emplace_back().SetModel(pRef);
             }
@@ -649,12 +535,10 @@ void EditApp::RebuildRenderObjects()
         roPath.SetModel(pPath);
     }
 
-    // Selected lane or marking: control-point spheres (orange), on top of its always-shown
+    // Selected road or marking: control-point spheres (orange), on top of its always-shown
     // spline/ribbon.
     const std::vector<XMFLOAT3> *selectedPoints = nullptr;
-    if (m_Selection == Selection::Lane && m_SelectedLane >= 0 && m_SelectedLane < (int)m_Lanes.size())
-        selectedPoints = &m_Lanes[m_SelectedLane].points;
-    else if (m_Selection == Selection::Road && m_SelectedRoad >= 0 && m_SelectedRoad < (int)m_Roads.size())
+    if (m_Selection == Selection::Road && m_SelectedRoad >= 0 && m_SelectedRoad < (int)m_Roads.size())
         selectedPoints = &m_Roads[m_SelectedRoad].referenceLine;
     else if (m_Selection == Selection::Marking && m_SelectedMarking >= 0 && m_SelectedMarking < (int)m_Markings.size())
         selectedPoints = &m_Markings[m_SelectedMarking].points;
@@ -719,43 +603,13 @@ namespace
 void EditApp::SaveToJson()
 {
     // ordered_json: 일반 json은 키를 알파벳순으로 저장해 control_points가 항상 맨 앞으로 가버린다.
-    // 레인 오브젝트의 필드 순서(id -> road/park -> left/right -> control_points)를 그대로
-    // 지키기 위해 삽입 순서를 보존하는 ordered_json을 쓴다.
+    // 오브젝트의 필드 순서를 그대로 지키기 위해 삽입 순서를 보존하는 ordered_json을 쓴다.
     using json = nlohmann::ordered_json;
     json root;
 
     // float 부정확성이 dump에 남지 않도록 double로 반올림(SaveMarkingsToJson과 동일).
     auto round2 = [](double v)
     { return std::round(v * 100.0) / 100.0; };
-
-    root["lanes"] = json::array();
-    json parkingLanes = json::array();
-    for (const auto &l : m_Lanes)
-    {
-        json cps = json::array();
-        for (const auto &p : l.points)
-            cps.push_back({round2(p.x), round2(p.y), round2(p.z)});
-
-        json jl;
-        jl["id"] = l.id;
-        if (l.isParking)
-        {
-            // 주차레인: park(소속 Park 노드) + control_points만. 메인 "lanes"와 분리.
-            jl["park"] = l.park;
-            jl["control_points"] = cps;
-            parkingLanes.push_back(jl);
-        }
-        else
-        {
-            jl["road"] = l.road;
-            if (l.left >= 0)
-                jl["left"] = l.left;
-            if (l.right >= 0)
-                jl["right"] = l.right;
-            jl["control_points"] = cps;
-            root["lanes"].push_back(jl);
-        }
-    }
 
     root["nodes"] = json::array();
     for (const auto &n : m_Nodes)
@@ -802,8 +656,6 @@ void EditApp::SaveToJson()
         jd["speed"] = d.speed;
         root["dynamic_obstacles"].push_back(jd);
     }
-
-    root["parking_lanes"] = parkingLanes;
 
     auto markToJson = [&](const EditBoundaryMark &mk)
     {
@@ -870,6 +722,8 @@ void EditApp::SaveToJson()
         }
         if (r.junction != -1)
             jr["junction"] = r.junction;
+        if (r.isParking)
+            jr["parking"] = true;
         if (r.predecessor.valid || r.successor.valid)
         {
             json jlink;
@@ -941,7 +795,6 @@ void EditApp::LoadFromJson(const std::filesystem::path &path)
 
     m_Roads.clear();
     m_Junctions.clear();
-    m_Lanes.clear();
     m_Nodes.clear();
     m_Obstacles.clear();
     m_DynamicObstacles.clear();
@@ -1016,6 +869,7 @@ void EditApp::LoadFromJson(const std::filesystem::path &path)
             r.laneSections.push_back(std::move(sec));
         }
         r.junction = jr.value("junction", -1);
+        r.isParking = jr.value("parking", false);
         if (jr.contains("link"))
         {
             const auto &jlink = jr["link"];
@@ -1042,36 +896,6 @@ void EditApp::LoadFromJson(const std::filesystem::path &path)
             j.connections.push_back(std::move(c));
         }
         m_Junctions.push_back(std::move(j));
-    }
-
-    for (const auto &jl : root.value("lanes", nlohmann::json::array()))
-    {
-        EditLane l;
-        l.id = jl.value("id", -1);
-        l.road = jl.value("road", -1);
-        l.left = jl.value("left", -1);
-        l.right = jl.value("right", -1);
-        for (const auto &pt : jl.value("control_points", nlohmann::json::array()))
-        {
-            if (pt.is_array() && pt.size() >= 3)
-                l.points.push_back(XMFLOAT3(pt[0].get<float>(), pt[1].get<float>(), pt[2].get<float>()));
-        }
-        m_Lanes.push_back(std::move(l));
-    }
-
-    // 주차레인도 같은 m_Lanes에 담되 isParking=true로 구분(저장 시 다시 parking_lanes로 나간다).
-    for (const auto &jl : root.value("parking_lanes", nlohmann::json::array()))
-    {
-        EditLane l;
-        l.isParking = true;
-        l.id = jl.value("id", -1);
-        l.park = jl.value("park", -1);
-        for (const auto &pt : jl.value("control_points", nlohmann::json::array()))
-        {
-            if (pt.is_array() && pt.size() >= 3)
-                l.points.push_back(XMFLOAT3(pt[0].get<float>(), pt[1].get<float>(), pt[2].get<float>()));
-        }
-        m_Lanes.push_back(std::move(l));
     }
 
     for (const auto &jn : root.value("nodes", nlohmann::json::array()))
@@ -1138,9 +962,6 @@ void EditApp::LoadFromJson(const std::filesystem::path &path)
     }
 
     // Reset id counters so newly-added items don't collide with loaded ones.
-    m_NextLaneId = 1;
-    for (const auto &l : m_Lanes)
-        m_NextLaneId = std::max(m_NextLaneId, l.id + 1);
     m_NextRoadId = 1;
     for (const auto &r : m_Roads)
         m_NextRoadId = std::max(m_NextRoadId, r.id + 1);
@@ -1158,7 +979,6 @@ void EditApp::LoadFromJson(const std::filesystem::path &path)
         m_NextDynamicObstacleId = std::max(m_NextDynamicObstacleId, d.id + 1);
 
     m_Selection = Selection::None;
-    m_SelectedLane = -1;
     m_SelectedRoad = -1;
     m_SelectedBand = -1;
     m_SelectedNode = -1;
@@ -1283,7 +1103,6 @@ void EditApp::UpdateUI(float dt)
     GameApp::UpdateUI(dt);
 
     DrawToolbarWindow();
-    DrawLaneListWindow();
     DrawRoadListWindow();
     DrawJunctionListWindow();
     DrawNodeListWindow();
@@ -1291,9 +1110,7 @@ void EditApp::UpdateUI(float dt)
     DrawObstacleListWindow();
     DrawDynamicObstacleListWindow();
 
-    if (m_Selection == Selection::Lane)
-        DrawLaneEditWindow();
-    else if (m_Selection == Selection::Road)
+    if (m_Selection == Selection::Road)
         DrawRoadEditWindow();
     else if (m_Selection == Selection::Node)
         DrawNodeEditWindow();
@@ -1410,140 +1227,6 @@ void EditApp::DrawToolbarWindow()
     ImGui::End();
 }
 
-void EditApp::DrawLaneListWindow()
-{
-    if (ImGui::Begin("Lanes"))
-    {
-        if (ImGui::Button("Add Lane"))
-        {
-            EditLane lane;
-            lane.id = m_NextLaneId++;
-            m_Lanes.push_back(lane);
-            m_Selection = Selection::Lane;
-            m_SelectedLane = (int)m_Lanes.size() - 1;
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Add Parking Lane"))
-        {
-            EditLane lane;
-            lane.id = m_NextLaneId++;
-            lane.isParking = true;
-            m_Lanes.push_back(lane);
-            m_Selection = Selection::Lane;
-            m_SelectedLane = (int)m_Lanes.size() - 1;
-        }
-
-        ImGui::Separator();
-
-        for (int i = 0; i < (int)m_Lanes.size(); ++i)
-        {
-            char label[64];
-            if (m_Lanes[i].isParking)
-                snprintf(label, sizeof(label), "ParkLane %d (park %d)", m_Lanes[i].id, m_Lanes[i].park);
-            else
-                snprintf(label, sizeof(label), "Lane %d (road %d)", m_Lanes[i].id, m_Lanes[i].road);
-            bool selected = (m_Selection == Selection::Lane && i == m_SelectedLane);
-
-            ImGui::PushID(i);
-            float avail = ImGui::GetContentRegionAvail().x;
-            if (ImGui::Selectable(label, selected, 0, ImVec2(avail - 28.0f, 0.0f)))
-            {
-                m_Selection = Selection::Lane;
-                m_SelectedLane = i;
-            }
-            ImGui::SameLine();
-            bool erased = ImGui::SmallButton("X");
-            ImGui::PopID();
-
-            if (erased)
-            {
-                m_Lanes.erase(m_Lanes.begin() + i);
-                if (m_Selection == Selection::Lane)
-                {
-                    if (m_SelectedLane == i)
-                    {
-                        m_Selection = Selection::None;
-                        m_SelectedLane = -1;
-                    }
-                    else if (m_SelectedLane > i)
-                    {
-                        --m_SelectedLane;
-                    }
-                }
-                break;
-            }
-        }
-    }
-    ImGui::End();
-}
-
-void EditApp::DrawLaneEditWindow()
-{
-    if (m_SelectedLane < 0 || m_SelectedLane >= (int)m_Lanes.size())
-    {
-        m_Selection = Selection::None;
-        return;
-    }
-
-    EditLane &lane = m_Lanes[m_SelectedLane];
-    bool open = true;
-    if (ImGui::Begin("Lane Edit", &open))
-    {
-        ImGui::Text("Lane ID: %d", lane.id);
-        if (lane.isParking)
-        {
-            ImGui::TextDisabled("(parking lane)");
-            ImGui::InputInt("Park Node ID", &lane.park);
-        }
-        else
-        {
-            ImGui::InputInt("Road ID", &lane.road);
-            ImGui::InputInt("Left", &lane.left);
-            ImGui::InputInt("Right", &lane.right);
-        }
-
-        ImGui::Separator();
-
-        if (ImGui::Button("Add Control Point"))
-        {
-            XMFLOAT3 p(0.0f, 0.0f, 0.0f);
-            if (!lane.points.empty())
-            {
-                p = lane.points.back();
-                p.x += 2.0f; // offset so it doesn't overlap the previous one
-            }
-            lane.points.push_back(p);
-        }
-
-        ImGui::Text("Control Points: %d", (int)lane.points.size());
-        for (int i = 0; i < (int)lane.points.size(); ++i)
-        {
-            XMFLOAT3 &p = lane.points[i];
-            ImGui::PushID(i);
-
-            ImGui::Text("[%d]", i);
-            ImGui::SameLine();
-            float pos[3] = {p.x, p.y, p.z};
-            ImGui::SetNextItemWidth(180.0f);
-            if (ImGui::InputFloat3("##pos", pos))
-                p = XMFLOAT3(pos[0], pos[1], pos[2]);
-            ImGui::SameLine();
-            bool erased = ImGui::SmallButton("X");
-
-            ImGui::PopID();
-            if (erased)
-            {
-                lane.points.erase(lane.points.begin() + i);
-                break;
-            }
-        }
-    }
-    ImGui::End();
-
-    if (!open)
-        m_Selection = Selection::None;
-}
-
 void EditApp::DrawRoadListWindow()
 {
     if (ImGui::Begin("Roads"))
@@ -1562,8 +1245,11 @@ void EditApp::DrawRoadListWindow()
 
         for (int i = 0; i < (int)m_Roads.size(); ++i)
         {
-            char label[64];
-            snprintf(label, sizeof(label), "Road %d (%s)", m_Roads[i].id, m_Roads[i].name);
+            char label[80];
+            if (m_Roads[i].isParking)
+                snprintf(label, sizeof(label), "Road %d (%s) [parking]", m_Roads[i].id, m_Roads[i].name);
+            else
+                snprintf(label, sizeof(label), "Road %d (%s)", m_Roads[i].id, m_Roads[i].name);
             bool selected = (m_Selection == Selection::Road && i == m_SelectedRoad);
 
             ImGui::PushID(i);
@@ -1622,6 +1308,7 @@ void EditApp::DrawRoadEditWindow()
         ImGui::Text("Road ID: %d", road.id);
         ImGui::InputText("name", road.name, sizeof(road.name));
         ImGui::InputInt("speed limit", &road.speedLimit);
+        ImGui::Checkbox("parking aisle (excluded from normal driving)", &road.isParking);
 
         // 마킹 편집 공통 위젯: 타입/색/폭.
         auto editMark = [](const char *label, EditBoundaryMark &mk)
@@ -2360,8 +2047,6 @@ void EditApp::DrawScene()
         m_GridXY.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     if (m_ShowGridYZ)
         m_GridYZ.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
-    for (auto &spline : m_SplineRenders)
-        spline.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     for (auto &ro : m_DynamicObstaclePathRenders)
         ro.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     m_BasicEffect.SetRenderDefault();

@@ -33,7 +33,8 @@ private:
     void InitRoadColliders();     // 고가(높이>0) 레인을 따라 lane 폭만큼 static 도로 GameObject 생성
     void InitObstacleColliders(); // data.json의 obstacle 위치/크기/회전으로 static 큐브(차량과 충돌) 생성
     void InitDynamicObstacleRenders(); // dynamic_obstacles 개수만큼 로컬박스 렌더 생성(위치는 매프레임 UpdateScene이 갱신)
-    void SpawnCar(CarType type, CarPersonalityType personality);
+    // roaming=true면 목적지 없이 배회, false면 랜덤 목적지 노드를 잡아 그리로 주행.
+    void SpawnCar(CarType type, CarPersonalityType personality, bool roaming);
     void RemoveCar(const std::shared_ptr<Car> &car);
     void UpdateSignalMarkers();
     // 사용자 조작 차: 기존 것이 있으면 그 자리(위치/방향)에 새 차종으로 갈아끼우고 포커싱한다.
@@ -53,6 +54,7 @@ private:
     std::weak_ptr<Car> m_pPickedObject;
     int m_carIDCounter = 1;
     int m_SpawnPersonalityIndex = 0;
+    bool m_SpawnRoaming = false; // "Spawn Car" 창 체크박스: 체크 시 배회, 해제 시 랜덤 목적지 주행
 
     std::shared_ptr<Car> m_ManualCar;   // 사용자 조작 차 (없으면 nullptr)
     int m_ManualCarTypeIndex = 0;       // "User Car" 창 드롭다운 선택 인덱스

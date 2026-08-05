@@ -115,6 +115,9 @@ void RoadDataManager::BuildRoadData(const string &filePath)
         // junction(optional): 이 도로가 소속된 교차로 id(내부 연결도로). 없으면 -1.
         road->SetJunctionId(roadJson.value("junction", -1));
 
+        // parking(optional): 주차장 통로(진입로)면 true. 없으면 false(일반 도로).
+        road->SetParkingRoad(roadJson.value("parking", false));
+
         // link(optional): predecessor/successor 명시 링크(track A).
         if (roadJson.contains("link"))
         {
@@ -410,35 +413,51 @@ RoadPose RoadDataManager::GetClosestRoad(const Vec3 &position) const
     return GetClosestRoad(position, Vec3::sZero());
 }
 
+namespace
+{
+    // GetClosestRoad류가 공유하는 탐색 코어. wantParkingRoad로 일반 도로/주차장 통로 대상을 가른다.
+    RoadPose FindClosestRoadImpl(const vector<shared_ptr<Road>> &roads, const Vec3 &position, const Vec3 &heading,
+                                 bool wantParkingRoad)
+    {
+        RoadPose best;
+        best.dist = numeric_limits<float>::max();
+        Vec3 bestTangent = Vec3::sZero();
+        for (const shared_ptr<Road> &road : roads)
+        {
+            if (road->IsParkingRoad() != wantParkingRoad)
+                continue;
+            const Spline &ref = road->GetReferenceLine();
+            if (ref.GetSplinePoints().size() < 2)
+                continue;
+            float t = ref.GetSplinePosition(position);
+            Vec3 onRef = ref.GetPositionAt(t);
+            float dist = (onRef - position).Length();
+            if (dist < best.dist)
+            {
+                best.dist = dist;
+                best.road = road;
+                best.t = t;
+                // d 부호: 참조선 진행방향 오른쪽(+). right=(dir.z,0,-dir.x). 역주행 차로도 이 프레임을 그대로 쓴다.
+                Vec3 dir = ref.GetDirectionAt(t);
+                Vec3 rightN(dir.GetZ(), 0.0f, -dir.GetX());
+                best.d = (position - onRef).Dot(rightN);
+                bestTangent = dir;
+            }
+        }
+        if (best.dist == numeric_limits<float>::max())
+            return RoadPose{};
+
+        best.direction = bestTangent.Dot(heading) < 0.0f ? LaneDirection::Backward : LaneDirection::Forward;
+        return best;
+    }
+}
+
 RoadPose RoadDataManager::GetClosestRoad(const Vec3 &position, const Vec3 &heading) const
 {
-    RoadPose best;
-    best.dist = numeric_limits<float>::max();
-    Vec3 bestTangent = Vec3::sZero();
-    for (const shared_ptr<Road> &road : m_roads)
-    {
-        const Spline &ref = road->GetReferenceLine();
-        if (ref.GetSplinePoints().size() < 2)
-            continue;
-        float t = ref.GetSplinePosition(position);
-        Vec3 onRef = ref.GetPositionAt(t);
-        float dist = (onRef - position).Length();
-        if (dist < best.dist)
-        {
-            best.dist = dist;
-            best.road = road;
-            best.t = t;
-            // d 부호: 참조선 진행방향 오른쪽(+). right=(dir.z,0,-dir.x). 역주행 차로도 이 프레임을 그대로 쓴다.
-            Vec3 dir = ref.GetDirectionAt(t);
-            Vec3 rightN(dir.GetZ(), 0.0f, -dir.GetX());
-            best.d = (position - onRef).Dot(rightN);
-            bestTangent = dir;
-        }
-    }
-    if (best.dist == numeric_limits<float>::max())
-        return RoadPose{};
+    RoadPose best = FindClosestRoadImpl(m_roads, position, heading, /*wantParkingRoad=*/false);
+    if (best.road == nullptr)
+        return best;
 
-    best.direction = bestTangent.Dot(heading) < 0.0f ? LaneDirection::Backward : LaneDirection::Forward;
     // 그 방향 차로가 없는 단방향 도로면 있는 쪽으로 맞춘다 -- 방향을 안 적은 데이터에서 역주행으로 새지 않게.
     if (GetDrivingBands(best.road, best.direction).empty())
     {
@@ -447,6 +466,12 @@ RoadPose RoadDataManager::GetClosestRoad(const Vec3 &position, const Vec3 &headi
             best.direction = other;
     }
     return best;
+}
+
+RoadPose RoadDataManager::GetClosestParkingRoad(const Vec3 &position, const Vec3 &heading) const
+{
+    // 주차장 통로는 driving 밴드 개념이 없으므로(참조선 자체가 통로) 위 방향 보정은 하지 않는다.
+    return FindClosestRoadImpl(m_roads, position, heading, /*wantParkingRoad=*/true);
 }
 
 Spline RoadDataManager::BuildOffsetSpline(const shared_ptr<Road> &road, float d, LaneDirection direction) const
@@ -727,6 +752,19 @@ shared_ptr<RoadNode> RoadDataManager::GetRandomDestNode() const
     for (const auto &[id, node] : m_nodes)
     {
         if (node->nodeType != RoadNodeType::ParkSpot && node->nodeType != RoadNodeType::TrafficLight)
+            candidates.push_back(node);
+    }
+    if (candidates.empty())
+        return nullptr;
+
+    return candidates[rand() % candidates.size()];
+}
+shared_ptr<RoadNode> RoadDataManager::GetRandomParkNode() const
+{
+    vector<shared_ptr<RoadNode>> candidates;
+    for (const auto &[id, node] : m_nodes)
+    {
+        if (node->nodeType == RoadNodeType::Park)
             candidates.push_back(node);
     }
     if (candidates.empty())

@@ -22,7 +22,6 @@ private:
     enum class Selection
     {
         None,
-        Lane,
         Road,
         Node,
         Marking,
@@ -41,19 +40,6 @@ private:
         White,
         Yellow,
         Gray
-    };
-
-    struct EditLane
-    {
-        int id = -1;
-        int road = -1;
-        int left = -1;
-        int right = -1;
-        // 주차레인이면 true: road/left/right 대신 park(소속 Park 노드 id)를 쓰고, 저장 시 "lanes"가
-        // 아니라 "parking_lanes" 배열로 나간다 (런타임 RoadDataManager의 메인/주차 분리와 일치).
-        bool isParking = false;
-        int park = -1;
-        std::vector<DirectX::XMFLOAT3> points;
     };
 
     enum class BoundaryMarkType
@@ -120,7 +106,8 @@ private:
         bool hasCenterMark = false;
         EditBoundaryMark centerMark; // 참조선 위 중앙선 마킹
         std::vector<EditLaneSection> laneSections;
-        int junction = -1; // -1=일반 도로, 아니면 소속 junction(내부 연결도로)
+        int junction = -1;      // -1=일반 도로, 아니면 소속 junction(내부 연결도로)
+        bool isParking = false; // 주차장 통로(진입로)면 true. 저장 시 "parking":true (기본값 false는 안 적음).
         EditRoadLink predecessor;
         EditRoadLink successor;
     };
@@ -170,8 +157,8 @@ private:
         float redDuration = 12.0f;
     };
 
-    // Freehand road-marking line (lane paint, median, shoulder), independent of EditLane's
-    // topology data. Purely visual, saved to its own JSON (see SaveMarkingsToJson).
+    // Freehand road-marking line (lane paint, median, shoulder), independent of EditRoad's
+    // band/lane_sections data. Purely visual, saved to its own JSON (see SaveMarkingsToJson).
     struct EditMarking
     {
         int id = -1;
@@ -208,8 +195,6 @@ private:
 
     // UI windows
     void DrawToolbarWindow();
-    void DrawLaneListWindow();
-    void DrawLaneEditWindow();
     void DrawRoadListWindow();
     void DrawRoadEditWindow();
     void DrawJunctionListWindow();
@@ -224,23 +209,18 @@ private:
 
     // Interaction / rendering
     void UpdateDrag();
-    // 클릭 지점이 어떤 레인의 디버그 스플라인(빨간 선)에 충분히 가까우면 그 레인을 선택한다.
-    // 선택되면 true (UpdateDrag가 그 결과로 드래그를 새로 시작하지 않도록).
-    bool PickLaneUnderMouse(const Ray &ray);
     void RebuildRenderObjects();
     void SaveToJson();
     void LoadFromJson(const std::filesystem::path &path);
     void SaveMarkingsToJson();
     void LoadMarkingsFromJson(const std::filesystem::path &path);
 
-    std::vector<EditLane> m_Lanes;
     std::vector<EditRoad> m_Roads;
     std::vector<EditJunction> m_Junctions;
     std::vector<EditNode> m_Nodes;
     std::vector<EditMarking> m_Markings;
     std::vector<EditObstacle> m_Obstacles;
     std::vector<EditDynamicObstacle> m_DynamicObstacles;
-    int m_NextLaneId = 1;
     int m_NextRoadId = 1;
     int m_NextJunctionId = 1;
     int m_NextNodeId = 1;
@@ -249,7 +229,6 @@ private:
     int m_NextDynamicObstacleId = 1;
 
     Selection m_Selection = Selection::None;
-    int m_SelectedLane = -1;     // index into m_Lanes when m_Selection == Lane
     int m_SelectedRoad = -1;     // index into m_Roads when m_Selection == Road
     int m_SelectedBand = -1;     // index into selected road's section 0 bands (Road edit)
     int m_SelectedNode = -1;     // index into m_Nodes when m_Selection == Node
@@ -262,18 +241,17 @@ private:
     std::string m_LastMarkingsSavePath;
 
     std::vector<RenderObject> m_PointRenders;    // control-point & node spheres
-    std::vector<RenderObject> m_SplineRenders;   // red spline polylines (one per lane, always shown)
     std::vector<RenderObject> m_RoadRenders;     // reference lines (green) + band marks (ribbons), always shown
     std::vector<RenderObject> m_MarkingRenders;  // marking-line ribbons (solid/dashed), always shown
     std::vector<RenderObject> m_ObstacleRenders; // blue obstacle rectangle outlines, always shown
     std::vector<RenderObject> m_DynamicObstacleRenders;     // orange dynamic-obstacle footprint quads, always shown
-    std::vector<RenderObject> m_DynamicObstaclePathRenders; // start~end path lines (line topology, drawn with SetRenderLines like m_SplineRenders)
+    std::vector<RenderObject> m_DynamicObstaclePathRenders; // start~end path lines (line topology, drawn with SetRenderLines)
 
     static constexpr float CP_RADIUS = 0.4f;
     static constexpr float NODE_RADIUS = 0.5f;
     static constexpr float OBSTACLE_MARKER_RADIUS = 0.5f;
     static constexpr float GRID_SNAP = 1.0f;
-    static constexpr float LANE_GRID_SNAP = 0.5f;
+    static constexpr float ROAD_GRID_SNAP = 0.5f;
     static constexpr float MARKING_GRID_SNAP = 0.05f;
 };
 
