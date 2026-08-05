@@ -20,6 +20,7 @@ namespace VehicleCollision
         Vec3 center;
         float halfLength;
         float halfWidth;
+        float height = 1.5f;
         float headingRad = 0.0f;
         float speed = 0.0f; // headingRad 방향 기준 스칼라 속도. 정적 장애물은 0(기본값)로 둔다.
         ObstacleType type = ObstacleType::Static;

@@ -642,6 +642,7 @@ void EditApp::SaveToJson()
         json jo;
         jo["position"] = {o.position.x, o.position.y, o.position.z};
         jo["size"] = {o.length, o.width};
+        jo["height"] = o.height;
         jo["rotation"] = o.rotation;
         root["obstacles"].push_back(jo);
     }
@@ -935,6 +936,7 @@ void EditApp::LoadFromJson(const std::filesystem::path &path)
         {
             o.length = size[0].get<float>();
             o.width = size[1].get<float>();
+            o.height = jo.value("height", 1.5f);
         }
         o.rotation = jo.value("rotation", 0.0f);
         m_Obstacles.push_back(o);
@@ -1912,6 +1914,7 @@ void EditApp::DrawObstacleEditWindow()
 
         ImGui::DragFloat("Length (heading dir)", &obstacle.length, 0.1f, 0.1f, 100.0f, "%.2f");
         ImGui::DragFloat("Width", &obstacle.width, 0.1f, 0.1f, 100.0f, "%.2f");
+        ImGui::DragFloat("Height", &obstacle.height, 0.1f, 0.1f, 100.0f, "%.2f");
         ImGui::DragFloat("Rotation (deg)", &obstacle.rotation, 1.0f, -180.0f, 180.0f, "%.1f");
         ImGui::TextDisabled("(0deg = +X, same atan2(z,x) convention as ReedsShepp)");
     }

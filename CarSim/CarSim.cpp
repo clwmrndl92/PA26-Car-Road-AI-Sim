@@ -887,15 +887,15 @@ void CarSim::InitObstacleColliders()
 
         Model *pCube = m_ModelManager.CreateFromGeometry(
             "obstacle_cube" + std::to_string(obstacleIndex++),
-            Geometry::CreateBox(obstacle.halfWidth * 2.0f, OBSTACLE_HEIGHT, obstacle.halfLength * 2.0f));
+            Geometry::CreateBox(obstacle.halfWidth * 2.0f, obstacle.height, obstacle.halfLength * 2.0f));
         pCube->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.0f, 0.4f, 1.0f, 1.0f));
         pCube->materials[0].Set<float>("$Opacity", 1.0f);
 
         auto cube = std::make_shared<GameObject>();
         cube->SetName("Obstacle" + std::to_string(obstacleIndex));
         cube->SetModel(pCube);
-        cube->SetPosition(obstacle.center + Vec3(0.0f, OBSTACLE_HEIGHT * 0.5f, 0.0f)); // 바닥면을 center.y에 맞춘다
-        cube->Init(JPH::Vec3(obstacle.halfWidth, OBSTACLE_HEIGHT * 0.5f, obstacle.halfLength), Rigidbody::Type::Static);
+        cube->SetPosition(obstacle.center + Vec3(0.0f, obstacle.height * 0.5f, 0.0f)); // 바닥면을 center.y에 맞춘다
+        cube->Init(JPH::Vec3(obstacle.halfWidth, obstacle.height * 0.5f, obstacle.halfLength), Rigidbody::Type::Static);
         cube->SetRotation(QuatFromForward(forward));
         m_GameObjects.push_back(cube);
     }

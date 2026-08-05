@@ -178,6 +178,7 @@ private:
         DirectX::XMFLOAT3 position{0.0f, 0.0f, 0.0f};
         float length = 4.0f;
         float width = 2.0f;
+        float height = 1.5f;
         float rotation = 0.0f;
     };
 
