@@ -163,7 +163,9 @@ public:
     // 주차장 통로(Road::IsParkingRoad)는 일반 주행용 탐색이라 대상에서 제외 -- roaming/routing이 주차장으로 새지 않게.
     RoadPose GetClosestRoad(const Vec3 &position, const Vec3 &heading) const;
     // GetClosestRoad와 같되 주차장 통로만 대상으로 찾는다. 주차 시퀀스(FindBestParkingSpline/출차)가 쓴다.
-    RoadPose GetClosestParkingRoad(const Vec3 &position, const Vec3 &heading) const;
+    // allowedRoadIds가 비어있지 않으면 그 id들만 후보로 본다 -- 주차장이 여럿일 때 남의 통로를 잡지 않게.
+    RoadPose GetClosestParkingRoad(const Vec3 &position, const Vec3 &heading,
+                                   const vector<int> &allowedRoadIds = {}) const;
     // road 링크(successor) 그래프 A*. 노드는 (road, 진행방향) -- 왕복 도로는 방향마다 다음 road가 다르다.
     // 반환 = start~dest road 시퀀스(포함). 실패 시 빈 벡터.
     vector<RoadRef> FindPath(const RoadRef &start, const shared_ptr<Road> &destRoad) const;
@@ -275,6 +277,7 @@ struct RoadNode
     Vec3 direction;
     RoadNodeType nodeType = RoadNodeType::Unkown;
     vector<weak_ptr<RoadNode>> children; // 예: Park 노드가 자기 소유의 ParkSpot 노드들을 참조
+    vector<int> parkingRoadIds;          // park 노드 전용: 이 주차장에 속한 통로(Road::IsParkingRoad) road id들
     float signalPhaseOffset = 0.0f;      // traffic_light 노드 전용
     // traffic_light 노드 전용: 이 phase가 실제로 막는 "다음 road"(교차로 connecting road, 예: 직진/좌회전) id들.
     // 비어있으면 접근도로(roads)에서 나가는 모든 이동에 적용(하위호환 기본값). 목록에 없는 이동(예: 우회전)은

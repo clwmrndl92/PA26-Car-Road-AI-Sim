@@ -13,7 +13,7 @@
     { "id": 11, "position": [-115.0, 0.0, 0.0], "direction": [0.0, 0.0, 1.0], "type": "traffic_light", "roads": [209, 211], "movements": [129, 128, 127], "green_duration": 21.0 },
     { "id": 12, "position": [103.0, 0.0, -3.0], "direction": [1.0, 0.0, 0.0], "type": "traffic_light", "roads": [7], "phase_offset": 12.0, "movements": [131], "green_duration": 9.0, "red_duration": 24.0 },
     { "id": 13, "position": [115.0, 0.0, 0.0], "direction": [0.0, 0.0, 1.0], "type": "traffic_light", "roads": [213, 215], "movements": [135, 134, 133], "green_duration": 21.0 },
-    { "id": 100, "position": [-73.0, 0.0, 7.0], "direction": [-1.0, 0.0, 0.0], "type": "park", "child": [101, 102, 103, 103], "roads": [501, 502, 503, 504] },
+    { "id": 100, "position": [-67.0, 0.0, 7.0], "direction": [-1.0, 0.0, 0.0], "type": "park", "child": [101, 102, 103, 104], "roads": [501, 502, 503, 504, 505] },
     { "id": 101, "position": [-66.0, 0.0, 50.0], "direction": [0.0, 0.0, -1.0], "type": "park_spot" },
     { "id": 102, "position": [-60.0, 0.0, 50.0], "direction": [0.0, 0.0, -1.0], "type": "park_spot" },
     { "id": 103, "position": [-54.0, 0.0, 50.0], "direction": [0.0, 0.0, -1.0], "type": "park_spot" },
@@ -1193,12 +1193,13 @@
         {
           "s_start": 0.0,
           "bands": [
-            { "center_offset": -2.0, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
+            { "center_offset": -2.0, "width": 3.5, "type": "driving", "speed_limit": 40, "direction": "backward", "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
             { "center_offset": 2.0, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
           ]
         }
       ],
-      "parking": true
+      "parking": true,
+      "link": { "successor": { "type": "road", "id": 502, "contact": "start" } }
     },
     {
       "id": 502,
@@ -1207,10 +1208,11 @@
       "reference_line": [
         [-73.0, 0.0, 32.5],
         [-68.5, 0.0, 32.5],
-        [-41.0, 0.0, 32.5],
+        [-42.5, 0.0, 32.5],
         [-40.0, 0.0, 32.5]
       ],
       "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 1.75, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
+      "parking": true,
       "link": { "predecessor": { "type": "road", "id": 501, "contact": "end" }, "successor": { "type": "road", "id": 503, "contact": "start" } }
     },
     {
@@ -1220,10 +1222,11 @@
       "reference_line": [
         [-42.0, 0.0, 27.5],
         [-42.0, 0.0, 32.5],
-        [-42.0, 0.0, 46.5],
+        [-42.0, 0.0, 44.5],
         [-42.0, 0.0, 51.0]
       ],
-      "lane_sections": [{ "s_start": 0.0, "bands": [] }],
+      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 0.0, "width": 3.5, "type": "driving", "speed_limit": 15, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
+      "parking": true,
       "link": { "predecessor": { "type": "road", "id": 502, "contact": "end" }, "successor": { "type": "road", "id": 504, "contact": "start" } }
     },
     {
@@ -1236,8 +1239,23 @@
         [-68.5, 0.0, 46.0],
         [-72.5, 0.0, 46.0]
       ],
-      "lane_sections": [{ "s_start": 0.0, "bands": [] }],
-      "link": { "predecessor": { "type": "road", "id": 503, "contact": "end" }, "successor": { "type": "road", "id": 501, "contact": "end" } }
+      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 0.0, "width": 3.5, "type": "driving", "speed_limit": 15, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
+      "parking": true,
+      "link": { "predecessor": { "type": "road", "id": 503, "contact": "end" }, "successor": { "type": "road", "id": 505, "contact": "start" } }
+    },
+    {
+      "id": 505,
+      "name": "parking_lot5",
+      "speed_limit": 15,
+      "reference_line": [
+        [-69.0, 0.0, 46.0],
+        [-71.0, 0.0, 43.5],
+        [-75.0, 0.0, 29.0],
+        [-75.0, 0.0, 27.5]
+      ],
+      "lane_sections": [{ "s_start": 0.0, "bands": [{ "center_offset": 0.0, "width": 3.5, "type": "driving", "speed_limit": 15, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }] }],
+      "parking": true,
+      "link": { "predecessor": { "type": "road", "id": 504, "contact": "end" }, "successor": { "type": "road", "id": 501, "contact": "end" } }
     }
   ],
   "junctions": [

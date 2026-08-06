@@ -228,15 +228,20 @@ void RoadDataManager::BuildRoadData(const string &filePath)
         }
     }
 
-    // roads(optional, traffic_light 전용): 신호가 걸린 road id들 -> 노드 역참조 맵.
+    // roads(optional): traffic_light면 신호가 걸린 road id들 -> 노드 역참조 맵, park면 이 주차장의 통로 목록.
     for (const nlohmann::json &nodeJson : root.value("nodes", nlohmann::json::array()))
     {
         auto nodeIt = m_nodes.find(nodeJson.value("id", 0));
-        if (nodeIt == m_nodes.end() || nodeIt->second->nodeType != RoadNodeType::TrafficLight)
+        if (nodeIt == m_nodes.end())
             continue;
 
         for (const nlohmann::json &roadIdJson : nodeJson.value("roads", nlohmann::json::array()))
-            m_roadSignals[roadIdJson.get<int>()].push_back(nodeIt->second);
+        {
+            if (nodeIt->second->nodeType == RoadNodeType::TrafficLight)
+                m_roadSignals[roadIdJson.get<int>()].push_back(nodeIt->second);
+            else if (nodeIt->second->nodeType == RoadNodeType::Park)
+                nodeIt->second->parkingRoadIds.push_back(roadIdJson.get<int>());
+        }
     }
 
     // obstacles(임시): 실제 인식 파이프라인이 들어오기 전까지, 손으로 채운 사각형 장애물 목록.
@@ -417,8 +422,9 @@ RoadPose RoadDataManager::GetClosestRoad(const Vec3 &position) const
 namespace
 {
     // GetClosestRoad류가 공유하는 탐색 코어. wantParkingRoad로 일반 도로/주차장 통로 대상을 가른다.
+    // allowedRoadIds가 비어있지 않으면 그 안의 road만 후보로 본다.
     RoadPose FindClosestRoadImpl(const vector<shared_ptr<Road>> &roads, const Vec3 &position, const Vec3 &heading,
-                                 bool wantParkingRoad)
+                                 bool wantParkingRoad, const vector<int> &allowedRoadIds = {})
     {
         RoadPose best;
         best.dist = numeric_limits<float>::max();
@@ -426,6 +432,9 @@ namespace
         for (const shared_ptr<Road> &road : roads)
         {
             if (road->IsParkingRoad() != wantParkingRoad)
+                continue;
+            if (!allowedRoadIds.empty() &&
+                find(allowedRoadIds.begin(), allowedRoadIds.end(), road->GetId()) == allowedRoadIds.end())
                 continue;
             const Spline &ref = road->GetReferenceLine();
             if (ref.GetSplinePoints().size() < 2)
@@ -469,10 +478,11 @@ RoadPose RoadDataManager::GetClosestRoad(const Vec3 &position, const Vec3 &headi
     return best;
 }
 
-RoadPose RoadDataManager::GetClosestParkingRoad(const Vec3 &position, const Vec3 &heading) const
+RoadPose RoadDataManager::GetClosestParkingRoad(const Vec3 &position, const Vec3 &heading,
+                                                const vector<int> &allowedRoadIds) const
 {
     // 주차장 통로는 driving 밴드 개념이 없으므로(참조선 자체가 통로) 위 방향 보정은 하지 않는다.
-    return FindClosestRoadImpl(m_roads, position, heading, /*wantParkingRoad=*/true);
+    return FindClosestRoadImpl(m_roads, position, heading, /*wantParkingRoad=*/true, allowedRoadIds);
 }
 
 Spline RoadDataManager::BuildOffsetSpline(const shared_ptr<Road> &road, float d, LaneDirection direction) const

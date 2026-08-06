@@ -47,6 +47,47 @@ namespace
         return (position - onRef).Dot(rightN);
     }
 
+    // road 위를 달릴 오프셋. 밴드가 있으면 그 중심, 없으면(주차장 통로) 참조선 자체가 주행선이므로 0.
+    // 통로에서 투영 잔차를 그대로 물면 코너를 돌 때마다 통로 중심에서 밀린 채로 달린다.
+    float RoadDriveOffset(const RoadRef &road, const Vec3 &position)
+    {
+        if (RoadDataManager::Get().GetDrivingBands(road.road, road.direction).empty())
+            return 0.0f;
+        return NearestBandOffset(road, ComputeReferenceOffset(road.road->GetReferenceLine(), position));
+    }
+
+    // 한쪽 방향에만 driving 밴드가 있는 도로(일방통행 통로)면 그 방향으로 강제한다. 주차칸에서 나올 때처럼
+    // 헤딩이 도로와 거의 직각이면 헤딩 dot의 부호가 흔들려 루프를 거꾸로 도는 경로가 나온다.
+    LaneDirection ResolveOneWayDirection(const shared_ptr<Road> &road, LaneDirection fallback)
+    {
+        bool hasForward = !RoadDataManager::Get().GetDrivingBands(road, LaneDirection::Forward).empty();
+        bool hasBackward = !RoadDataManager::Get().GetDrivingBands(road, LaneDirection::Backward).empty();
+        if (hasForward == hasBackward)
+            return fallback; // 양방향(501 같은 진입/출차 겸용) 또는 방향 정보 없음
+        return hasForward ? LaneDirection::Forward : LaneDirection::Backward;
+    }
+
+    // d에 가장 가까운 driving 밴드를 가진 진행방향. 도로 옆(주차장 출구 등)에서 합류할 때 '내 쪽 차로'를 고른다
+    // -- 반대편 차로를 고르면 중앙선을 넘어 가로질러야 한다.
+    LaneDirection NearSideDirection(const shared_ptr<Road> &road, float d)
+    {
+        LaneDirection best = LaneDirection::Forward;
+        float bestGap = std::numeric_limits<float>::max();
+        for (LaneDirection direction : {LaneDirection::Forward, LaneDirection::Backward})
+        {
+            const LaneBand *band = RoadDataManager::Get().FindNearestBand(road, d, direction);
+            if (band == nullptr)
+                continue;
+            float gap = std::fabs(d - band->centerOffset);
+            if (gap < bestGap)
+            {
+                bestGap = gap;
+                best = direction;
+            }
+        }
+        return best;
+    }
+
     // 장애물의 횡오프셋 d와, 도로 우법선 방향으로 본 반폭을 함께 구한다(투영 한 번만 하려고 묶음).
     // 반폭을 외접원 반지름으로 잡으면 안 된다 -- 도로와 나란한 긴 장애물이 옆 차로까지 막은 걸로 나온다.
     void ProjectObstacle(const Spline &referenceLine, const VehicleCollision::Obstacle &obstacle,
@@ -154,6 +195,7 @@ void Car::UpdateMode()
 {
     const char *reason = "";
     UpdateFindPath();
+    TryBeginLotCruise(); // park 노드에 닿았으면 RS 직행 대신 통로를 따라 스팟 앞까지 마저 주행한다
     Mode next = DecideNextMode(&reason);
     if (next != m_mode)
     {
@@ -230,17 +272,10 @@ Car::Mode Car::DecideNextMode(const char **reason) const
         if (m_roaming)
             return Mode::Drive; // 배회 모드: 목적지/도착 판정 없이 계속 주행
 
-        bool arrived = false;
-        if (m_destRoad != nullptr)
-        {
-            Vec3 destEnd = RoadDataManager::Get().GetTravelEnd(m_destRoad, m_destDir);
-            Vec3 projectedPosition = m_destRoad->GetReferenceLine().GetLookaheadPoint(GetPosition(), 0.0f);
-            arrived = (destEnd - projectedPosition).Length() < ARRIVE_DISTANCE;
-            // Park 노드는 도로 끝이 아니라 통로 중간에 있을 수 있어 노드 반경으로도 도착을 인정한다.
-            if (m_pendingParkNode != nullptr)
-                arrived |= (m_pendingParkNode->position - GetPosition()).Length() < PARK_ARRIVE_DISTANCE;
-        }
+        if (m_lotEntryHold)
+            return Mode::Drive; // 주차장 입구에서 멈추는 중 -- 다 서면 TryBeginLotCruise가 통로 주행을 연다
 
+        bool arrived = IsArrivedAtDest();
         if (arrived && GetParkTargetNode() != nullptr)
         {
             *reason = "arrived at destination";
@@ -268,6 +303,8 @@ void Car::BeginSegment(std::unique_ptr<VehicleSegment> segment)
 void Car::OnModeEnter(Mode prev)
 {
     m_currentLeader = nullptr; // 주행을 그만둔 차가 남긴 리더 관계로 남들이 계속 나를 빼가지 않게
+    if (m_mode != Mode::Drive)
+        m_lotCruise = false; // 통로 주행은 Drive 안에서만 의미 있다(Park로 넘어가면 이후는 RS 입차)
 
     if (m_mode == Mode::Drive)
     {
@@ -408,6 +445,160 @@ void Car::MaintainRoamingPath()
 
 #pragma region Park
 
+bool Car::IsArrivedAtDest() const
+{
+    if (m_destRoad == nullptr)
+        return false;
+
+    // 통로 주행은 목적지 통로의 끝이 아니라 스팟 앞 P점이 종점이다 -- 끝까지 가면 스팟을 지나쳐 버린다.
+    if (m_lotCruise)
+        return (m_lotStopPos - GetPosition()).Length() < ARRIVE_DISTANCE;
+
+    Vec3 destEnd = RoadDataManager::Get().GetTravelEnd(m_destRoad, m_destDir);
+    Vec3 projectedPosition = m_destRoad->GetReferenceLine().GetLookaheadPoint(GetPosition(), 0.0f);
+    bool arrived = (destEnd - projectedPosition).Length() < ARRIVE_DISTANCE;
+    // Park 노드는 도로 끝이 아니라 통로 중간에 있을 수 있어 노드 반경으로도 도착을 인정한다.
+    if (m_pendingParkNode != nullptr)
+        arrived |= (m_pendingParkNode->position - GetPosition()).Length() < PARK_ARRIVE_DISTANCE;
+    return arrived;
+}
+
+void Car::TryBeginLotCruise()
+{
+    m_lotEntryHold = false;
+    if (m_mode != Mode::Drive || m_roaming || m_lotCruise || m_currentRoad == nullptr)
+        return;
+    if (m_pendingParkNode == nullptr || m_pendingParkNode->parkingRoadIds.empty())
+        return; // 통로가 없는 목적지(길가 등)는 기존대로 RS로 바로 붙는다
+    if (!IsArrivedAtDest())
+        return;
+
+    // 주차장 진입 일단정지: 통로는 좁고 제한속도가 낮아, 입구에서 완전히 선 뒤에 들어간다.
+    // 감속 자체는 ScanRoadSpeedConstraints의 "lotEntry" 정지 제약이 하고 여기선 다 설 때까지 기다리기만 한다.
+    if (m_speed > STOPPED_SPEED)
+    {
+        m_lotEntryHold = true; // 서는 동안 Drive 유지 -- 안 걸면 도착 판정이 바로 Park(RS 직행)로 넘겨버린다
+        return;
+    }
+
+    BeginLotCruise(); // 실패하면 m_pendingParkNode가 그대로라 곧바로 기존 Park(RS 직행) 경로로 넘어간다
+}
+
+// 주차장 입구에 도착한 시점의 목적지 갈아끼우기: 스팟을 예약하고, 그 스팟이 접한 통로까지 주차장 안
+// 통로망을 A*로 이어 Drive를 계속한다. RS는 도로를 무시한 직행이라 통로를 안 타고 주차장을 가로지른다.
+bool Car::BeginLotCruise()
+{
+    RoadDataManager &roadData = RoadDataManager::Get();
+    shared_ptr<RoadNode> lotNode = m_pendingParkNode;
+    const vector<int> &lotRoads = lotNode->parkingRoadIds;
+
+    shared_ptr<RoadNode> spot = m_SimState->TryReserveParkSpot(lotNode->id);
+    if (spot == nullptr)
+        return false; // 빈 자리 없음 -- 포기/재시도 판단은 기존 BeginParkPlan이 한다
+
+    RoadPose target = roadData.GetClosestParkingRoad(spot->position, spot->direction, lotRoads);
+    RoadPose entry = roadData.GetClosestParkingRoad(GetPosition(), GetForwardAxis(), lotRoads);
+    vector<RoadRef> path;
+    if (target.road != nullptr && entry.road != nullptr)
+    {
+        // 진입 통로가 곧 목표 통로면 FindPath가 방향을 안 가리고 바로 반환한다 -- 스팟이 앞에 오는 쪽으로 직접 정한다.
+        if (entry.road == target.road)
+        {
+            const Spline &ref = entry.road->GetReferenceLine();
+            float toSpot = ref.GetSplinePosition(spot->position) - ref.GetSplinePosition(GetPosition());
+            entry.direction = toSpot < 0.0f ? LaneDirection::Backward : LaneDirection::Forward;
+        }
+        entry.direction = ResolveOneWayDirection(entry.road, entry.direction);
+        // 양방향 통로(501 등)는 헤딩으로 고른 쪽이 틀릴 수 있다 -- 그쪽부터 두 방향 다 본다.
+        for (LaneDirection dir : {entry.direction, GetOppositeDirection(entry.direction)})
+        {
+            path = roadData.FindPath(RoadRef{entry.road, dir}, target.road);
+            if (!path.empty())
+                break;
+        }
+    }
+    if (path.empty())
+    {
+        m_SimState->ReleaseParkSpot(spot->id);
+        return false;
+    }
+
+    m_parkSpot = spot;
+    m_parkNodeId = lotNode->id;
+    m_triedParkSpotIds.clear();
+    m_pendingParkNode = nullptr;
+
+    // P는 통로를 '어느 방향으로' 타고 들어가느냐로 정해진다 -- 경로가 정한 진행방향을 그대로 쓴다.
+    const Spline &targetLine = target.road->GetReferenceLine();
+    m_lotStopPos = targetLine.GetLookaheadPoint(spot->position, PARK_PRE_LEAD_DISTANCE * GetTravelSign(path.back().direction));
+    m_lotCruise = true;
+
+    m_path = std::move(path);
+    m_pathIndex = 0;
+    m_destRoad = target.road;
+    m_destDir = m_path.back().direction;
+    SetCurrentRoad(m_path[0].road, RoadDriveOffset(m_path[0], GetPosition()), m_path[0].direction);
+
+    DebugConsole::Log(GetName() + ": lot cruise -> spot " + std::to_string(spot->id) + " via road " +
+                      std::to_string(m_path[0].road->GetId()) + " .. " + std::to_string(m_destRoad->GetId()));
+    return true;
+}
+
+// 출차 경로: (지금 있는 통로) -> park 노드에 가장 가까운 통로 = 주차장 출구 -> park 노드에 가장 가까운
+// 일반 도로 -> 목적지. 통로망과 일반 도로는 링크로 안 이어져 있어(주차장 입출구는 데이터상 끊겨 있다)
+// 통로 경로와 일반 도로 경로를 각각 A*로 풀어 이어 붙인다 -- CheckPath가 그 경계를 평소 전이처럼 넘긴다.
+bool Car::BeginLotExitCruise(int lotNodeId)
+{
+    if (m_currentRoad == nullptr || !m_currentRoad->IsParkingRoad() || m_destRoad == nullptr)
+        return false;
+
+    RoadDataManager &roadData = RoadDataManager::Get();
+    shared_ptr<RoadNode> lotNode = roadData.GetNode(lotNodeId);
+    if (lotNode == nullptr || lotNode->parkingRoadIds.empty())
+        return false;
+
+    RoadPose exitAisle = roadData.GetClosestParkingRoad(lotNode->position, GetForwardAxis(), lotNode->parkingRoadIds);
+    RoadPose exitRoad = roadData.GetClosestRoad(lotNode->position);
+    if (exitAisle.road == nullptr || exitRoad.road == nullptr)
+        return false;
+
+    RoadRef start = CurrentRoadRef();
+    // 이미 출구 통로 위면 FindPath가 방향을 안 가리고 바로 반환한다 -- 출구(=park 노드)가 앞에 오는 쪽으로 정한다.
+    if (start.road == exitAisle.road)
+    {
+        const Spline &ref = start.road->GetReferenceLine();
+        float toExit = ref.GetSplinePosition(lotNode->position) - ref.GetSplinePosition(GetPosition());
+        start.direction = toExit < 0.0f ? LaneDirection::Backward : LaneDirection::Forward;
+    }
+    start.direction = ResolveOneWayDirection(start.road, start.direction);
+    vector<RoadRef> lotPath = roadData.FindPath(start, exitAisle.road);
+    if (lotPath.empty())
+        return false;
+
+    // 주차장이 붙어 있는 쪽 차로로 합류한다. 그 방향으로 목적지에 못 가면 반대 차로로라도 나간다(A*가 알아서 돌아간다).
+    float exitRoadOffset = ComputeReferenceOffset(exitRoad.road->GetReferenceLine(), lotNode->position);
+    LaneDirection nearSide = NearSideDirection(exitRoad.road, exitRoadOffset);
+    vector<RoadRef> mainPath;
+    for (LaneDirection direction : {nearSide, GetOppositeDirection(nearSide)})
+    {
+        mainPath = roadData.FindPath(RoadRef{exitRoad.road, direction}, m_destRoad);
+        if (!mainPath.empty())
+            break;
+    }
+    if (mainPath.empty())
+        return false;
+
+    m_path = std::move(lotPath);
+    m_path.insert(m_path.end(), mainPath.begin(), mainPath.end());
+    m_pathIndex = 0;
+    m_destDir = m_path.back().direction;
+    SetCurrentRoad(m_path[0].road, RoadDriveOffset(m_path[0], GetPosition()), m_path[0].direction);
+
+    DebugConsole::Log(GetName() + ": lot exit -> road " + std::to_string(exitAisle.road->GetId()) + " -> " +
+                      std::to_string(exitRoad.road->GetId()) + " .. dest " + std::to_string(m_destRoad->GetId()));
+    return true;
+}
+
 void Car::UpdatePark()
 {
     if (m_parkPlanPending)
@@ -438,8 +629,12 @@ void Car::UpdatePark()
             m_SimState->ReleaseParkSpot(m_parkSpot->id);
             m_parkSpot = nullptr;
         }
+        int lotNodeId = m_parkNodeId;
         // 안 지우면 다음 도로 정차 후 출발(P_EXIT) 때 이 주차장 기준으로 통로를 다시 찾아버린다.
         m_parkNodeId = -1;
+
+        if (BeginLotExitCruise(lotNodeId))
+            return; // 통로를 따라 주차장 출구까지 -> 거기서 이어붙인 일반 도로 경로로 계속
 
         // TryFindPathAndSetRoad는 실패 시 dest/current를 지우므로, 방금 나온 도로를 잃지 않게 보존해뒀다 복원한다.
         shared_ptr<Road> savedDestRoad = m_destRoad;
@@ -527,7 +722,11 @@ void Car::BeginParkPlan()
         Vec3 frontPos = GetPosition();
         RoadPose exitPose;
         if (m_parkSpot != nullptr && m_parkSpot->id >= 0)
-            exitPose = RoadDataManager::Get().GetClosestParkingRoad(frontPos, GetForwardAxis());
+        {
+            shared_ptr<RoadNode> lotNode = RoadDataManager::Get().GetNode(m_parkNodeId);
+            exitPose = RoadDataManager::Get().GetClosestParkingRoad(
+                frontPos, GetForwardAxis(), lotNode != nullptr ? lotNode->parkingRoadIds : vector<int>{});
+        }
         if (exitPose.road == nullptr)
             exitPose = RoadDataManager::Get().GetClosestRoad(frontPos, GetForwardAxis());
         if (exitPose.road == nullptr)
@@ -538,8 +737,10 @@ void Car::BeginParkPlan()
             return;
         }
 
-        const LaneBand *exitBand = RoadDataManager::Get().FindNearestBand(exitPose.road, exitPose.d, exitPose.direction);
-        SetCurrentRoad(exitPose.road, exitBand != nullptr ? exitBand->centerOffset : exitPose.d, exitPose.direction);
+        // 통로가 일방통행이면 헤딩(주차칸에선 통로와 거의 직각)이 아니라 데이터가 정한 방향으로 나간다.
+        // 밴드 없는 통로는 참조선이 곧 주행선 -- exitPose.d(스팟에서 통로까지의 잔차)를 물면 목표선이 주차칸을 관통한다.
+        RoadRef exitRef{exitPose.road, ResolveOneWayDirection(exitPose.road, exitPose.direction)};
+        SetCurrentRoad(exitRef.road, RoadDriveOffset(exitRef, frontPos), exitRef.direction);
 
         // 밴드 중심 주행선(역방향이면 이미 뒤집혀 있음)이 곧 출차 목표선이다.
         const Spline &exitSpline = m_currentSpline;
@@ -586,7 +787,7 @@ void Car::BeginParkPlan()
     }
 
     // ---- 이하 입차 ----
-    int parkNodeId = -1;
+    int parkNodeId = m_parkNodeId; // 통로 주행(BeginLotCruise)으로 이미 예약을 마치고 온 경우엔 그때 정해진 값
     if (m_parkSpot == nullptr && m_pendingParkNode != nullptr)
     {
         parkNodeId = m_pendingParkNode->id;
@@ -649,19 +850,23 @@ const Spline *Car::FindBestParkingSpline(LaneDirection *outDirection) const
     if (m_parkSpot->nodeType != RoadNodeType::ParkSpot)
         return nullptr;
 
-    RoadPose pose = RoadDataManager::Get().GetClosestParkingRoad(m_parkSpot->position, GetForwardAxis());
+    // 이 주차장의 통로만 후보로 -- 다른 주차장 통로가 더 가깝게 잡히면 엉뚱한 P로 끌려간다.
+    shared_ptr<RoadNode> lotNode = RoadDataManager::Get().GetNode(m_parkNodeId);
+    RoadPose pose = RoadDataManager::Get().GetClosestParkingRoad(
+        m_parkSpot->position, GetForwardAxis(), lotNode != nullptr ? lotNode->parkingRoadIds : vector<int>{});
     if (pose.road == nullptr)
         return nullptr;
 
     if (outDirection != nullptr)
     {
         // RS 매뉴버로 heading이 돌아가도 P가 흔들리지 않게, 이미 그 통로 위면 진입 때 정한 진행방향을 쓴다.
-        *outDirection = (pose.road == m_currentRoad) ? m_travelDir : pose.direction;
+        // 아직 통로 밖이면 헤딩으로 추정하되, 일방통행 통로는 데이터가 정한 방향이 우선이다.
+        *outDirection = ResolveOneWayDirection(pose.road, (pose.road == m_currentRoad) ? m_travelDir : pose.direction);
     }
     return &pose.road->GetReferenceLine();
 }
 
-// P(스팟 앞 지점) pose: 통로 위 스팟 최근접점에서 진행방향으로 P_LEAD_DISTANCE만큼 더 간 점.
+// P(스팟 앞 지점) pose: 통로 위 스팟 최근접점에서 진행방향으로 PARK_PRE_LEAD_DISTANCE만큼 더 간 점.
 bool Car::ComputeParkPrePose(Vec3 &outPos, float &outAngleRad) const
 {
     LaneDirection aisleDirection = LaneDirection::Forward;
@@ -669,10 +874,9 @@ bool Car::ComputeParkPrePose(Vec3 &outPos, float &outAngleRad) const
     if (bestSpline == nullptr)
         return false;
 
-    constexpr float P_LEAD_DISTANCE = 3.0f;
     // 참조선은 항상 forward 프레임이라, 진행방향으로 나아가려면 부호를 곱해 s 증감을 뒤집는다.
     float dirSign = GetTravelSign(aisleDirection);
-    outPos = bestSpline->GetLookaheadPoint(m_parkSpot->position, P_LEAD_DISTANCE * dirSign);
+    outPos = bestSpline->GetLookaheadPoint(m_parkSpot->position, PARK_PRE_LEAD_DISTANCE * dirSign);
     float pParam = bestSpline->GetSplinePosition(outPos);
     outAngleRad = DirectionToAngleRad(bestSpline->GetDirectionAt(pParam) * dirSign);
     return true;
@@ -864,6 +1068,14 @@ void Car::UpdateDrive()
     if (!CheckPath())
         return;
 
+    // 주차장 입구 일단정지: 감속은 "lotEntry" 정지 제약이 이미 해뒀고, 여기서 남은 속도를 확실히 떨군다
+    // (UpdateStop/UpdatePark의 정지 대기와 같은 방식 -- IDM만 믿으면 s0 근처에서 미세하게 계속 기어간다).
+    if (m_lotEntryHold)
+    {
+        AccelerateVel(0.0f);
+        return;
+    }
+
     UpdateSensors();
 
     // 물리 충돌 뒷수습과 후진 매뉴버는 어느 서브모드에 있든 먼저 끊어야 한다.
@@ -1013,6 +1225,10 @@ bool Car::CheckPath()
         // 있어 fromOffset을 그대로 못 쓴다 -- 실제 위치를 다음 road 참조선에 투영해 물리적 연속성을 보장한다.
         if (!hasLaneMapping)
             nextOffset = ComputeReferenceOffset(next.road->GetReferenceLine(), position);
+        // 주차장 통로가 걸린 전이(진입/통로 간/출구)는 두 참조선이 아예 안 이어져 있다 -- 투영 잔차를 그대로
+        // 물면 통로 밖/도로 밖을 달린다. 넘어갈 road의 주행선(밴드 중심, 밴드 없으면 참조선)에 붙인다.
+        if (next.road->IsParkingRoad() || m_currentRoad->IsParkingRoad())
+            nextOffset = RoadDriveOffset(next, position);
         SetCurrentRoad(next.road, nextOffset, next.direction);
         projectedPosition = m_currentSpline.GetLookaheadPoint(position, 0.0f);
         roadEndDistance = (roadEnd() - projectedPosition).Length();
@@ -1126,6 +1342,22 @@ std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistan
         float currentNodeDistance = m_currentSpline.GetLength() * (1.0f - currentNodeT);
         float currentNodeSpeed = (m_currentRoad == m_destRoad) ? 0.0f : std::min(m_currentRoad->GetSpeedLimit(), m_maxSpeed);
         samples.push_back({splineEnd(&m_currentSpline), currentNodeDistance, currentNodeSpeed, nullptr, 0.0f, "curRoadEnd"});
+
+        // 통로 주행의 종점은 road 끝이 아니라 스팟 앞 P점이다 -- 여기 서야 그 자리에서 바로 RS 입차로 넘어간다.
+        if (m_lotCruise && m_currentRoad == m_destRoad)
+        {
+            float stopT = m_currentSpline.GetSplinePosition(m_lotStopPos);
+            float stopDistance = (stopT - currentNodeT) * m_currentSpline.GetLength();
+            samples.push_back({m_lotStopPos, stopDistance - MIN_SAFE_GAP, 0.0f, nullptr, 0.0f, "parkPre"});
+        }
+        // 주차장 입구 일단정지: park 노드를 지금 도로에 투영한 지점(=통로 입구 옆)에 정지선을 세운다.
+        // destRoad가 노드에 가장 가까운 도로라, 그 위에 있을 때만 투영이 의미 있다.
+        else if (m_currentRoad == m_destRoad && m_pendingParkNode != nullptr && !m_pendingParkNode->parkingRoadIds.empty())
+        {
+            float entryT = m_currentSpline.GetSplinePosition(m_pendingParkNode->position);
+            float entryDistance = (entryT - currentNodeT) * m_currentSpline.GetLength();
+            samples.push_back({m_pendingParkNode->position, entryDistance - MIN_SAFE_GAP, 0.0f, nullptr, 0.0f, "lotEntry"});
+        }
     }
     {
         // 앞쪽 road는 '진행방향으로 본' 주행선(역방향이면 뒤집힌 것)을 써야 t/거리 계산이 그대로 성립한다.

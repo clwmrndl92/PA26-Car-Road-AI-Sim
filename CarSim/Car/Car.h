@@ -180,6 +180,10 @@ private:
     vector<RoadRef> BuildRoamingPath(const RoadRef &startRoad) const; // startRoad + 랜덤 후속 몇 개
 
     void UpdatePark();
+    bool IsArrivedAtDest() const; // 목적지 도착 판정(통로 주행 중엔 road 끝이 아니라 스팟 앞 P점 기준)
+    void TryBeginLotCruise();     // park 노드 도착 프레임에 통로 주행을 시작할 수 있으면 시작한다
+    bool BeginLotCruise();               // 스팟을 예약하고 '스팟 앞 통로'까지의 주차장 안 경로로 목적지를 갈아끼운다
+    bool BeginLotExitCruise(int lotNodeId); // 출차: 통로를 따라 주차장 출구로 나가는 경로 + 그 뒤 일반 도로 경로
     void BeginParkPlan();
     void BeginParkSpotLeg();
     bool PlanParkLegTo(const Vec3 &targetPos, float targetAngleRad, bool exact = false);
@@ -456,6 +460,13 @@ private:
     int m_parkLegTries = 0;                // 현재 스팟의 진입 leg 체인 시도 횟수 (무한 체인 방지)
     unordered_set<int> m_triedParkSpotIds; // 이번 입차에서 경로탐색이 실패해 이미 시도해본 ParkSpot id들
     bool m_parkPlanPending = false;
+    bool m_lotCruise = false;          // 주차장 통로(parking road) 경로를 따라 스팟 앞까지 주행 중(Drive 안에서만 유효)
+    Vec3 m_lotStopPos = Vec3::sZero(); // 위 통로 주행이 겨냥하는 정지 지점 = 스팟 앞 P점
+    // 주차장 입구 일단정지 대기 중. TryBeginLotCruise가 매 프레임 다시 계산하는 파생 상태로,
+    // 서는 동안 Park(RS 직행)로 새지 않게 Drive를 붙잡아 두는 데만 쓴다.
+    bool m_lotEntryHold = false;
+    // 스팟 최근접점에서 통로 진행방향으로 이만큼 더 간 곳이 P(입차 leg 1의 목표 pose).
+    static constexpr float PARK_PRE_LEAD_DISTANCE = 3.0f;
 
     bool m_roaming = true;                         // 배회 모드: 목적지 없이 랜덤 후속 road로 계속 주행
     static constexpr size_t ROAMING_MIN_AHEAD = 3; // 배회 시 현재 road 앞으로 항상 유지할 최소 road 버퍼 수
