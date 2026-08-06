@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <utility>
@@ -15,12 +16,13 @@
 
 namespace
 {
-    // 두 heading의 내적이 이보다 크면 '같은 방향'(추종 관계), 작으면 '교차'(45도 초과). 우선권/충돌예측이 공유한다.
-    constexpr float SAME_DIRECTION_COS = 0.7071f;
+    constexpr float SAME_DIRECTION_COS = 0.7071f; // 45도 이내
     // 고가도로/지하차도 등 다른 층에 있는 대상 컷오프(m). 주변차 수집과 교차충돌 예측이 공유한다.
     constexpr float VERTICAL_SEPARATION = 3.0f;
     constexpr float PARALLEL_SENSOR_HEADING_COS = 0.9659f; // within 15 degrees, including anti-parallel
     constexpr float PARALLEL_SENSOR_LATERAL_CLEARANCE = 0.05f;
+    // 반대편 차로 차에만 쓰는 표준 gap(m). 스쳐 지나갈 뿐이라 앞차용 MIN_SAFE_GAP은 과하다.
+    constexpr float ONCOMING_LANE_GAP = 0.5f;
 
     // road의 진행방향 밴드 중 횡오프셋 d에 가장 가까운 밴드의 centerOffset. 밴드 없으면 d 그대로.
     float NearestBandOffset(const RoadRef &road, float d)
@@ -60,6 +62,24 @@ namespace
         Vec3 right(forward.GetZ(), 0.0f, -forward.GetX());
         outHalfExtent = std::fabs(rightN.Dot(right)) * obstacle.halfWidth +
                         std::fabs(rightN.Dot(forward)) * obstacle.halfLength;
+    }
+
+    // 그 방향 driving 밴드들이 통째로 덮는 d 구간. 밴드가 없으면 false(편도거나 방향 표기 없는 데이터).
+    bool CarriagewaySpan(const shared_ptr<Road> &road, LaneDirection direction, float &outMin, float &outMax)
+    {
+        if (road == nullptr)
+            return false;
+        std::vector<const LaneBand *> bands = RoadDataManager::Get().GetDrivingBands(road, direction);
+        if (bands.empty())
+            return false;
+        outMin = std::numeric_limits<float>::max();
+        outMax = std::numeric_limits<float>::lowest();
+        for (const LaneBand *band : bands)
+        {
+            outMin = std::min(outMin, band->centerOffset - band->width * 0.5f);
+            outMax = std::max(outMax, band->centerOffset + band->width * 0.5f);
+        }
+        return true;
     }
 
     std::vector<std::unique_ptr<VehicleSegment>> BuildReedSheppSegments(const ReedsShepp::Path &path, const Vec3 &startPos,
@@ -247,6 +267,8 @@ void Car::BeginSegment(std::unique_ptr<VehicleSegment> segment)
 
 void Car::OnModeEnter(Mode prev)
 {
+    m_currentLeader = nullptr; // 주행을 그만둔 차가 남긴 리더 관계로 남들이 계속 나를 빼가지 않게
+
     if (m_mode == Mode::Drive)
     {
         SetSubMode(SubMode::D_Normal);
@@ -828,9 +850,7 @@ void Car::UpdateStop()
     std::shared_ptr<RoadNode> dest = RoadDataManager::Get().GetRandomParkNode();
     if (!dest)
         return;
-    // GetRandomDestNode는 지금 위치와 무관하게 뽑으므로, 이미 도착 판정 거리 안인 노드(방금 왔던 곳과
-    // 같거나 바로 근처)가 나오면 그냥 이번 틱은 건너뛴다 -- 안 그러면 Drive 진입하자마자 그 자리서 바로
-    // "도착"으로 잡혀 Stop<->Drive가 실제 주행 없이 계속 반복된다.
+
     if ((dest->position - GetPosition()).Length() < ARRIVE_DISTANCE)
         return;
 
@@ -866,7 +886,11 @@ void Car::UpdateDrive()
         }
     }
 
-    UpdateDrivePlan();
+    if (m_currentTime - m_lastBehaviorPlanTime >= BEHAVIOR_PLAN_INTERVAL)
+    {
+        m_lastBehaviorPlanTime = m_currentTime;
+        UpdateDrivePlan();
+    }
 
     m_wantSegmentTick = true;
 }
@@ -1014,6 +1038,8 @@ void Car::DriveControl()
     float distanceOffset = (GetPosition() - m_planScanPosition).Length(); // 스캔 이후 이동거리(정적 제약 gap 보정용)
     float elapsedTime = m_currentTime - m_lastBehaviorPlanTime;           // 스캔 이후 지난 시간(정적 제약의 가상 리더 전진 보정용)
     float accelIDM = ComputeIdmAcceleration(m_lastRoadSamples, m_lastIdmParams, distanceOffset, elapsedTime, &m_limitDebug);
+    // 속도캡 분기가 label을 덮어쓰기 전에 확정한다 -- 캡에 걸렸어도 '내가 따르는 앞차'는 그대로다.
+    m_currentLeader = m_limitDebug.leader;
 
     if (m_speedCap >= 0.0f && m_speed > m_speedCap)
     {
@@ -1177,7 +1203,7 @@ std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistan
 
 std::vector<Car::NearbyCar> Car::CollectNearbyCars() const
 {
-    constexpr float BEHAVIOR_SAFETY_HORIZON = 3.0f; // 주변 차 수집 반경 산정용 미래 시야(초, 사람의 3초 룰)
+    constexpr float SAFE_TIME = 3.0f; // 주변 차 수집 반경 산정용 미래 시야(초, 사람의 3초 룰)
 
     std::vector<NearbyCar> nearby;
     Vec3 egoPosition = GetPosition();
@@ -1189,13 +1215,13 @@ std::vector<Car::NearbyCar> Car::CollectNearbyCars() const
         // 높이로 먼저 거르기
         if (std::fabs(other->GetPosition().GetY() - egoPosition.GetY()) > VERTICAL_SEPARATION)
             continue;
-        // 가속 후보(+m_maxAccel)로 3초 내 더 갈 수 있는 거리(0.5*a*t^2)까지 더해 안전측으로 잡는다.
-        float reachDistance = (m_speed + other->GetSpeed()) * BEHAVIOR_SAFETY_HORIZON +
-                              0.5f * m_maxAccel * BEHAVIOR_SAFETY_HORIZON * BEHAVIOR_SAFETY_HORIZON +
-                              GetLength() * 0.5f + other->GetLength() * 0.5f + MIN_SAFE_GAP;
-        // 둘 다 느리면 이 반경이 15m까지 줄어든다 -- 옆차로에 '멈춰 있는' 차가 그 밖에 있으면 MOBIL 눈에
-        // 안 보여서 그 차로로 변경해버린다. 레이가 보는 만큼(AVOID_FRONT_RAY_MAX)은 항상 후보로 둔다.
-        if ((other->GetPosition() - egoPosition).Length() > std::max(reachDistance, AVOID_FRONT_RAY_MAX))
+
+        float reachDistance = (m_speed + other->GetSpeed()) * SAFE_TIME +    // 최고 상대속도
+                              0.5f * m_maxAccel * SAFE_TIME * SAFE_TIME +    // 최대가속
+                              GetLength() * 0.5f + other->GetLength() * 0.5f // 차 크기
+                              + MIN_SAFE_GAP;                                // 최소 거리
+
+        if ((other->GetPosition() - egoPosition).Length() > std::max(reachDistance, AVOID_FRONT_RAY_MAX)) // 느리게가도 차선변경은 미리 할수있게
             continue;
 
         // 교차/합류 방향(진행방향 차 45도 초과) 차에 대해 우선권을 가짐
@@ -1206,29 +1232,52 @@ std::vector<Car::NearbyCar> Car::CollectNearbyCars() const
     return nearby;
 }
 
-// 전방 약 15m 경로(현재 레인 잔여 + 다음 레인)의 최소 곡률반경이 회전 매뉴버 수준(<20m)인가.
-// Todo: GetMinRadiusAhead 함수 수정으로 전방 15m가 아니라 속한 레인의 전체 스플라인을 확인하게됨 수정필요
+// 전방 5/10/15m 지점이 현재 헤딩 직선에서 얼마나 벗어나는지(횡오차)로 회전 여부를 판정한다.
 bool Car::IsTurningAhead() const
 {
-    constexpr float TURN_LOOK_DISTANCE = 15.0f;
-    constexpr float TURN_RADIUS_THRESHOLD = 20.0f;
+    constexpr float TURN_LOOK_DISTANCES[3] = {5.0f, 10.0f, 15.0f};
+    constexpr float TURN_LATERAL_THRESHOLD = 1.5f; // 헤딩 직선에서 이만큼 벗어나면 회전으로 간주
     if (m_currentRoad == nullptr)
         return false;
 
-    const Spline &spline = m_currentSpline;
-    float length = spline.GetLength();
-    float t0 = spline.GetSplinePosition(GetPosition());
-    float t1 = (length > 0.0f) ? std::min(1.0f, t0 + TURN_LOOK_DISTANCE / length) : 1.0f;
-    float minRadius = spline.GetMinRadiusAhead();
+    Vec3 pos = GetPosition();
+    Vec3 fwd = GetForwardAxis();
+    float remaining = m_currentSpline.GetLength() * (1.0f - m_currentSpline.GetSplinePosition(pos));
 
-    float covered = (t1 - t0) * length;
-    if (covered < TURN_LOOK_DISTANCE && m_pathIndex + 1 < m_path.size())
+    const Spline *nextRef = nullptr;
+    bool nextReversed = false;
+    if (remaining < TURN_LOOK_DISTANCES[2] && m_pathIndex + 1 < m_path.size())
     {
-        // 곡률은 진행방향과 무관하므로 참조선을 그대로 본다.
-        const Spline &next = m_path[m_pathIndex + 1].road->GetReferenceLine();
-        minRadius = std::min(minRadius, next.GetMinRadiusAhead());
+        const RoadRef &next = m_path[m_pathIndex + 1];
+        if (next.road != nullptr && !next.road->GetReferenceLine().GetSplinePoints().empty())
+        {
+            nextRef = &next.road->GetReferenceLine();
+            nextReversed = next.direction == LaneDirection::Backward;
+        }
     }
-    return minRadius < TURN_RADIUS_THRESHOLD;
+
+    for (float dist : TURN_LOOK_DISTANCES)
+    {
+        Vec3 point;
+        if (dist <= remaining || nextRef == nullptr)
+        {
+            point = m_currentSpline.GetLookaheadPoint(pos, dist);
+        }
+        else
+        {
+            float need = dist - remaining;
+            Vec3 entry = nextReversed ? nextRef->GetSplinePoints().back() : nextRef->GetSplinePoints().front();
+            point = nextRef->GetLookaheadPoint(entry, nextReversed ? -need : need);
+
+            // 참조선은 방향 무관 원본 좌표라 여기서 진행방향 부호와 오른쪽 법선을 직접 반영해야 오프셋이 맞는다.
+            Vec3 tangent = nextRef->GetDirectionAt(nextRef->GetSplinePosition(point)) * (nextReversed ? -1.0f : 1.0f);
+            Vec3 rightNormal(tangent.GetZ(), 0.0f, -tangent.GetX());
+            point += rightNormal * m_currentOffset;
+        }
+        if (fwd.Cross(point - pos).Length() > TURN_LATERAL_THRESHOLD)
+            return true;
+    }
+    return false;
 }
 
 // 교차 상황의 통행 우선권: 직진 > 회전
@@ -1238,15 +1287,12 @@ bool Car::HasPriorityOver(const Car *other) const
     bool otherTurning = other->IsTurningAhead();
     if (meTurning != otherTurning)
         return !meTurning;
-    return GetName() < other->GetName(); // todo : car ID 로 변경
+    return GetId() < other->GetId();
 }
 
 void Car::AppendCarConstraintSamples(std::vector<RoadSpeedSample> &samples,
                                      const std::vector<NearbyCar> &nearbyCars, float lookDistance) const
 {
-    // 서로 상대를 리더로 보고 멈춘 교착(둘 다 정지라 canClaimPriority가 안 풀림)을 끊는 타임아웃(s).
-    // AVOID_WAIT_TIMEOUT과 별개 -- 그건 센서가 잡은 위협 전용이고, 이건 도로 코리도 IDM 정지 전용.
-    // INTERSECTION_YIELD_TIMEOUT과 값은 같지만 의미가 달라 별도 이름을 쓴다(교차로 데드락 타이머 자체는 아님).
     constexpr float PRIORITY_STUCK_TIMEOUT = INTERSECTION_YIELD_TIMEOUT;
 
     Spline segmentLine; // 앞쪽 road의 진행방향 주행선(역방향이면 뒤집힌 것). spline이 이걸 가리킨다.
@@ -1274,29 +1320,17 @@ void Car::AppendCarConstraintSamples(std::vector<RoadSpeedSample> &samples,
             float otherT = spline->GetSplinePosition(other->GetPosition());
             Vec3 projected = spline->GetPositionAt(otherT);
             float lateralOffset = (other->GetPosition() - projected).Length();
-            // 회피 오프셋으로 옆을 스쳐 지나가는 중에는 코리도를 차체가 실제로 쓰는 폭까지 좁힌다 --
-            // 평소 폭(차로 반폭)으로 두면 옆으로 다 비켜났는데도 리더로 남아 IDM이 s0 앞에 세워버려서
-            // 회피를 걸어놓고도 영영 못 지나간다(정적 장애물의 AVOID_PASS_CLEARANCE와 같은 이유).
-            float corridor = (m_subMode == SubMode::D_Avoid)
-                                 ? GetHalfWidth() + other->GetHalfWidth() + AVOID_PASS_CLEARANCE
-                                 : RoadDataManager::ROAD_WIDTH * 0.5f + other->GetHalfWidth();
+            float corridor = GetHalfWidth() + other->GetHalfWidth() + AVOID_PASS_CLEARANCE;
             Vec3 pathDir = spline->GetDirectionAt(otherT);
 
             // 범퍼 대 범퍼 종방향 gap. 위치가 앞축 기준이라 내 앞오버행과 상대 뒤오버행을 뺀다.
             float bumperMargin = FrontOverhang() + other->RearOverhang();
             float arcGap = baseDistance + (otherT - startT) * splineLength - bumperMargin;
-            // 직선(현) 항에서 횡성분을 뺀 종방향 성분. 거리(.Length()) 그대로 쓰면 옆으로 벌어진 만큼이
-            // gap에 섞여, 교차로에서 90도로 붙은 차의 종방향 여유를 실제보다 크게 본다(안 서고 측면으로
-            // 박는 원인). 내 진행방향 투영으로 재면 굽은 길 너머의 차까지 gap이 0으로 눌려 헛제동한다.
+
             float chord = (other->GetPosition() - GetPosition()).Length();
             float straightGap = std::sqrt(std::max(0.0f, chord * chord - lateralOffset * lateralOffset)) - bumperMargin;
             float gap = std::min(arcGap, straightGap) - MIN_SAFE_GAP; // gap<0(표준간격 침범)이면 캡이 0으로 내려가 크리핑/돌진 방지
 
-            // 우선권은 상대가 실제로 비켜줄 수 있을 때만 행사한다. 이미 제동거리 안이거나 상대가 멈춰
-            // 있으면(교차로에 갇혀 못 비킨다) 리더로 유지해야 한다 -- 여기서 지우면 IDM엔 감속 근거가 없고,
-            // 회피 쪽은 ThreatKind::Vehicle이라 "IDM이 처리한다"며 손을 떼서 아무도 안 선다.
-            // 다만 상대가 완전히 멈춘 채 오래가면(둘 다 서로를 리더로 보는 교착) 이 조건 때문에 영영 못
-            // 풀린다 -- 내가 그 상태로 PRIORITY_STUCK_TIMEOUT 이상 버텼으면 정지 조건을 풀어준다.
             float brakingGap = m_speed * m_speed / (2.0f * m_maxBrake) + MIN_SAFE_GAP;
             bool priorityTimedOut = m_priorityStuckElapsed >= PRIORITY_STUCK_TIMEOUT;
             bool canClaimPriority = nearbyCar.yieldsToMe && (other->GetSpeed() > AVOID_BLOCK_SPEED || priorityTimedOut) && gap > brakingGap;
@@ -1392,6 +1426,11 @@ float Car::ComputeIdmAcceleration(const std::vector<RoadSpeedSample> &samples, c
         if (sample.leader != nullptr && !m_SimState->IsCarAlive(sample.leader))
             continue;
 
+        // 서로를 리더로 삼으면 둘 다 상대가 비켜주기만 기다리다 영영 선다 -- 저쪽이 날 보고 있으면 나는 뺀다.
+        // 차 갱신이 순차적이라 먼저 도는 쪽이 양보를 놓게 되고, 관계가 프레임마다 뒤집히지 않는다.
+        if (sample.leader != nullptr && sample.leader->m_currentLeader == this)
+            continue;
+
         float leaderSpeed;
         float leaderAccel;
         float gap;
@@ -1427,7 +1466,7 @@ float Car::ComputeIdmAcceleration(const std::vector<RoadSpeedSample> &samples, c
         {
             bestAccel = a;
             if (outDebug != nullptr)
-                *outDebug = SpeedLimitDebug{sample.leader != nullptr ? "car:" + sample.leader->GetName() : sample.kind, leaderSpeed, gap};
+                *outDebug = SpeedLimitDebug{sample.leader != nullptr ? "car:" + sample.leader->GetName() : sample.kind, leaderSpeed, gap, sample.leader};
         }
     }
     return bestAccel;
@@ -1594,20 +1633,16 @@ void Car::UpdateDrivePlan()
 {
     if (m_currentRoad == nullptr)
         return;
-    if (m_currentTime - m_lastBehaviorPlanTime < BEHAVIOR_PLAN_INTERVAL)
-        return;
-    m_lastBehaviorPlanTime = m_currentTime;
 
     constexpr float MIN_LOOK_DISTANCE = 20.0f; // 정지 상태에서도 바로 앞 신호/제한속도는 보이게 하는 최소치
     m_lastIdmParams = BuildIdmParams(m_currentRoad);
 
-    // 스캔 거리 = IDM 상호작용 거리 s*(정지 대상 최악치) + 다음 스캔까지 갈 거리. 더 늦게 보이면 쾌적감속 구간이 없어 최대제동으로 슬램한다.
+    // 스캔 거리 = IDM 상호작용 거리 s*(정지 대상 최악치) + 다음 스캔까지 갈 거리.
     float interactGap = m_lastIdmParams.s0 + m_speed * m_lastIdmParams.T +
                         m_speed * m_speed / (2.0f * std::sqrt(std::max(0.0001f, m_lastIdmParams.a * m_lastIdmParams.b)));
     float lookDistance = std::max(MIN_LOOK_DISTANCE, interactGap + m_speed * BEHAVIOR_PLAN_INTERVAL);
 
-    // ScanRoadSpeedConstraints가 내부에서 ShouldHoldForMerge(→ m_lastNearbyCars)를 참조하므로 먼저 갱신해둔다.
-    m_lastNearbyCars = CollectNearbyCars();
+    m_lastNearbyCars = CollectNearbyCars(); // ScanRoadSpeedConstraints 전에 실행
     m_lastRoadSamples = ScanRoadSpeedConstraints(lookDistance);
     AppendCarConstraintSamples(m_lastRoadSamples, m_lastNearbyCars, lookDistance);
     AppendSensorConstraintSample(m_lastRoadSamples);
@@ -1628,7 +1663,11 @@ void Car::UpdateDrivePlan()
     }
     else
     {
-        targetOffset = ComputeLateralTarget(m_lastNearbyCars, m_lastIdmParams, &laneCenter);
+        // 직전 차선변경 후 MOBIL_LANE_CHANGE_COOLDOWN 안이면 MOBIL을 아예 안 돌려 연속 변경을 막는다.
+        bool coolingDown = (m_currentTime - m_lastLaneChangeTime) < MOBIL_LANE_CHANGE_COOLDOWN;
+        targetOffset = coolingDown ? CurrentLaneCenter() : ComputeLateralTarget(m_lastNearbyCars, m_lastIdmParams, &laneCenter);
+        if (coolingDown)
+            laneCenter = targetOffset;
         bool isLaneChange = std::fabs(targetOffset - laneCenter) > 0.01f;
         // 오프셋은 참조선 프레임, 레이 스캔은 차체 기준 -- 역주행이면 좌우가 뒤집힌다.
         bool sideBlocked = ((targetOffset - laneCenter) * TravelSign() > 0.0f) ? m_sensor.rightBlocked : m_sensor.leftBlocked;
@@ -1642,6 +1681,7 @@ void Car::UpdateDrivePlan()
         {
             m_maneuver.laneOffset = laneCenter;
             m_maneuver.laneChangeTarget = targetOffset;
+            m_lastLaneChangeTime = m_currentTime;
         }
         SetSubMode(isLaneChange ? SubMode::D_LaneChange : SubMode::D_Normal);
     }
@@ -1764,6 +1804,18 @@ float Car::ComputeLateralTarget(const std::vector<NearbyCar> &nearbyCars, const 
     }
     const Mobil::VehicleState &egoLeader = *curLeader;
 
+    // 내 앞을 막는 지점(차/장애물/센서/신호·정지선) 중 가장 가까운 s. 옆차로 앞차와 이 지점이 비슷하면
+    // 차선을 바꿔봐야 곧 같은 자리에서 다시 막히므로, 아래에서 그 방향을 후보에서 뺀다.
+    float egoBlockS = (curLeader != &farLeader) ? curLeader->position : std::numeric_limits<float>::infinity();
+    for (const RoadSpeedSample &sample : m_lastRoadSamples)
+    {
+        if (sample.leader == nullptr && std::strcmp(sample.kind, "signal") == 0)
+        {
+            egoBlockS = std::min(egoBlockS, egoS + sample.distance + MIN_SAFE_GAP);
+            break; // 스캔당 신호 샘플은 최대 1개
+        }
+    }
+
     RouteLaneGoal goal = ComputeRouteLaneGoal();
 
     // 경로상 가야 할 차로가 있으면 그쪽부터, 없으면 이미 기울어 있는 쪽부터 본다. 첫 통과를 바로 채택하는
@@ -1798,6 +1850,9 @@ float Car::ComputeLateralTarget(const std::vector<NearbyCar> &nearbyCars, const 
         }
 
         LaneNeighbors nbr = GatherLaneNeighbors(nearbyCars, m_currentRoad, refLine, adjBand.centerOffset, adjBand.width * 0.5f, egoS, dirSign);
+        // 옆차로 앞차가 내 앞을 막는 지점과 거의 같은 자리면(둘 다 같은 정체/신호에 걸림) 옮길 이유가 없다.
+        if (nbr.hasLeader && std::fabs(nbr.leader.position - egoBlockS) < MOBIL_LEADER_ALIGN_GAP)
+            continue;
         const Mobil::VehicleState &newLeader = nbr.hasLeader ? nbr.leader : farLeader;
         const Mobil::VehicleState *newFollower = nbr.hasFollower ? &nbr.follower : nullptr;
         if (Mobil::EvaluateLaneChange(ego, oldFollower, egoLeader, newLeader, newFollower, mobil, idm, bias))
@@ -1813,7 +1868,9 @@ void Car::AppendSensorConstraintSample(std::vector<RoadSpeedSample> &samples) co
     // frontDistance는 앞범퍼 기준이라 차 길이를 뺄 필요가 없다.
     if (m_sensor.frontDistance >= 0.0f && !IsParallelClearSensorVehicle())
     {
-        samples.push_back({m_sensor.frontHitPosition, m_sensor.frontDistance - MIN_SAFE_GAP, m_sensor.frontHitSpeed, nullptr, 0.0f, "sensorFront"});
+        // 마주 오는 차로 차는 커브에서 레이에 걸릴 뿐 실제로는 스쳐 지나간다 -- gap을 줄여 헛제동을 막는다.
+        float standoff = IsOncomingLaneVehicle(m_sensor.frontHitObstacle) ? ONCOMING_LANE_GAP : MIN_SAFE_GAP;
+        samples.push_back({m_sensor.frontHitPosition, m_sensor.frontDistance - standoff, m_sensor.frontHitSpeed, nullptr, 0.0f, "sensorFront"});
     }
 
     // 차체 스윕이 예고한 접촉. 정지한 대상만 넣어 잰 거리이므로 speed 0(정지 제약)으로 건다.
@@ -1849,6 +1906,64 @@ bool Car::IsParallelClearSensorVehicle() const
                              GetHalfWidth() - hitLateralHalfExtent;
     return lateralClearance >= PARALLEL_SENSOR_LATERAL_CLEARANCE;
 }
+
+// road 하나를 기준으로: 내가 그 도로의 반대 차로를 안 물고 있고, 상대는 반대 차로 안에만 있는가.
+bool Car::IsOncomingLaneVehicleOn(const RoadRef &road, float egoOffset, float egoHalfExtent,
+                                  const VehicleCollision::Obstacle &obstacle) const
+{
+    float ownMin = 0.0f, ownMax = 0.0f, oppMin = 0.0f, oppMax = 0.0f;
+    if (!CarriagewaySpan(road.road, road.direction, ownMin, ownMax) ||
+        !CarriagewaySpan(road.road, GetOppositeDirection(road.direction), oppMin, oppMax))
+        return false; // 반대 차로 자체가 없는 도로
+
+    // 중심이 아니라 차체 폭으로 본다 -- 경계를 물기만 해도 '넘어왔다'로 잡아야 안전한 쪽으로 틀린다.
+    if (egoOffset - egoHalfExtent < oppMax && egoOffset + egoHalfExtent > oppMin)
+        return false; // 내가 반대 차로를 물고 있다
+
+    float d = 0.0f, halfExtent = 0.0f;
+    ProjectObstacle(road.road->GetReferenceLine(), obstacle, d, halfExtent);
+    if (d - halfExtent >= oppMax || d + halfExtent <= oppMin)
+        return false; // 이 도로의 반대 차로에 있는 차가 아니다(교차로 진입차 등)
+    return !(d - halfExtent < ownMax && d + halfExtent > ownMin); // 내 차로까지 넘어왔으면 평소대로 대한다
+}
+
+// 서로 자기 차로를 지키고 있는(내가 넘어가지도, 저쪽이 넘어오지도 않은) 반대편 차로의 차인가.
+// 경로상 다음 road도 같이 본다 -- 교차로/도로 전환 직전엔 레이가 다음 road의 반대 차로를 먼저 문다.
+bool Car::IsOncomingLaneVehicle(const VehicleCollision::Obstacle &obstacle) const
+{
+    if (!obstacle.isVehicle || m_currentRoad == nullptr)
+        return false;
+
+    float egoOffset = 0.0f, egoHalfExtent = 0.0f;
+    ProjectObstacle(m_currentRoad->GetReferenceLine(), MakeVehicleObstacle(), egoOffset, egoHalfExtent);
+    if (IsOncomingLaneVehicleOn(CurrentRoadRef(), egoOffset, egoHalfExtent, obstacle))
+        return true;
+
+    if (m_pathIndex + 1 >= m_path.size() || m_path[m_pathIndex + 1].road == nullptr)
+        return false;
+    const RoadRef &next = m_path[m_pathIndex + 1];
+
+    // 아직 안 들어간 road라 실측 d가 없다 -- 실제로 타게 될 진입 오프셋으로 본다(ShouldHoldForMerge와 같은 방식).
+    bool hasLaneMapping = false;
+    float entryOffset = RoadDataManager::Get().ResolveConnectingOffset(CurrentRoadRef(), next, m_currentOffset, &hasLaneMapping);
+    if (!hasLaneMapping)
+        entryOffset = ComputeReferenceOffset(next.road->GetReferenceLine(), GetPosition());
+    return IsOncomingLaneVehicleOn(next, entryOffset, GetHalfWidth(), obstacle);
+}
+
+VehicleCollision::Obstacle Car::MakeVehicleObstacle() const
+{
+    VehicleCollision::Obstacle obstacle;
+    obstacle.center = GetBodyCenter();
+    obstacle.halfLength = m_halfExtents.GetZ();
+    obstacle.halfWidth = m_halfExtents.GetX();
+    obstacle.headingRad = DirectionToAngleRad(GetForwardAxis());
+    obstacle.speed = GetSpeed();
+    obstacle.type = VehicleCollision::ObstacleType::Dynamic;
+    obstacle.isVehicle = true;
+    return obstacle;
+}
+
 Vec3 Car::GetBodyCenter() const
 {
     // 콜라이더 오프셋은 차체 로컬(z=전방, x=오른쪽) 기준. 회전은 Y축 요만 있으므로 전방/오른쪽 축으로만 합성하면 된다.
@@ -1892,15 +2007,7 @@ std::vector<VehicleCollision::Obstacle> Car::BuildSensorObstacles() const
     {
         if (!m_SimState->IsCarAlive(nearbyCar.car))
             continue; // 캐시된 뒤 삭제된 차(0.2초 주기 갱신 사이 delete됨) -- dangling 포인터
-        const Car *other = nearbyCar.car;
-        VehicleCollision::Obstacle obstacle;
-        obstacle.center = other->GetBodyCenter();
-        obstacle.halfLength = other->m_halfExtents.GetZ();
-        obstacle.halfWidth = other->m_halfExtents.GetX();
-        obstacle.headingRad = DirectionToAngleRad(other->GetForwardAxis());
-        obstacle.speed = other->GetSpeed();
-        obstacle.type = VehicleCollision::ObstacleType::Dynamic;
-        obstacle.isVehicle = true;
+        VehicleCollision::Obstacle obstacle = nearbyCar.car->MakeVehicleObstacle();
         obstacle.yieldsToEgo = nearbyCar.yieldsToMe; // 교차 충돌 예측(PredictMovingConflict)이 우선권을 봐야 한다
         obstacles.push_back(obstacle);
     }
@@ -2251,7 +2358,8 @@ bool Car::FindAvoidOffset(const SensorScan &scan, const std::vector<VehicleColli
     // side/오프셋은 참조선 프레임, 레이 스캔(scan)은 차체 기준 -- 역주행이면 둘의 좌우가 뒤집힌다.
     const float magnitudes[] = {laneWidth * 0.5f, laneWidth, laneWidth * 2.0f};
     float dirSign = TravelSign();
-    bool leanPositive = m_currentOffset > laneCenter; // 이미 기울어 있는 쪽부터 후보로 본다
+    // 중앙선(참조선 d=0)에서 먼 쪽부터 본다 -- 가까운 쪽부터 뒤지면 반대 차로로 나가는 후보를 먼저 집는다.
+    bool leanPositive = m_currentOffset > 0.0f;
     for (float magnitude : magnitudes)
     {
         for (int side : {leanPositive ? 1 : -1, leanPositive ? -1 : 1})
@@ -2350,7 +2458,7 @@ bool Car::IsBandClearAhead(float bandCenter, float bandHalfWidth) const
     return true;
 }
 
-// 그 차로에 들어가도 되는가: 뒤차(IsSafeLaneEntry) + 앞차(그 뒤에 붙었을 때 내가 밟을 감속)
+// 그 차로 앞차확인
 bool Car::IsLaneEntryClear(float targetOffset) const
 {
     const LaneBand *target = RoadDataManager::Get().FindNearestBand(m_currentRoad, targetOffset, m_travelDir);
@@ -2374,7 +2482,7 @@ bool Car::IsLaneEntryClear(float targetOffset) const
         if (accel < -MOBIL_B_SAFE)
             return false; // 그 차 뒤에 붙으려면 안전한계보다 세게 밟아야 한다
     }
-    return IsSafeLaneEntry(CurrentRoadRef(), targetOffset, m_lastNearbyCars);
+    return true;
 }
 
 // 정지 대기 유지/해제. 해제는 "레이에서 사라짐"이 원칙이지만, 정지하면 전방 레이가 AVOID_FRONT_RAY_MIN까지

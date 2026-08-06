@@ -1,8 +1,11 @@
 {
   "lanes": [],
-  "nodes": [{ "id": 1, "position": [-18.0, 0.0, -4.0], "direction": [0.0, 1.0, 0.0], "type": "unknown" }],
+  "nodes": [
+    { "id": 1, "position": [-18.0, 0.0, -4.0], "direction": [0.0, 1.0, 0.0], "type": "unknown" },
+    { "id": 2, "position": [-5.0, 0.0, 100.0], "direction": [0.0, 0.0, 1.0], "type": "traffic_light", "roads": [1] }
+  ],
   "obstacles": [],
-  "dynamic_obstacles": [{ "start": [-16.0, 0.0, 94.0], "end": [5.0, 0.0, 94.0], "size": [4.0, 2.0], "speed": 3.0 }],
+  "dynamic_obstacles": [],
   "parking_lanes": [],
   "roads": [
     {

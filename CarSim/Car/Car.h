@@ -48,6 +48,8 @@ public:
     }
     void SetDestination(const shared_ptr<RoadNode> &parkNode);
     void SetRoaming(bool roaming) { m_roaming = roaming; } // 배회 모드 on/off
+    void SetId(int id) { m_id = id; }
+    int GetId() const { return m_id; }
     // 사용자 조작 차: true면 AI FSM(UpdateMode 이하)을 전부 건너뛰고 UpdateWithControl만 돈다.
     void SetManual(bool manual) { m_isManual = manual; }
     bool IsManual() const { return m_isManual; }
@@ -119,9 +121,6 @@ private:
         D_WaitSignal,   // 신호대기
         D_WaitObstacle, // 움직이는 장애물이 진로를 비울 때까지 정지 대기
         D_Avoid,        // 장애물 회피(차로 중심을 벗어난 오프셋 주행)
-        // 옆 차로 중심으로 이동 중(차로 '중심'으로 가므로 D_Avoid와 다르다). 회피용 차선변경(DecideAvoidance
-        // -> UpdateLaneChange, 커밋된 매뉴버)과 MOBIL의 일반 차선변경(UpdateDrivePlan, 매 틱 재평가) 둘 다
-        // 이 서브모드로 보인다 -- 판단/취소 로직은 서로 다르고, 여기서는 라벨만 통일한다.
         D_LaneChange,
 
         // Park
@@ -167,13 +166,10 @@ private:
 
     VehicleCollision::VehicleShape BuildVehicleShape() const;
     void UpdateFindPath();
-    // m_currentRoad/Offset/Dir/Spline을 항상 이 함수로 세팅.
     void SetCurrentRoad(const shared_ptr<Road> &road, float offset, LaneDirection direction);
     // 참조선 s를 진행방향으로 증가하는 부호로 바꾸는 계수(+1 정방향 / -1 역방향).
     float TravelSign() const { return GetTravelSign(m_travelDir); }
     RoadRef CurrentRoadRef() const { return RoadRef{m_currentRoad, m_travelDir}; }
-    // CheckPath(Drive)와 ScanRoadSpeedConstraints(BehaviorPlan)이 공유.
-    // nextRoadId: 이 road를 나가서 실제로 타려는 다음 road(=이동/movement). 모르면 -1.
     bool ShouldStopForSignal(const shared_ptr<Road> &road, LaneDirection direction, int nextRoadId = -1) const;
     bool TryFindPathAndSetRoad();
 
@@ -200,10 +196,7 @@ private:
 
     void UpdateDrive();
     bool CheckPath();
-    // 지금 있는 차로가 next로 진입 가능한 차로인가. 차로 제약이 없는 전이면 항상 true.
     bool CanEnterFromCurrentBand(const RoadRef &next) const;
-    // 진입 차로를 못 맞춰 계획된 다음 road로 못 가는 경우, 지금 차로에서 갈 수 있는 road로 경로를 다시 짠다.
-    // 갈 수 있는 곳이 아예 없으면 false(호출측이 도로 끝에서 정지).
     bool RepathFromCurrentBand();
 
     // 경적: 장애물/차에 막혀 정지해 있으면 5초마다 한 번 울린다(2초간 차체를 빨갛게).
@@ -219,11 +212,10 @@ private:
         Vec3 position;
         float distance;
         float speed;
-        Car *leader = nullptr;            // 이 샘플이 앞차(리더)면 그 차, 정적 제약(신호/커브/정지선 등)이면 nullptr
-        float leaderLateralOffset = 0.0f; // road 참조선 기준 리더의 d(횡오프셋). leader!=nullptr일 때만 유효 -- 후보가 이 리더를 옆으로 피할 수 있는지 판단용
-        const char *kind = "";            // 디버그용 정적 제약 종류 표시("signal"/"destEnd"/"mergeWait"/"roadLimit"/"curRoadEnd"/"sensorFront"/"bodySweep"). leader!=nullptr면 안 씀.
-        // 스캔 시점 리더 위치. 매프레임 gap을 '리더도 그동안 전진한 만큼' 되돌리는 기준(ComputeIdmAcceleration).
-        Vec3 leaderScanPosition = Vec3::sZero();
+        Car *leader = nullptr;                   // 이 샘플이 앞차(리더)면 그 차, 정적 제약(신호/커브/정지선 등)이면 nullptr
+        float leaderLateralOffset = 0.0f;        // road 참조선 기준 리더의 d(횡오프셋). leader!=nullptr일 때만 유효 -- 후보가 이 리더를 옆으로 피할 수 있는지 판단용
+        const char *kind = "";                   // 디버그용 정적 제약 종류 표시("signal"/"destEnd"/"mergeWait"/"roadLimit"/"curRoadEnd"/"sensorFront"/"bodySweep"). leader!=nullptr면 안 씀.
+        Vec3 leaderScanPosition = Vec3::sZero(); // 스캔 시점 리더 위치. 매프레임 gap을 '리더도 그동안 전진한 만큼' 되돌리는 기준(ComputeIdmAcceleration).
     };
 
     // 이번 프레임 IDM 목표가속도를 결정한 근거(디버그 UI 표시용). DriveControl이 매프레임 채운다.
@@ -232,6 +224,7 @@ private:
         std::string label = "free"; // "free"(자유흐름) / RoadSpeedSample::kind / "car:<이름>" / "speedCap" / "steerCap"
         float targetSpeed = 0.0f;
         float gap = 0.0f;
+        Car *leader = nullptr; // 이 근거가 앞차면 그 차. 상호 리더 판정(m_currentLeader)이 쓴다
     };
 
     struct NearbyCar
@@ -386,6 +379,12 @@ private:
     std::vector<VehicleCollision::Obstacle> CollectMapObstaclesInSensorRange() const;
     SensorScan ScanSensors(const std::vector<VehicleCollision::Obstacle> &obstacles) const;
     bool IsParallelClearSensorVehicle() const;
+    // 서로 자기 차로를 지키고 있는 반대편 차로의 차인가. 맞으면 제동 gap을 ONCOMING_LANE_GAP까지 줄인다.
+    // 현재 road와 경로상 다음 road를 같이 본다 -- 전환 직전엔 다음 road의 반대 차로가 먼저 레이에 걸린다.
+    bool IsOncomingLaneVehicle(const VehicleCollision::Obstacle &obstacle) const;
+    bool IsOncomingLaneVehicleOn(const RoadRef &road, float egoOffset, float egoHalfExtent,
+                                 const VehicleCollision::Obstacle &obstacle) const; // 위 판정을 road 하나에 대해
+    VehicleCollision::Obstacle MakeVehicleObstacle() const; // 이 차의 차체 OBB를 장애물 하나로
     // 좌/우 후보 오프셋(차로 반폭 -> 한 폭 -> 두 폭)을 가까운 쪽부터 궤적 시뮬레이션해 첫 무충돌 오프셋을 고른다.
     bool FindAvoidOffset(const SensorScan &scan, const std::vector<VehicleCollision::Obstacle> &obstacles,
                          float laneCenter, float &outOffset) const;
@@ -436,6 +435,7 @@ private:
     bool m_wantSegmentTick = false;
     bool m_isFocused = false; // 포커스 여부 (입력 처리용)
     bool m_isManual = false;  // 사용자 조작 차 여부 (true면 AI FSM 대신 UpdateWithControl로 구동)
+    int m_id = -1;            // CarSim이 스폰 시 부여하는 고유 id (HasPriorityOver의 전순서 비교용)
 
     // 컴포넌트 및 AI 상태 (Components & Systems)
     SimulationState *m_SimState = nullptr;
@@ -480,11 +480,19 @@ private:
     // IDM(종방향) / MOBIL(차선변경) 파라미터. 이타성(politeness)은 m_personality에서 옴(D. 양보).
     static constexpr float MOBIL_B_SAFE = 3.0f; // 뒤차에 강제 가능한 최대 안전 감속도(m/s^2)
     static constexpr float MOBIL_A_THR = 0.2f;  // 차선변경 최소 진입 장벽(m/s^2)
+    // 내 앞(차/장애물/신호/정지선)과 옆차로 앞차가 이 거리(m) 안으로 겹쳐 있으면, 옮겨봐야 곧 같이 막히므로
+    // 그 방향 MOBIL 차선변경을 후보에서 제외한다.
+    static constexpr float MOBIL_LEADER_ALIGN_GAP = 5.0f;
+    static constexpr float MOBIL_LANE_CHANGE_COOLDOWN = 2.0f; // 차선변경 후 이 시간(s) 동안은 MOBIL을 다시 평가하지 않는다(연속 변경 방지)
     // 횡오프셋을 목표(밴드 중심)로 당기는 Lerp 비율. 리플랜(0.2초)마다 이만큼 목표 쪽으로 이동. m_personality.laneChangeLerpAlpha에서 옴.
 
     float m_lastBehaviorPlanTime = -1000.0f;        // 처음 Drive 진입 시 바로 첫 판단이 돌도록 충분히 과거로 초기화
+    float m_lastLaneChangeTime = -1000.0f;          // 마지막으로 MOBIL 차선변경을 시작한 시각 -- MOBIL_LANE_CHANGE_COOLDOWN 게이팅용
     float m_planAccelDebug = 0.0f;                  // DriveControl이 매프레임 계산한 IDM 목표가속도(디버그 UI 표시용 캐시)
     SpeedLimitDebug m_limitDebug;                   // 위 목표가속도를 결정한 근거(디버그 UI 표시용 캐시)
+    // 이번 프레임 IDM이 실제로 고른 앞차. 다른 차가 "쟤가 날 리더로 삼고 있나"를 여기서 읽어, 서로를
+    // 리더로 잡고 둘 다 서버리는 교착을 끊는다. 역참조는 안 하므로 dangling이어도 비교는 안전하다.
+    Car *m_currentLeader = nullptr;
     float m_prevSpeedForStallLog = 0.0f;            // 정지 감지 로그(DriveControl)용 -- 직전 프레임 속도
     float m_priorityStuckElapsed = 0.0f;            // 도로 코리도 IDM이 정지한 차를 리더로 잡은 채 버틴 시간(DriveControl이 매프레임 갱신, PRIORITY_STUCK_TIMEOUT)
     std::vector<NearbyCar> m_lastNearbyCars;        // UpdateBehaviorPlan이 마지막으로 수집한 주변 차 목록 -- ShouldHoldForMerge가 매 프레임 재사용(재수집 비용 회피)
@@ -506,10 +514,7 @@ private:
     // 전방 히트를 '내 진로 위'로 볼 기준: 주행 스플라인까지의 거리가 차체 반폭 + 이 여유 이내(m).
     // 회피를 걸지 말지(frontBlocked) 판단용이라 넉넉하게 -- 결과가 '옆으로 조금 비켜라'라서 싸다.
     static constexpr float AVOID_CORRIDOR_MARGIN = 0.5f;
-    // 종방향 제동(IDM 가상 리더/비상제동)을 걸 기준 여유(m). 위 트리거 코리도보다 훨씬 타이트해야 한다 --
-    // 넓게 잡으면 회피로 옆을 스치듯 통과하는 중인 장애물에도 제동이 걸리고, IDM은 s0(MIN_SAFE_GAP)만큼
-    // 앞에서 서려 하므로 그 지점에 갇혀 영영 못 지나간다. 반대로 너무 좁히면 실제로 스칠 것에 안 선다.
-    static constexpr float AVOID_PASS_CLEARANCE = 0.2f;
+    static constexpr float AVOID_PASS_CLEARANCE = 0.2f; // 종방향 제동(IDM 가상 리더/비상제동)을 걸 기준 여유(m)
     static constexpr float AVOID_SIM_TIME = 3.0f;       // 회피 후보 검증의 예측 시간(s)
     static constexpr float AVOID_SIM_MIN_SPEED = 3.0f;  // 정지 중에도 앞으로 굴려보기 위한 최소 가정 속도(m/s)
     static constexpr float AVOID_FRONT_RAY_MIN = 8.0f;  // 전방 레이 최소 길이(정지 중에도 바로 앞은 보이게, m)
@@ -524,13 +529,8 @@ private:
     StuckState m_stuck;
     ManeuverState m_maneuver;
     WaitState m_wait;
-    // 이번 프레임 레이/OBB 판정 대상 목록. UpdateSensors가 만들고 UpdateBehaviorPlan(차선변경 궤적 검증)이 재사용.
     std::vector<VehicleCollision::Obstacle> m_sensorObstacles;
-    // 위에서 움직이는 대상을 뺀 것. 궤적 스윕(SweepBodyPath)은 상대를 정지한 것으로 보므로, 같이 굴러가는
-    // 차까지 넣으면 어떤 차선변경도 항상 충돌로 나온다 -- 움직이는 차는 MOBIL/IDM이 맡는다.
     std::vector<VehicleCollision::Obstacle> m_stationaryObstacles;
-    // 이번 프레임 종방향 속도 상한(m/s). <0이면 제한 없음. 서브모드 틱이 정하고 DriveControl이 IDM 가상
-    // 리더로 걸어 부드럽게 수렴시킨다 -- IDM 자체를 끄면 신호/앞차/제한속도 제약이 같이 사라진다.
     float m_speedCap = -1.0f;
 
     // 스폰 및 리셋 데이터 (Spawn / Reset Data)

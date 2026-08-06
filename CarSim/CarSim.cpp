@@ -196,6 +196,7 @@ std::shared_ptr<Car> CarSim::SpawnCarAt(const Vec3 &position, const Vec3 &direct
               JPH::Vec3(position.GetX(), 0.1f, position.GetZ()));
     car->SetRotation(direction);
     car->SetRoaming(roaming);
+    car->SetId(m_carIDCounter);
     car->SetName(car->GetName() + ToString(m_carIDCounter++));
 
     m_GameObjects.push_back(car);
@@ -207,7 +208,7 @@ void CarSim::SpawnAllCars()
 {
     // 차종/성격 비율 -- 사용자가 지정한 3:3:1:1.5:1.5 / 7:1.5:1.5
     static const float kCarTypeWeights[] = {3.0f, 3.0f, 1.0f, 1.5f, 1.5f}; // Car0:Car1:Jeep:LittleTruck:Van
-    static const float kPersonalityWeights[] = {7.0f, 1.5f, 1.5f};        // Normal:Aggressive:Cautious
+    static const float kPersonalityWeights[] = {7.0f, 1.5f, 1.5f};         // Normal:Aggressive:Cautious
     static_assert(IM_ARRAYSIZE(kCarTypeWeights) == static_cast<int>(CarType::Count));
 
     constexpr float kSpawnRange = 150.0f; // x, z 각각 [-150, 150] 범위에 대충 흩뿌린다
@@ -262,6 +263,7 @@ void CarSim::SpawnManualCar(CarType type)
     car->Init(GetCarSpec(type), GetCarPersonality(CarPersonalityType::Normal), &m_SimState, spawnPos);
     car->SetRotation(spawnDir);
     car->SetManual(true);
+    car->SetId(m_carIDCounter++);
     car->SetName(car->GetName() + "_User");
 
     m_GameObjects.push_back(car);
