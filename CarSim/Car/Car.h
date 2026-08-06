@@ -406,8 +406,8 @@ private:
 
 public:
     static constexpr float ARRIVE_DISTANCE = 5.0f;
-    // Park 노드는 도로 끝이 아니라 주차장 한복판에 있으므로 도착 판정 반경을 따로 크게 잡는다.
     static constexpr float PARK_ARRIVE_DISTANCE = 10.0f;
+    static constexpr float STOPPED_SPEED = 0.01f;
 
 private:
     // 설정 및 스펙 상수/변수 (Constants & Specifications)
@@ -421,10 +421,10 @@ private:
 
     float m_wheelbase = 0.0f;
     float m_mass = 1.0f;
-    Vec3 m_halfExtents = Vec3::sZero();               // 충돌판정용 차체 반크기(x=반폭, z=반길이). CarSpec::halfExtents.
-    float m_maxSteerAngle = ToRadians(45.0f);         // 최대 조향각 (45도)
-    float m_stanleyGain = 1.0f;                       // Stanley 횡오차 게인 k
-    float m_stanleySoft = 1.0f;                       // Stanley 저속 소프트닝 상수 (분모 v+soft, 발산 방지)
+    Vec3 m_halfExtents = Vec3::sZero();       // 충돌판정용 차체 반크기(x=반폭, z=반길이). CarSpec::halfExtents.
+    float m_maxSteerAngle = ToRadians(45.0f); // 최대 조향각 (45도)
+    float m_stanleyGain = 1.0f;               // Stanley 횡오차 게인 k
+    float m_stanleySoft = 1.0f;               // Stanley 저속 소프트닝 상수 (분모 v+soft, 발산 방지)
 
     // 차량 주행 상태 변수 (Vehicle States)
     float m_speed = 0.0f;
@@ -469,9 +469,9 @@ private:
 
     // 경적 상태
     static constexpr float HORN_STOP_SPEED = 0.3f; // 이 속도 이하면 "정지"로 본다(m/s)
-    float m_hornStoppedDuration = 0.0f;             // 막혀서 정지해 있던 누적 시간
-    float m_hornFlashTimer = 0.0f;                             // 남은 빨간 표시 시간(>0이면 빨갛게 그린다)
-    Model *m_carModel = nullptr;                               // 차체 모델(경적 시 재질 색을 잠깐 빨갛게 바꾼다)
+    float m_hornStoppedDuration = 0.0f;            // 막혀서 정지해 있던 누적 시간
+    float m_hornFlashTimer = 0.0f;                 // 남은 빨간 표시 시간(>0이면 빨갛게 그린다)
+    Model *m_carModel = nullptr;                   // 차체 모델(경적 시 재질 색을 잠깐 빨갛게 바꾼다)
 
     // 행동 계획(Behavior Plan) 상태
     static constexpr float BEHAVIOR_PLAN_INTERVAL = 0.2f; // 행동 후보 재판단 주기
@@ -502,7 +502,7 @@ private:
     static constexpr float INTERSECTION_YIELD_TIMEOUT = 2.0f;
     static constexpr float AVOID_CLEAR_DELAY = 0.5f;      // 레이가 이만큼 계속 깨끗해야 원래 차로로 복귀(s)
     static constexpr float AVOID_RETURN_TOLERANCE = 0.3f; // 복귀 목표 오프셋에 이만큼 가까워지면 회피 종료(m)
-    static constexpr float AVOID_MIN_SHIFT = 0.5f; // 이보다 작은 횡이동은 회피 효과가 없다고 보고 후보에서 뺀다(m)
+    static constexpr float AVOID_MIN_SHIFT = 0.5f;        // 이보다 작은 횡이동은 회피 효과가 없다고 보고 후보에서 뺀다(m)
     // 전방 히트를 '내 진로 위'로 볼 기준: 주행 스플라인까지의 거리가 차체 반폭 + 이 여유 이내(m).
     // 회피를 걸지 말지(frontBlocked) 판단용이라 넉넉하게 -- 결과가 '옆으로 조금 비켜라'라서 싸다.
     static constexpr float AVOID_CORRIDOR_MARGIN = 0.5f;
@@ -510,8 +510,8 @@ private:
     // 넓게 잡으면 회피로 옆을 스치듯 통과하는 중인 장애물에도 제동이 걸리고, IDM은 s0(MIN_SAFE_GAP)만큼
     // 앞에서 서려 하므로 그 지점에 갇혀 영영 못 지나간다. 반대로 너무 좁히면 실제로 스칠 것에 안 선다.
     static constexpr float AVOID_PASS_CLEARANCE = 0.2f;
-    static constexpr float AVOID_SIM_TIME = 3.0f;      // 회피 후보 검증의 예측 시간(s)
-    static constexpr float AVOID_SIM_MIN_SPEED = 3.0f; // 정지 중에도 앞으로 굴려보기 위한 최소 가정 속도(m/s)
+    static constexpr float AVOID_SIM_TIME = 3.0f;       // 회피 후보 검증의 예측 시간(s)
+    static constexpr float AVOID_SIM_MIN_SPEED = 3.0f;  // 정지 중에도 앞으로 굴려보기 위한 최소 가정 속도(m/s)
     static constexpr float AVOID_FRONT_RAY_MIN = 8.0f;  // 전방 레이 최소 길이(정지 중에도 바로 앞은 보이게, m)
     static constexpr float AVOID_FRONT_RAY_MAX = 30.0f; // 전방 레이 최대 길이(m)
 

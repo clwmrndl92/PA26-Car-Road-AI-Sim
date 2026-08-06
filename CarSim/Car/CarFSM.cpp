@@ -391,7 +391,7 @@ void Car::UpdatePark()
     if (m_parkPlanPending)
     {
         // 완전히 정지할 때까지는 RS 계획을 세우지 않고 감속만 한다.
-        if (m_speed > 0.0f)
+        if (m_speed > STOPPED_SPEED)
         {
             AccelerateVel(0.0f);
             return;
@@ -444,7 +444,7 @@ void Car::UpdatePark()
         {
             // leg 1처럼 완전히 멈춘 뒤 그 pose에서 leg 2를 계획한다(open-loop RS는 시작 pose 기준). 대기 중
             // 컨트롤러가 finished여도 m_parkSequenceActive가 Park를 유지하므로 Drive로 새지 않는다.
-            if (m_speed > 0.0f)
+            if (m_speed > STOPPED_SPEED)
             {
                 AccelerateVel(0.0f);
                 return;
@@ -470,7 +470,7 @@ void Car::UpdatePark()
         // 더 계획해 추종 잔여 오차(주로 최종 헤딩)를 없앤다. exact=true라 이번엔 오차가 남지 않는다.
         if (m_subMode == SubMode::P_ENTER_LEG2)
         {
-            if (m_speed > 0.0f)
+            if (m_speed > STOPPED_SPEED)
             {
                 AccelerateVel(0.0f);
                 return;
@@ -621,6 +621,10 @@ void Car::BeginParkPlan()
 const Spline *Car::FindBestParkingSpline(LaneDirection *outDirection) const
 {
     if (m_parkSpot == nullptr)
+        return nullptr;
+
+    // ParkSpot이 아니면(=ParkSpot 없어 Park 노드로 폴백된 길가 목적지) 접한 통로가 없으니 aisle 탐색 생략.
+    if (m_parkSpot->nodeType != RoadNodeType::ParkSpot)
         return nullptr;
 
     RoadPose pose = RoadDataManager::Get().GetClosestParkingRoad(m_parkSpot->position, GetForwardAxis());
@@ -814,7 +818,7 @@ void Car::UpdateStop()
         return;
     }
 
-    if (m_speed > 0.01f)
+    if (m_speed > STOPPED_SPEED)
     {
         Steer(0.0f);
         AccelerateVel(0.0f);
