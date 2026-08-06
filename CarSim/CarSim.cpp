@@ -14,6 +14,24 @@ using namespace DirectX;
 
 namespace
 {
+    // weights 누적합 위에 [0, total) 균등난수를 던져 인덱스를 고른다 (비율 기반 랜덤 선택).
+    int PickWeightedIndex(const float *weights, int count)
+    {
+        float total = 0.0f;
+        for (int i = 0; i < count; ++i)
+            total += weights[i];
+
+        float r = (static_cast<float>(rand()) / static_cast<float>(RAND_MAX)) * total;
+        float accum = 0.0f;
+        for (int i = 0; i < count; ++i)
+        {
+            accum += weights[i];
+            if (r < accum)
+                return i;
+        }
+        return count - 1; // 부동소수 오차로 못 걸렸을 때의 폴백
+    }
+
     // 박스의 로컬 +Z(길이축)를 forward 방향에 정렬하는 쿼터니언. 경사(오르막/내리막)도 반영.
     XMFLOAT4 QuatFromForward(const Vec3 &forwardIn)
     {
@@ -165,17 +183,47 @@ void CarSim::SpawnCar(CarType type, CarPersonalityType personality, bool roaming
             return;
     }
 
-    auto car = std::make_shared<Car>();
-    car->Init(GetCarSpec(type), GetCarPersonality(personality), &m_SimState,
-              JPH::Vec3(spawnNode->position.GetX(), 0.1f, spawnNode->position.GetZ()));
-    car->SetRotation(spawnNode->direction);
-    car->SetRoaming(roaming);
+    auto car = SpawnCarAt(spawnNode->position, spawnNode->direction, type, personality, roaming);
     if (!roaming)
         car->SetDestination(destNode);
+}
+
+std::shared_ptr<Car> CarSim::SpawnCarAt(const Vec3 &position, const Vec3 &direction, CarType type,
+                                        CarPersonalityType personality, bool roaming)
+{
+    auto car = std::make_shared<Car>();
+    car->Init(GetCarSpec(type), GetCarPersonality(personality), &m_SimState,
+              JPH::Vec3(position.GetX(), 0.1f, position.GetZ()));
+    car->SetRotation(direction);
+    car->SetRoaming(roaming);
     car->SetName(car->GetName() + ToString(m_carIDCounter++));
 
     m_GameObjects.push_back(car);
     m_CarObjects.push_back(car);
+    return car;
+}
+
+void CarSim::SpawnAllCars()
+{
+    // 차종/성격 비율 -- 사용자가 지정한 3:3:1:1.5:1.5 / 7:1.5:1.5
+    static const float kCarTypeWeights[] = {3.0f, 3.0f, 1.0f, 1.5f, 1.5f}; // Car0:Car1:Jeep:LittleTruck:Van
+    static const float kPersonalityWeights[] = {7.0f, 1.5f, 1.5f};        // Normal:Aggressive:Cautious
+    static_assert(IM_ARRAYSIZE(kCarTypeWeights) == static_cast<int>(CarType::Count));
+
+    constexpr float kSpawnRange = 150.0f; // x, z 각각 [-150, 150] 범위에 대충 흩뿌린다
+    for (int i = 0; i < kMaxSpawnAllCount; ++i)
+    {
+        float x = (static_cast<float>(rand()) / RAND_MAX) * 2.0f * kSpawnRange - kSpawnRange;
+        float z = (static_cast<float>(rand()) / RAND_MAX) * 2.0f * kSpawnRange - kSpawnRange;
+        float yaw = (static_cast<float>(rand()) / RAND_MAX) * XM_2PI;
+        Vec3 position(x, 0.1f, z);
+        Vec3 direction(cosf(yaw), 0.0f, sinf(yaw));
+
+        CarType type = static_cast<CarType>(PickWeightedIndex(kCarTypeWeights, IM_ARRAYSIZE(kCarTypeWeights)));
+        CarPersonalityType personality =
+            static_cast<CarPersonalityType>(PickWeightedIndex(kPersonalityWeights, IM_ARRAYSIZE(kPersonalityWeights)));
+        SpawnCarAt(position, direction, type, personality, /*roaming=*/true);
+    }
 }
 
 void CarSim::RemoveCar(const std::shared_ptr<Car> &car)
@@ -413,6 +461,10 @@ void CarSim::UpdateUI(float dt)
             if (ImGui::Button(("Spawn##spawnCar" + std::to_string(i)).c_str()))
                 SpawnCar(type, personality, m_SpawnRoaming);
         }
+
+        ImGui::Separator();
+        if (ImGui::Button(("Spawn All (" + std::to_string(kMaxSpawnAllCount) + ")").c_str()))
+            SpawnAllCars();
     }
     ImGui::End();
 

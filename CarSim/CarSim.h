@@ -35,6 +35,12 @@ private:
     void InitDynamicObstacleRenders(); // dynamic_obstacles 개수만큼 로컬박스 렌더 생성(위치는 매프레임 UpdateScene이 갱신)
     // roaming=true면 목적지 없이 배회, false면 랜덤 목적지 노드를 잡아 그리로 주행.
     void SpawnCar(CarType type, CarPersonalityType personality, bool roaming);
+    // SpawnCar/SpawnAllCars가 공유하는 실제 생성 로직.
+    std::shared_ptr<Car> SpawnCarAt(const Vec3 &position, const Vec3 &direction, CarType type,
+                                    CarPersonalityType personality, bool roaming);
+    // "Spawn All" 버튼: 차종/성격을 지정된 비율로 무작위로 골라 맵 위 무작위 위치(x,z in [-150,150])에
+    // kMaxSpawnAllCount대를 배회(roaming) 모드로 소환한다.
+    void SpawnAllCars();
     void RemoveCar(const std::shared_ptr<Car> &car);
     void UpdateSignalMarkers();
     // 사용자 조작 차: 기존 것이 있으면 그 자리(위치/방향)에 새 차종으로 갈아끼우고 포커싱한다.
@@ -43,6 +49,8 @@ private:
     void DrawManualCarWindow();
 
 private:
+    static constexpr int kMaxSpawnAllCount = 30; // "Spawn All" 버튼이 소환하는 대수
+
     RoadDataManager m_RoadDataManager;
     SimulationState m_SimState;
     MarkingDataManager m_MarkingDataManager;
