@@ -70,7 +70,6 @@ private:
     std::vector<RenderObject> m_RoadRenders;
     std::vector<RenderObject> m_RoadEdgeRenders;
     std::vector<RenderObject> m_MarkingRenders;
-    std::vector<RenderObject> m_ObstacleRenders; // data.json의 obstacles를 파란 사각형 외곽선으로 시각화
     std::vector<RenderObject> m_DynamicObstacleRenders; // dynamic_obstacles를 주황 큐브로 시각화 (RoadDataManager::GetDynamicObstacles()와 같은 순서)
     std::vector<RenderObject> m_SignalRenders;   // traffic_light 노드 위치의 채워진 원 마커 (m_SignalMarkers와 같은 순서)
 

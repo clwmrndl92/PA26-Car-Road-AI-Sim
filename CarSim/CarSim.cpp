@@ -62,8 +62,8 @@ bool CarSim::Init()
     if (!GameApp::Init())
         return false;
 
-    m_RoadDataManager.Init(NAV_DATA_DIR "/data3.json");
-    m_MarkingDataManager.Init(NAV_DATA_DIR "/marking2.json");
+    m_RoadDataManager.Init(NAV_DATA_DIR "/data4.json");
+    m_MarkingDataManager.Init(NAV_DATA_DIR "/marking.json");
 
     if (!InitResource())
         return false;
@@ -400,15 +400,11 @@ void CarSim::UpdateUI(float dt)
 {
     GameApp::UpdateUI(dt);
 
-    ImGui::SetNextWindowPos(ImVec2(0.0f, 100.0f), ImGuiCond_Always);
-    if (ImGui::Begin("Objects"))
+    ImGui::SetNextWindowPos(ImVec2((float)m_ClientWidth * 0.5f, 10.0f), ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+    if (ImGui::Begin("Simulation Speed", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize))
     {
-        ImGui::Text("Mode : %s", m_CameraMode == CameraMode::Free ? "Free Camera" : "Focus Camera");
-
-        ImGui::Separator();
-        ImGui::Text("Simulation Speed");
         float timeScale = GetTimeScale();
-        const float kSpeedOptions[] = {0.5f, 1.0f, 2.0f, 3.0f};
+        const float kSpeedOptions[] = {0.0f, 0.5f, 1.0f, 2.0f, 3.0f};
         for (int i = 0; i < IM_ARRAYSIZE(kSpeedOptions); ++i)
         {
             if (i > 0)
@@ -416,11 +412,21 @@ void CarSim::UpdateUI(float dt)
             bool isActive = std::fabs(timeScale - kSpeedOptions[i]) < 0.01f;
             if (isActive)
                 ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-            if (ImGui::Button((std::to_string(kSpeedOptions[i]).substr(0, 3) + "x").c_str()))
+            std::string label = (kSpeedOptions[i] == 0.0f) ? "Pause" : (std::to_string(kSpeedOptions[i]).substr(0, 3) + "x");
+            if (ImGui::Button(label.c_str()))
                 SetTimeScale(kSpeedOptions[i]);
             if (isActive)
                 ImGui::PopStyleColor();
         }
+    }
+    ImGui::End();
+
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 100.0f), ImGuiCond_Always);
+    if (ImGui::Begin("Objects"))
+    {
+        ImGui::Text("Mode : %s", m_CameraMode == CameraMode::Free ? "Free Camera" : "Focus Camera");
+
+        ImGui::Separator();
 
         if (m_PickedObjectName.empty())
             ImGui::Text("Picked: (none)");
@@ -527,8 +533,6 @@ void CarSim::DrawScene()
         roadRender.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     for (auto &markingRender : m_MarkingRenders)
         markingRender.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
-    for (auto &obstacleRender : m_ObstacleRenders)
-        obstacleRender.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     for (auto &dynamicObstacleRender : m_DynamicObstacleRenders)
         dynamicObstacleRender.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     for (auto &signalRender : m_SignalRenders)
@@ -746,31 +750,7 @@ void CarSim::InitRoadRenderer()
         }
     }
 
-    // 장애물(data.json의 obstacles)을 위치/크기/회전각 그대로 파란 평면으로 시각화.
-    m_ObstacleRenders.clear();
-    int obstacleIndex = 0;
-    for (const VehicleCollision::Obstacle &obstacle : m_RoadDataManager.GetObstacles())
-    {
-        float headingRad = obstacle.headingRad;
-        Vec3 forward(cosf(headingRad), 0.0f, sinf(headingRad));
-        Vec3 right(-forward.GetZ(), 0.0f, forward.GetX());
-
-        auto corner = [&](float alongSign, float acrossSign)
-        {
-            XMFLOAT3 p = ToXMFLOAT3(obstacle.center + forward * (obstacle.halfLength * alongSign) + right * (obstacle.halfWidth * acrossSign));
-            p.y += EDGE_LINE_HEIGHT;
-            return p;
-        };
-
-        Model *pObstacle = m_ModelManager.CreateFromGeometry(
-            "obstacle_marker" + std::to_string(obstacleIndex++),
-            Geometry::CreateQuad(corner(1.0f, 1.0f), corner(1.0f, -1.0f), corner(-1.0f, -1.0f), corner(-1.0f, 1.0f)));
-        pObstacle->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.0f, 0.4f, 1.0f, 1.0f));
-        pObstacle->materials[0].Set<float>("$Opacity", 1.0f);
-
-        RenderObject &obstacleRender = m_ObstacleRenders.emplace_back();
-        obstacleRender.SetModel(pObstacle);
-    }
+    // 장애물은 InitObstacleColliders가 만드는 텍스처 박스로 시각화한다(별도 평면 마커 없음).
 }
 
 void CarSim::InitMarkingRenderer()
@@ -939,11 +919,22 @@ void CarSim::InitObstacleColliders()
         // heading 기준 forward축을 박스 로컬 +Z(길이축)에 정렬. 길이=2*halfLength(Z), 폭=2*halfWidth(X).
         Vec3 forward(cosf(obstacle.headingRad), 0.0f, sinf(obstacle.headingRad));
 
+        bool isFirstObstacle = (obstacleIndex == 0);
         Model *pCube = m_ModelManager.CreateFromGeometry(
             "obstacle_cube" + std::to_string(obstacleIndex++),
             Geometry::CreateBox(obstacle.halfWidth * 2.0f, obstacle.height, obstacle.halfLength * 2.0f));
-        pCube->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.0f, 0.4f, 1.0f, 1.0f));
         pCube->materials[0].Set<float>("$Opacity", 1.0f);
+        if (isFirstObstacle)
+        {
+            pCube->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f));
+            pCube->materials[0].Set<XMFLOAT4>("$AmbientColor", XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f));
+            TextureManager::Get().CreateFromFile("Model\\office.png");
+            pCube->materials[0].Set<std::string>("$Diffuse", std::string("Model\\office.png"));
+        }
+        else
+        {
+            pCube->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.0f, 0.4f, 1.0f, 1.0f));
+        }
 
         auto cube = std::make_shared<GameObject>();
         cube->SetName("Obstacle" + std::to_string(obstacleIndex));
