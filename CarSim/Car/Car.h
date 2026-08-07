@@ -24,8 +24,8 @@ public:
     void Init(const CarSpec &spec, const CarPersonality &personality, SimulationState *simState, JPH::Vec3 position = JPH::Vec3::sZero());
 
     void UpdatePhysics(float dt) override; // 고정 물리 dt
-    void Update(float dt) override;        // 매프레임
-    void UpdateUI(float dt) override;      // 매프레임
+    void Update(float dt) override;
+    void UpdateUI(float dt) override;
     void Draw(ID3D11DeviceContext *context, IEffect &effect) override;
     void Destroy() override;
 
@@ -40,23 +40,21 @@ public:
 
     void SetPosition(Vec3 position) override;
     void SetRotation(Vec3 direction);
-    // 포커스된(선택된) 차량만 콜라이더/트레일 등 디버그 표시를 그린다.
     void SetFocused(bool focused)
     {
         m_isFocused = focused;
         m_drawCollider = focused;
     }
     void SetDestination(const shared_ptr<RoadNode> &parkNode);
-    void SetRoaming(bool roaming) { m_roaming = roaming; } // 배회 모드 on/off
+    void SetRoaming(bool roaming) { m_roaming = roaming; }
     void SetId(int id) { m_id = id; }
     int GetId() const { return m_id; }
-    // 사용자 조작 차: true면 AI FSM(UpdateMode 이하)을 전부 건너뛰고 UpdateWithControl만 돈다.
-    void SetManual(bool manual) { m_isManual = manual; }
-    bool IsManual() const { return m_isManual; }
+    void SetControl(bool isControl) { m_isControl = isControl; } // 사용자 조작 차
+    bool IsUserControl() const { return m_isControl; }
     float GetAcceleration() const { return m_acceleration; }
     float GetLength() const { return m_halfExtents.GetZ() * 2.0f; }
     float GetHalfWidth() const { return m_halfExtents.GetX(); }
-    // 앞축(GetPosition)에서 앞/뒤 범퍼까지의 거리. 차종마다 콜라이더 오프셋이 달라 상수로 못 둔다.
+    // 앞축(GetPosition)에서 앞/뒤 범퍼까지의 거리
     float FrontOverhang() const { return m_colliderOffset.z + m_halfExtents.GetZ() - m_wheelbase; }
     float RearOverhang() const { return m_wheelbase - m_colliderOffset.z + m_halfExtents.GetZ(); }
 
@@ -65,12 +63,12 @@ public:
     void Accelerate(float desiredAccel);
     void EmergBrake();
     void Steer(float desiredRadian, float steerRamp = 1.0f);
-    void ChangeGear(); // 속도가 낮을 때 전진/후진 기어 토글
+    void ChangeGear();
     bool IsReverse() const { return m_isReverse; }
 
-    void DriveControl(); // VehicleController에서 호출
+    void DriveControl();
     float PurePursuit(Vec3 target);
-    float Stanley(const Spline &spline); // 앞축 기준 경로추종 조향각 (부호 규약은 PurePursuit와 동일: + = 우조향)
+    float Stanley(const Spline &spline);
 
 private:
     // 내부 물리 및 제어 로직 (Internal Physics & Control)
@@ -160,37 +158,35 @@ private:
     void UpdateMode();
     Mode DecideNextMode(const char **reason) const;
     void OnModeEnter(Mode prev);
-    void OnModeExit(Mode next);                                 // next: 이번에 새로 전환될 상태(m_mode는 아직 지금 나가는 상태 그대로)
-    void SetSubMode(SubMode next);                              // m_subMode를 직접 대입하지 않고 항상 이 함수를 거친다 (전환 로그).
-    void BeginSegment(std::unique_ptr<VehicleSegment> segment); // 세그먼트 하나짜리 계획을 VehicleController에 건다.
+    void OnModeExit(Mode next);
+    void SetSubMode(SubMode next);
+    void BeginSegment(std::unique_ptr<VehicleSegment> segment);
 
     VehicleCollision::VehicleShape BuildVehicleShape() const;
     void UpdateFindPath();
     void SetCurrentRoad(const shared_ptr<Road> &road, float offset, LaneDirection direction);
-    // 참조선 s를 진행방향으로 증가하는 부호로 바꾸는 계수(+1 정방향 / -1 역방향).
+
     float TravelSign() const { return GetTravelSign(m_travelDir); }
     RoadRef CurrentRoadRef() const { return RoadRef{m_currentRoad, m_travelDir}; }
     bool ShouldStopForSignal(const shared_ptr<Road> &road, LaneDirection direction, int nextRoadId = -1) const;
     bool TryFindPathAndSetRoad();
 
-    // 배회(roaming) 모드: 목적지 없이 랜덤 후속 road로 계속 주행. m_path를 랜덤 successor로 채워 유지한다.
-    void EnsureRoamingPath();                                         // currentRoad/초기 path 세팅 + 유지
-    void MaintainRoamingPath();                                       // 지나온 앞부분 트림 + 앞쪽 버퍼 채우기
-    RoadRef PickRandomSuccessor(const RoadRef &road) const;           // successor 중 랜덤(없으면 road==nullptr)
-    vector<RoadRef> BuildRoamingPath(const RoadRef &startRoad) const; // startRoad + 랜덤 후속 몇 개
+    void EnsureRoamingPath();
+    void MaintainRoamingPath();
+    RoadRef PickRandomSuccessor(const RoadRef &road) const;
+    vector<RoadRef> BuildRoamingPath(const RoadRef &startRoad) const;
 
     void UpdatePark();
-    bool IsArrivedAtDest() const; // 목적지 도착 판정(통로 주행 중엔 road 끝이 아니라 스팟 앞 P점 기준)
-    void TryBeginLotCruise();     // park 노드 도착 프레임에 통로 주행을 시작할 수 있으면 시작한다
-    bool BeginLotCruise();               // 스팟을 예약하고 '스팟 앞 통로'까지의 주차장 안 경로로 목적지를 갈아끼운다
-    bool BeginLotExitCruise(int lotNodeId); // 출차: 통로를 따라 주차장 출구로 나가는 경로 + 그 뒤 일반 도로 경로
+    bool IsArrivedAtDest() const;
+    void TryBeginParkCruise();
+    bool BeginParkCruise();
+    bool BeginParkExitCruise(int lotNodeId);
     void BeginParkPlan();
     void BeginParkSpotLeg();
     bool PlanParkLegTo(const Vec3 &targetPos, float targetAngleRad, bool exact = false);
     shared_ptr<RoadNode> GetParkTargetNode() const { return m_parkSpot ? m_parkSpot : m_pendingParkNode; }
 
     bool PlanEnterForCurrentSpot();
-    // 스팟이 접한 도로(주차 통로)의 참조선. outDirection엔 그 통로를 타고 들어가는 진행방향이 담긴다.
     const Spline *FindBestParkingSpline(LaneDirection *outDirection = nullptr) const;
     bool ComputeParkPrePose(Vec3 &outPos, float &outAngleRad) const;
     bool ReserveNextParkSpot();
@@ -203,10 +199,9 @@ private:
     bool CanEnterFromCurrentBand(const RoadRef &next) const;
     bool RepathFromCurrentBand();
 
-    // 경적: 장애물/차에 막혀 정지해 있으면 5초마다 한 번 울린다(2초간 차체를 빨갛게).
     void UpdateHorn(float dt);
-    bool IsHornSituation() const;     // Drive 중 (빨간불 대기가 아닌) 정지 상태인가
-    bool KnowsRedSignalAhead() const; // 경로 앞쪽 가장 가까운 신호가 빨강인 걸 아는 상태인가(그럼 경적 안 울림)
+    bool IsHornSituation() const;
+    bool KnowsRedSignalAhead() const;
 
 #pragma endregion
 
@@ -216,19 +211,18 @@ private:
         Vec3 position;
         float distance;
         float speed;
-        Car *leader = nullptr;                   // 이 샘플이 앞차(리더)면 그 차, 정적 제약(신호/커브/정지선 등)이면 nullptr
-        float leaderLateralOffset = 0.0f;        // road 참조선 기준 리더의 d(횡오프셋). leader!=nullptr일 때만 유효 -- 후보가 이 리더를 옆으로 피할 수 있는지 판단용
-        const char *kind = "";                   // 디버그용 정적 제약 종류 표시("signal"/"destEnd"/"mergeWait"/"roadLimit"/"curRoadEnd"/"sensorFront"/"bodySweep"). leader!=nullptr면 안 씀.
-        Vec3 leaderScanPosition = Vec3::sZero(); // 스캔 시점 리더 위치. 매프레임 gap을 '리더도 그동안 전진한 만큼' 되돌리는 기준(ComputeIdmAcceleration).
+        Car *leader = nullptr;
+        float leaderLateralOffset = 0.0f;
+        const char *debugStr = "";
+        Vec3 leaderScanPosition = Vec3::sZero();
     };
 
-    // 이번 프레임 IDM 목표가속도를 결정한 근거(디버그 UI 표시용). DriveControl이 매프레임 채운다.
     struct SpeedLimitDebug
     {
-        std::string label = "free"; // "free"(자유흐름) / RoadSpeedSample::kind / "car:<이름>" / "speedCap" / "steerCap"
+        std::string label = "free";
         float targetSpeed = 0.0f;
         float gap = 0.0f;
-        Car *leader = nullptr; // 이 근거가 앞차면 그 차. 상호 리더 판정(m_currentLeader)이 쓴다
+        Car *leader = nullptr;
     };
 
     struct NearbyCar
@@ -237,7 +231,7 @@ private:
         bool yieldsToMe = false;
     };
 
-    // 한 밴드(centerOffset)에서 ego 앞/뒤로 가장 가까운 차를 MOBIL 판정용 상태로 뽑은 것.
+    // MOBIL 판정용
     struct LaneNeighbors
     {
         bool hasLeader = false;
@@ -256,8 +250,8 @@ private:
     bool TryReserveJunction(const RoadRef &nextRoad);
     void ReleaseJunctionReservation();
     std::vector<NearbyCar> CollectNearbyCars() const;
-    bool IsTurningAhead() const;                  // 교차로 우선순위: 직진 > 회전 판정용
-    bool HasPriorityOver(const Car *other) const; // 우선순위 직진 > 회전, 동급이면 이름 비교
+    bool IsTurningAhead() const;
+    bool HasPriorityOver(const Car *other) const;
     void AppendCarConstraintSamples(std::vector<RoadSpeedSample> &samples,
                                     const std::vector<NearbyCar> &nearbyCars, float lookDistance) const; // nearbyCars 중 내 예정 경로 코리도 안의 차를 도로제약 샘플(가상 리더)로 변환해 추가
     LaneNeighbors GatherLaneNeighbors(const std::vector<NearbyCar> &nearby, const shared_ptr<Road> &road,
@@ -265,8 +259,6 @@ private:
                                       float dirSign) const;
     float CurrentLaneCenter() const;
 
-    // 경로상 다음 road로 가려면 어느 차로에 있어야 하는가. MOBIL 유인 기준에 가중치로 얹어 쓴다
-    // (경로 자체를 바꾸는 게 아니라 차선변경 판단 근거 하나로 들어간다).
     struct RouteLaneGoal
     {
         bool active = false;       // 다음 road가 진입 차로를 제약하는가(아니면 아래 값들은 무의미)
@@ -283,7 +275,6 @@ private:
 #pragma endregion
 
 #pragma region Avoid
-    // 차체 사각에서 쏜 감지 레이 하나. hitDistance<0이면 maxDistance 안에서 아무것도 안 맞았다는 뜻.
     struct SensorRay
     {
         Vec3 origin;
@@ -291,7 +282,6 @@ private:
         float hitDistance = -1.0f;
     };
 
-    // 매프레임 갱신되는 레이 스캔 결과. 그룹별로 "막혔는가"만 뽑아 회피 판단에 쓴다.
     struct SensorScan
     {
         bool frontBlocked = false; // 전방 코리도 안에 (거의) 멈춰 있는 장애물이 잡힘 -- 회피 트리거 후보
@@ -388,7 +378,7 @@ private:
     bool IsOncomingLaneVehicle(const VehicleCollision::Obstacle &obstacle) const;
     bool IsOncomingLaneVehicleOn(const RoadRef &road, float egoOffset, float egoHalfExtent,
                                  const VehicleCollision::Obstacle &obstacle) const; // 위 판정을 road 하나에 대해
-    VehicleCollision::Obstacle MakeVehicleObstacle() const; // 이 차의 차체 OBB를 장애물 하나로
+    VehicleCollision::Obstacle MakeVehicleObstacle() const;                         // 이 차의 차체 OBB를 장애물 하나로
     // 좌/우 후보 오프셋(차로 반폭 -> 한 폭 -> 두 폭)을 가까운 쪽부터 궤적 시뮬레이션해 첫 무충돌 오프셋을 고른다.
     bool FindAvoidOffset(const SensorScan &scan, const std::vector<VehicleCollision::Obstacle> &obstacles,
                          float laneCenter, float &outOffset) const;
@@ -438,7 +428,7 @@ private:
 
     bool m_wantSegmentTick = false;
     bool m_isFocused = false; // 포커스 여부 (입력 처리용)
-    bool m_isManual = false;  // 사용자 조작 차 여부 (true면 AI FSM 대신 UpdateWithControl로 구동)
+    bool m_isControl = false; // 사용자 조작 차 여부 (true면 AI FSM 대신 UpdateWithControl로 구동)
     int m_id = -1;            // CarSim이 스폰 시 부여하는 고유 id (HasPriorityOver의 전순서 비교용)
 
     // 컴포넌트 및 AI 상태 (Components & Systems)
@@ -497,10 +487,10 @@ private:
     static constexpr float MOBIL_LANE_CHANGE_COOLDOWN = 2.0f; // 차선변경 후 이 시간(s) 동안은 MOBIL을 다시 평가하지 않는다(연속 변경 방지)
     // 횡오프셋을 목표(밴드 중심)로 당기는 Lerp 비율. 리플랜(0.2초)마다 이만큼 목표 쪽으로 이동. m_personality.laneChangeLerpAlpha에서 옴.
 
-    float m_lastBehaviorPlanTime = -1000.0f;        // 처음 Drive 진입 시 바로 첫 판단이 돌도록 충분히 과거로 초기화
-    float m_lastLaneChangeTime = -1000.0f;          // 마지막으로 MOBIL 차선변경을 시작한 시각 -- MOBIL_LANE_CHANGE_COOLDOWN 게이팅용
-    float m_planAccelDebug = 0.0f;                  // DriveControl이 매프레임 계산한 IDM 목표가속도(디버그 UI 표시용 캐시)
-    SpeedLimitDebug m_limitDebug;                   // 위 목표가속도를 결정한 근거(디버그 UI 표시용 캐시)
+    float m_lastBehaviorPlanTime = -1000.0f; // 처음 Drive 진입 시 바로 첫 판단이 돌도록 충분히 과거로 초기화
+    float m_lastLaneChangeTime = -1000.0f;   // 마지막으로 MOBIL 차선변경을 시작한 시각 -- MOBIL_LANE_CHANGE_COOLDOWN 게이팅용
+    float m_planAccelDebug = 0.0f;           // DriveControl이 매프레임 계산한 IDM 목표가속도(디버그 UI 표시용 캐시)
+    SpeedLimitDebug m_limitDebug;            // 위 목표가속도를 결정한 근거(디버그 UI 표시용 캐시)
     // 이번 프레임 IDM이 실제로 고른 앞차. 다른 차가 "쟤가 날 리더로 삼고 있나"를 여기서 읽어, 서로를
     // 리더로 잡고 둘 다 서버리는 교착을 끊는다. 역참조는 안 하므로 dangling이어도 비교는 안전하다.
     Car *m_currentLeader = nullptr;
@@ -509,7 +499,7 @@ private:
     std::vector<NearbyCar> m_lastNearbyCars;        // UpdateBehaviorPlan이 마지막으로 수집한 주변 차 목록 -- ShouldHoldForMerge가 매 프레임 재사용(재수집 비용 회피)
     std::vector<RoadSpeedSample> m_lastRoadSamples; // UpdateBehaviorPlan이 마지막으로 스캔한 리더/제약 목록 -- DriveControl이 매프레임 IDM 가속도 재계산에 재사용
     IDM::Params m_lastIdmParams;                    // 위 스캔 시점의 IDM 파라미터(v0 등) 캐시
-    Vec3 m_planScanPosition = Vec3::sZero();        // 위 스캔 시점의 ego 위치 -- 정적 제약 gap을 매프레임 보정(distanceOffset)하는 기준
+    Vec3 m_planScanPosition = Vec3::sZero();        // 위 스캔 시점의myState 위치 -- 정적 제약 gap을 매프레임 보정(distanceOffset)하는 기준
 
     // 장애물 회피(Avoid). 레이 스캔은 IDM/MOBIL의 0.2초 주기와 달리 매프레임 돈다 -- 갑자기 끼어든 차나
     // 차로 코리도 판정으로는 안 잡히는 정적 장애물에 프레임 단위로 반응해야 하기 때문.
@@ -566,13 +556,13 @@ private:
 
 static float CalcMaxSteerAngle(float speed)
 {
-    constexpr float LOW_SPEED_CUTOFF = 18.26f / 3.6f;   // use MAX_STEER_ANGLE (cause 20.2f / LOW_SPEED_CUTOFF^2 > 45 degree)
-    constexpr float MAX_STEER_ANGLE = ToRadians(45.0f); // 45 degree
+    constexpr float LOW_SPEED_CUTOFF = 18.26f / 3.6f;
+    constexpr float MAX_STEER_ANGLE = ToRadians(45.0f);
     return (speed <= LOW_SPEED_CUTOFF) ? MAX_STEER_ANGLE : 20.2f / (speed * speed);
 }
 static float CalcMaxSpeed(float targetAngle)
 {
-    constexpr float MAX_STEER_ANGLE = ToRadians(45.0f); // 45 degree
+    constexpr float MAX_STEER_ANGLE = ToRadians(45.0f);
     targetAngle = std::clamp(std::abs(targetAngle), 0.0005f, MAX_STEER_ANGLE);
     return std::sqrt(20.2f / targetAngle);
 }

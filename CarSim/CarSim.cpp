@@ -62,7 +62,7 @@ bool CarSim::Init()
     if (!GameApp::Init())
         return false;
 
-    m_RoadDataManager.Init(NAV_DATA_DIR "/data4.json");
+    m_RoadDataManager.Init(NAV_DATA_DIR "/data.json");
     m_MarkingDataManager.Init(NAV_DATA_DIR "/marking.json");
 
     if (!InitResource())
@@ -262,7 +262,7 @@ void CarSim::SpawnManualCar(CarType type)
     auto car = std::make_shared<Car>();
     car->Init(GetCarSpec(type), GetCarPersonality(CarPersonalityType::Normal), &m_SimState, spawnPos);
     car->SetRotation(spawnDir);
-    car->SetManual(true);
+    car->SetControl(true);
     car->SetId(m_carIDCounter++);
     car->SetName(car->GetName() + "_User");
 

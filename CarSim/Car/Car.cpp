@@ -45,7 +45,6 @@ void Car::Init(const CarSpec &spec, const CarPersonality &personality, Simulatio
     m_parkSpot->direction = GetForwardAxis();
     m_parkSpot->nodeType = RoadNodeType::ParkSpot;
 
-    // DEBUG
     DebugInit();
 }
 
@@ -54,7 +53,7 @@ void Car::Update(float dt)
     m_deltaTime = dt;
     m_currentTime += dt;
 
-    if (m_isManual)
+    if (m_isControl)
     {
         UpdateWithControl();
         return;
@@ -96,8 +95,6 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
 {
     using namespace DirectX;
 
-    // 경적 중이면 차체 재질을 잠깐 빨갛게 칠해 그리고 곧바로 원복한다. 모델은 같은 modelPath끼리
-    // 공유되지만 Draw는 차마다 순차 호출이라, 이 차의 GameObject::Draw 동안만 빨간색이 적용된다.
     bool honking = m_hornFlashTimer > 0.0f && m_carModel != nullptr;
     std::vector<std::pair<size_t, XMFLOAT4>> savedDiffuse;
     if (honking)
@@ -159,8 +156,6 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
 
     if (m_steerLine.GetModel())
     {
-        // Car only ever yaws around world Y, so the steer-angle offset and the car's own
-        // rotation share an axis and can be combined in either order.
         XMFLOAT4 carRotF = m_transform.GetRotationQuat();
         XMVECTOR carRot = XMLoadFloat4(&carRotF);
         XMVECTOR steerYaw = XMQuaternionRotationAxis(g_XMIdentityR1, m_steerAngle);
@@ -209,9 +204,9 @@ void Car::SetRotation(Vec3 direction)
     float yaw = std::atan2(direction.GetX(), direction.GetZ());
     DirectX::XMFLOAT4 rotation;
     DirectX::XMStoreFloat4(&rotation, DirectX::XMQuaternionRotationRollPitchYaw(0.0f, yaw, 0.0f));
-    Vec3 frontAxle = GetPosition(); // capture using the OLD rotation, before it changes
+    Vec3 frontAxle = GetPosition();
     GameObject::SetRotation(rotation);
-    SetPosition(frontAxle); // re-derive the rear axle using the NEW rotation
+    SetPosition(frontAxle);
 }
 
 void Car::EmergBrake()
@@ -227,9 +222,6 @@ void Car::AccelerateVel(float desiredVelocity)
 void Car::Accelerate(float desiredAccel)
 {
     float aTarget = std::clamp(desiredAccel, -m_maxBrake, m_maxAccel);
-    // 목표 부호가 현재 가속도와 반대로 바뀌면(감속 중 제약이 풀려 가속으로 전환 등) 저크램프로 반대
-    // 부호 구간을 천천히 거쳐가지 않고 0으로 스냅한다 -- 안 그러면 관성으로 남은 반대부호 가속도가
-    // m_jerkUp/m_jerkDown 속도로만 빠지면서, 제약이 이미 풀렸는데도 한동안 계속 밀린다.
     if ((aTarget >= 0.0f) != (m_acceleration >= 0.0f))
         m_acceleration = 0.0f;
 
@@ -250,9 +242,9 @@ void Car::Steer(float radian, float steerRamp)
 
 void Car::ChangeGear()
 {
-    constexpr float GEAR_SWITCH_SPEED_THRESHOLD = 2.0f / 3.6f; // 2 km/h
+    constexpr float GEAR_SWITCH_SPEED_THRESHOLD = 2.0f / 3.6f;
 
-    if (m_speed <= GEAR_SWITCH_SPEED_THRESHOLD) // Toggle Drive / Reverse gear
+    if (m_speed <= GEAR_SWITCH_SPEED_THRESHOLD)
         m_isReverse = !m_isReverse;
 }
 
@@ -261,8 +253,8 @@ void Car::Destroy()
     if (m_SimState != nullptr)
     {
         if (m_parkSpot != nullptr)
-            m_SimState->ReleaseParkSpot(m_parkSpot->id); // 예약된 자리를 든 채로 제거되면 그 자리가 영원히 잠기므로 먼저 반환한다.
-        m_SimState->UnregisterCar(this);                 // 전역 차량 레지스트리에서 자신을 빼둔다.
+            m_SimState->ReleaseParkSpot(m_parkSpot->id);
+        m_SimState->UnregisterCar(this);
     }
     GameObject::Destroy();
 }
@@ -272,8 +264,6 @@ void Car::SetCurrentRoad(const shared_ptr<Road> &road, float offset, LaneDirecti
     if (m_currentRoad == road && m_currentOffset == offset && m_travelDir == direction)
         return;
 
-    // Keep the reservation while entering its connecting road; release it when leaving that junction.
-    // CheckPath has already acquired the same junction id before the entry transition.
     int nextJunctionId = road != nullptr ? road->GetJunctionId() : -1;
     if (m_reservedJunctionId >= 0 && m_reservedJunctionId != nextJunctionId)
         ReleaseJunctionReservation();
@@ -294,7 +284,6 @@ bool Car::ShouldStopForSignal(const shared_ptr<Road> &road, LaneDirection direct
     if (!signalNode)
         return false;
 
-    // 노드 접선에 대한 내 위치의 앞/뒤로 "지남"을 직접 판정 -- 참조선 재투영(myT)은 차가 끝점을 넘어가면 클램프돼 영원히 "안 지남"이 됨.
     const Spline &spline = road->GetReferenceLine();
     float sign = GetTravelSign(direction);
     float nodeT = spline.GetSplinePosition(signalNode->position);
@@ -313,16 +302,15 @@ bool Car::ShouldStopForSignal(const shared_ptr<Road> &road, LaneDirection direct
     if (color == TrafficSignal::Color::Green)
     {
         if (m_committedYellowNodeId == signalNode->id)
-            m_committedYellowNodeId = -1; // 다음 사이클 대비 리셋
+            m_committedYellowNodeId = -1;
     }
     else if (color == TrafficSignal::Color::Yellow && m_committedYellowNodeId != signalNode->id)
     {
         if (gap <= emergStopDistance)
-            m_committedYellowNodeId = signalNode->id; // 최대 제동으로도 못 서는 거리 -- 통과 확정
+            m_committedYellowNodeId = signalNode->id;
     }
     else if (color == TrafficSignal::Color::Red && m_committedYellowNodeId == signalNode->id)
     {
-        // 아직 설 수 있으면(최대 제동 거리 밖) 커밋 취소하고 선다
         if (gap > emergStopDistance)
             m_committedYellowNodeId = -1;
     }
@@ -334,7 +322,6 @@ void Car::UpdateCar()
     constexpr float FRICT_DECEL_RATE = 0.1f;
     if (m_acceleration == 0.0f)
     {
-        // natural deceleration (drag) when coasting
         m_speed -= m_speed * FRICT_DECEL_RATE * m_deltaTime;
 
         if (m_speed < 0.1f)
@@ -345,7 +332,6 @@ void Car::UpdateCar()
 
     m_speed = std::clamp(m_speed, 0.0f, m_maxSpeed);
 
-    // steer
     m_maxSteerAngle = CalcMaxSteerAngle(m_speed);
     m_steerAngle = std::clamp(m_steerAngle, -m_maxSteerAngle, m_maxSteerAngle);
 }
@@ -355,7 +341,6 @@ void Car::UpdateWithControl()
     if (!m_isFocused)
         return;
 
-    // Reset
     if (ImGui::IsKeyPressed(ImGuiKey_Space, false))
     {
         m_rigidbody.SetPositionAndRotation(
@@ -372,20 +357,16 @@ void Car::UpdateWithControl()
         m_frontTrailRender.SetModel(nullptr);
     }
 
-    // Change Gear
-    if (ImGui::IsKeyPressed(ImGuiKey_Z, false)) // Toggle Drive / Reverse gear
+    if (ImGui::IsKeyPressed(ImGuiKey_Z, false))
         ChangeGear();
 
-    // Acceleration / Brake
-
-    if (m_isFocused && ImGui::IsKeyDown(ImGuiKey_DownArrow)) // Brake
+    if (m_isFocused && ImGui::IsKeyDown(ImGuiKey_DownArrow))
         Accelerate(-m_maxBrake);
-    else if (m_isFocused && ImGui::IsKeyDown(ImGuiKey_UpArrow)) // Accelerate
+    else if (m_isFocused && ImGui::IsKeyDown(ImGuiKey_UpArrow))
         Accelerate(m_maxAccel);
     else
         AccelerateVel(0);
 
-    // Steering
     if (m_isFocused && ImGui::IsKeyDown(ImGuiKey_LeftArrow))
         Steer(-1);
     else if (m_isFocused && ImGui::IsKeyDown(ImGuiKey_RightArrow))
@@ -403,8 +384,6 @@ void Car::ApplyMotion()
         m_rigidbody.SetAngularVelocity(JPH::Vec3::sZero());
         m_acceleration = 0.0f;
         m_speed = 0.0f;
-        // 회피 상태머신(HandleContactPending)이 다음 Update에서 소비한다. 레이가 못 본 각도로 꼭짓점을 박은
-        // 경우, 계획상으론 아직 '진행 중'이라 그대로 두면 계속 밀어붙이기 때문.
         m_contactPending = true;
         DebugConsole::Log("CRASH!!");
         return;
@@ -419,7 +398,7 @@ JPH::Vec3 Car::ComputeDesiredVelocity() const
 {
     float signedSpeed = GetSignedSpeed();
     DirectX::XMFLOAT3 fwd = m_transform.GetForwardAxis();
-    float vy = m_rigidbody.GetLinearVelocity().GetY(); // 수직 속도는 물리(중력/지면)가 정한 값을 그대로 유지
+    float vy = m_rigidbody.GetLinearVelocity().GetY();
     return JPH::Vec3(fwd.x * signedSpeed, vy > 0.0f ? 0.0f : vy, fwd.z * signedSpeed);
 }
 
@@ -430,12 +409,11 @@ float Car::PurePursuit(Vec3 target)
 
     float distance = targetVec.Length();
 
-    // [방어 코드] 혹시라도 타겟과 내 차의 위치가 완벽히 겹치면 조향하지 않음
     if (distance < 0.001f)
         return 0.0f;
 
     Vec3 carFwd = ToVec3(m_transform.GetForwardAxis()).Normalized();
-    Vec3 carRight = ToVec3(m_transform.GetRightAxis()).Normalized(); // 좌우 판별용
+    Vec3 carRight = ToVec3(m_transform.GetRightAxis()).Normalized();
 
     float dotProd = carFwd.Dot(targetVec) / distance;
     dotProd = std::clamp(dotProd, -1.0f, 1.0f);
@@ -450,7 +428,7 @@ float Car::PurePursuit(Vec3 target)
 
 float Car::Stanley(const Spline &spline)
 {
-    Vec3 frontAxle = GetPosition(); // Stanley는 앞축 기준
+    Vec3 frontAxle = GetPosition();
     float t = spline.GetSplinePosition(frontAxle);
     Vec3 pathPoint = spline.GetPositionAt(t);
     Vec3 pathDir = spline.GetDirectionAt(t).Normalized();
@@ -458,10 +436,8 @@ float Car::Stanley(const Spline &spline)
     Vec3 carFwd = ToVec3(m_transform.GetForwardAxis()).Normalized();
     Vec3 carRight = ToVec3(m_transform.GetRightAxis()).Normalized();
 
-    // 헤딩오차: 경로 진행방향이 내 오른쪽을 향할수록 +(우조향)
     float headingError = atan2f(carRight.Dot(pathDir), carFwd.Dot(pathDir));
 
-    // 횡오차: 앞축이 경로 오른쪽에 있으면 +, 되돌리려면 좌조향이므로 부호 반전. 저속 발산은 분모 소프트닝으로 막는다.
     float crossTrackRight = (frontAxle - pathPoint).Dot(carRight);
     float crossTrackTerm = atanf(m_stanleyGain * -crossTrackRight / (m_speed + m_stanleySoft));
 
@@ -487,27 +463,26 @@ void Car::SetDestination(const shared_ptr<RoadNode> &destNode)
 
 void Car::UpdateHorn(float dt)
 {
-    constexpr float HORN_INTERVAL = 5.0f;       // 막혀 있는 동안 경적 주기(초)
-    constexpr float HORN_FLASH_DURATION = 2.0f; // 경적 표시로 빨갛게 두는 시간(초)
+    constexpr float HORN_INTERVAL = 5.0f;
+    constexpr float HORN_FLASH_DURATION = 2.0f;
 
     if (IsHornSituation())
     {
         m_hornStoppedDuration += dt;
         if (m_hornStoppedDuration >= HORN_INTERVAL)
         {
-            m_hornStoppedDuration = 0.0f;           // 다음 5초 카운트 시작
-            m_hornFlashTimer = HORN_FLASH_DURATION; // 경적: 2초간 빨갛게
+            m_hornStoppedDuration = 0.0f;
+            m_hornFlashTimer = HORN_FLASH_DURATION;
             DebugConsole::Log(GetName() + ": HONK!");
         }
     }
     else
-        m_hornStoppedDuration = 0.0f; // 다시 움직이면(또는 신호대기면) 리셋
+        m_hornStoppedDuration = 0.0f;
 
     if (m_hornFlashTimer > 0.0f)
         m_hornFlashTimer -= dt;
 }
 
-// Drive 중 장애물/차에 막혀 멈춘 상태인가. 빨간불 대기(그걸 아는 차)와 정상 정차(도착 등 Drive 외)는 제외한다.
 bool Car::IsHornSituation() const
 {
     if (m_mode != Mode::Drive)
@@ -519,7 +494,6 @@ bool Car::IsHornSituation() const
 
 bool Car::KnowsRedSignalAhead() const
 {
-    // 이 거리 안의 빨간 신호는 "알고 서 있다"고 보고 경적을 참는다(대기줄 커버, m)
     constexpr float HORN_SIGNAL_AWARE_DISTANCE = 40.0f;
 
     for (size_t i = m_pathIndex; i < m_path.size(); ++i)
@@ -530,7 +504,6 @@ bool Car::KnowsRedSignalAhead() const
         if (signalNode == nullptr)
             continue;
 
-        // 현재 road의 신호는 이미 정지선을 지났으면 건너뛴다(지난 신호엔 안 걸린다).
         if (i == m_pathIndex)
         {
             const Spline &spline = road.road->GetReferenceLine();
@@ -539,9 +512,8 @@ bool Car::KnowsRedSignalAhead() const
                 continue;
         }
 
-        // 경로상 가장 가까운(앞선) 신호가 판정 기준 -- 그 너머 신호는 이 신호를 지나야 만난다.
         if ((signalNode->position - GetPosition()).Length() > HORN_SIGNAL_AWARE_DISTANCE)
-            return false; // 가장 가까운 신호가 너무 멀다 -- 신호 때문에 선 게 아님
+            return false;
         return m_SimState->GetSignalColor(signalNode->signalPhaseOffset, signalNode->signalGreenDuration,
                                           signalNode->signalYellowDuration, signalNode->signalRedDuration) ==
                TrafficSignal::Color::Red;
@@ -549,7 +521,6 @@ bool Car::KnowsRedSignalAhead() const
     return false;
 }
 #pragma region Debug
-// Debug / Rendering Helpers
 void Car::UpdateDebugWindow()
 {
     if (!m_drawCollider || !m_isFocused)
@@ -570,14 +541,11 @@ void Car::UpdateDebugWindow()
         else
             ImGui::Text("Mode: %s", StateToString(m_mode));
 
-        // 행동계획(0.2초마다 UpdateBehaviorPlan이 갱신): IDM 목표가속도, 속도 캡, 현재 횡오프셋.
         ImGui::Text("Plan accel(IDM): %.2f m/s^2", m_planAccelDebug);
-        // 위 가속도를 결정한 근거(매프레임 DriveControl이 갱신) -- "free"면 제약 없음, 그 외엔 samples 중 최소가속을 낸 항목/speedCap/steerCap.
         ImGui::Text("Limit cause: %s (target %.1f km/h, gap %.1f m)", m_limitDebug.label.c_str(),
                     m_limitDebug.targetSpeed * 3.6f, m_limitDebug.gap);
         ImGui::Text("Cur offset d: %.2f m", m_currentOffset);
 
-        // 회피(레이 스캔 + Avoid 상태)
         ImGui::Text("Ray front: %.1f m %s", m_sensor.frontDistance, m_sensor.frontBlocked ? "(blocked)" : "");
         ImGui::Text("Ray side: %s%s | rear %.1f m", m_sensor.leftBlocked ? "L" : "-",
                     m_sensor.rightBlocked ? "R" : "-", m_sensor.rearDistance);
@@ -604,7 +572,7 @@ void Car::UpdateDebugWindow()
 
 void Car::UpdateTrail()
 {
-    if (!m_drawCollider) // only track/rebuild the trail for cars actually shown in debug view
+    if (!m_drawCollider)
         return;
 
     constexpr float TRAIL_SAMPLE_DISTANCE = 0.5f;
@@ -640,7 +608,7 @@ void Car::UpdateTrail()
 void Car::RebuildTrailRender(RenderObject &render, const std::deque<DirectX::XMFLOAT3> &trail,
                              const std::string &name, const DirectX::XMFLOAT4 &color)
 {
-    constexpr float TRAIL_LINE_HEIGHT = 0.15f; // lift above the road edge lines (y = 0.1f)
+    constexpr float TRAIL_LINE_HEIGHT = 0.15f;
 
     std::vector<DirectX::XMFLOAT3> points(trail.begin(), trail.end());
     for (DirectX::XMFLOAT3 &point : points)
@@ -667,7 +635,7 @@ void Car::RebuildSplineRender()
         return;
     }
 
-    constexpr float SPLINE_LINE_HEIGHT = 0.15f; // lift above the road edge lines (y = 0.1f)
+    constexpr float SPLINE_LINE_HEIGHT = 0.15f;
 
     std::vector<DirectX::XMFLOAT3> points;
     points.reserve(splinePoints.size());
@@ -692,11 +660,8 @@ void Car::RebuildSensorRender()
         return;
     }
 
-    constexpr float SENSOR_LINE_HEIGHT = 0.3f; // 스플라인/트레일 선(0.15f)보다 위로 띄운다
+    constexpr float SENSOR_LINE_HEIGHT = 0.3f;
 
-    // 서로 떨어진 레이 여러 개를 폴리라인 하나로 그린다: origin -> end -> origin 으로 되돌아온 뒤 다음
-    // 레이로 넘어가므로, 되돌아오는 선은 원래 선과 겹치고 레이 사이를 잇는 선은 차체 외곽을 따라간다.
-    // 실제로 뭔가 맞힌 레이만 그린다 -- 전부 그리면 매프레임 20여 개가 깔려서 정작 감지된 게 안 보인다.
     std::vector<DirectX::XMFLOAT3> points;
     for (const SensorRay &ray : m_sensor.rays)
     {
@@ -728,7 +693,6 @@ void Car::RebuildRSDebugRender(const ReedsShepp::Path &path, const Vec3 &startPo
 {
     constexpr float DEBUG_LINE_HEIGHT = 0.15f;
 
-    // RS 경로 폴리라인 (보라색)
     std::vector<Vec3> pathPoints = ReedsShepp::GetDebugPath(path, startPos, startAngleRad, turningRadius);
     if (pathPoints.size() < 2)
     {
@@ -751,12 +715,10 @@ void Car::RebuildRSDebugRender(const ReedsShepp::Path &path, const Vec3 &startPo
         m_parkPathRender.SetModel(pPathModel);
     }
 
-    // 목표 위치 마커 (초록 평면, 모델은 Init에서 이미 만들어둠)
     DirectX::XMFLOAT3 markerPos = ToXMFLOAT3(targetPos);
     markerPos.y += DEBUG_LINE_HEIGHT;
     m_parkTargetMarker.GetTransform().SetPosition(markerPos);
 
-    // 목표 방향 선 (초록 선) — 매번 targetPos/targetAngleRad가 바뀌므로 그때그때 새로 만든다.
     constexpr float TARGET_LINE_LENGTH = 6.0f;
     Vec3 targetDir(cosf(targetAngleRad), 0.0f, sinf(targetAngleRad));
     DirectX::XMFLOAT3 lineStart = ToXMFLOAT3(targetPos);
@@ -773,9 +735,6 @@ void Car::RebuildRSDebugRender(const ReedsShepp::Path &path, const Vec3 &startPo
 
 void Car::DebugInit()
 {
-    // Per-object model names: CreateFromGeometry() overwrites any existing
-    // model stored under the same name, so a shared name would make every
-    // car's debug bbox end up showing whichever car initialized last.
     float w = m_halfExtents.GetX() * 2.0f;
     float h = m_halfExtents.GetY() * 2.0f;
     float d = m_halfExtents.GetZ() * 2.0f;
@@ -797,7 +756,6 @@ void Car::DebugInit()
     pTargetMarker->materials[0].Set<float>("$Opacity", 1.0f);
     m_targetMarker.SetModel(pTargetMarker);
 
-    // Park(RS) 목표 위치 마커 — 위치만 바뀌므로 모델은 한 번만 만들어두고 재사용한다.
     Model *pParkTargetMarker = ModelManager::Get().CreateFromGeometry("__park_target_marker__:" + GetName(),
                                                                       Geometry::CreatePlane(TARGET_MARKER_SIZE, TARGET_MARKER_SIZE));
     pParkTargetMarker->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f));

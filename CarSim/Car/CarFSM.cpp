@@ -195,7 +195,7 @@ void Car::UpdateMode()
 {
     const char *reason = "";
     UpdateFindPath();
-    TryBeginLotCruise(); // park 노드에 닿았으면 RS 직행 대신 통로를 따라 스팟 앞까지 마저 주행한다
+    TryBeginParkCruise(); // park 노드에 닿았으면 RS 직행 대신 통로를 따라 스팟 앞까지 마저 주행한다
     Mode next = DecideNextMode(&reason);
     if (next != m_mode)
     {
@@ -463,7 +463,7 @@ bool Car::IsArrivedAtDest() const
     return arrived;
 }
 
-void Car::TryBeginLotCruise()
+void Car::TryBeginParkCruise()
 {
     m_lotEntryHold = false;
     if (m_mode != Mode::Drive || m_roaming || m_lotCruise || m_currentRoad == nullptr)
@@ -481,12 +481,12 @@ void Car::TryBeginLotCruise()
         return;
     }
 
-    BeginLotCruise(); // 실패하면 m_pendingParkNode가 그대로라 곧바로 기존 Park(RS 직행) 경로로 넘어간다
+    BeginParkCruise(); // 실패하면 m_pendingParkNode가 그대로라 곧바로 기존 Park(RS 직행) 경로로 넘어간다
 }
 
 // 주차장 입구에 도착한 시점의 목적지 갈아끼우기: 스팟을 예약하고, 그 스팟이 접한 통로까지 주차장 안
 // 통로망을 A*로 이어 Drive를 계속한다. RS는 도로를 무시한 직행이라 통로를 안 타고 주차장을 가로지른다.
-bool Car::BeginLotCruise()
+bool Car::BeginParkCruise()
 {
     RoadDataManager &roadData = RoadDataManager::Get();
     shared_ptr<RoadNode> lotNode = m_pendingParkNode;
@@ -547,7 +547,7 @@ bool Car::BeginLotCruise()
 // 출차 경로: (지금 있는 통로) -> park 노드에 가장 가까운 통로 = 주차장 출구 -> park 노드에 가장 가까운
 // 일반 도로 -> 목적지. 통로망과 일반 도로는 링크로 안 이어져 있어(주차장 입출구는 데이터상 끊겨 있다)
 // 통로 경로와 일반 도로 경로를 각각 A*로 풀어 이어 붙인다 -- CheckPath가 그 경계를 평소 전이처럼 넘긴다.
-bool Car::BeginLotExitCruise(int lotNodeId)
+bool Car::BeginParkExitCruise(int lotNodeId)
 {
     if (m_currentRoad == nullptr || !m_currentRoad->IsParkingRoad() || m_destRoad == nullptr)
         return false;
@@ -633,7 +633,7 @@ void Car::UpdatePark()
         // 안 지우면 다음 도로 정차 후 출발(P_EXIT) 때 이 주차장 기준으로 통로를 다시 찾아버린다.
         m_parkNodeId = -1;
 
-        if (BeginLotExitCruise(lotNodeId))
+        if (BeginParkExitCruise(lotNodeId))
             return; // 통로를 따라 주차장 출구까지 -> 거기서 이어붙인 일반 도로 경로로 계속
 
         // TryFindPathAndSetRoad는 실패 시 dest/current를 지우므로, 방금 나온 도로를 잃지 않게 보존해뒀다 복원한다.
@@ -1438,14 +1438,14 @@ std::vector<Car::NearbyCar> Car::CollectNearbyCars() const
     constexpr float SAFE_TIME = 3.0f; // 주변 차 수집 반경 산정용 미래 시야(초, 사람의 3초 룰)
 
     std::vector<NearbyCar> nearby;
-    Vec3 egoPosition = GetPosition();
-    Vec3 egoFwd = GetForwardAxis();
+    Vec3 myPosition = GetPosition();
+    Vec3 myFwd = GetForwardAxis();
     for (Car *other : m_SimState->GetCars())
     {
         if (other == this)
             continue;
         // 높이로 먼저 거르기
-        if (std::fabs(other->GetPosition().GetY() - egoPosition.GetY()) > VERTICAL_SEPARATION)
+        if (std::fabs(other->GetPosition().GetY() - myPosition.GetY()) > VERTICAL_SEPARATION)
             continue;
 
         float reachDistance = (m_speed + other->GetSpeed()) * SAFE_TIME +    // 최고 상대속도
@@ -1453,12 +1453,12 @@ std::vector<Car::NearbyCar> Car::CollectNearbyCars() const
                               GetLength() * 0.5f + other->GetLength() * 0.5f // 차 크기
                               + MIN_SAFE_GAP;                                // 최소 거리
 
-        if ((other->GetPosition() - egoPosition).Length() > std::max(reachDistance, AVOID_FRONT_RAY_MAX)) // 느리게가도 차선변경은 미리 할수있게
+        if ((other->GetPosition() - myPosition).Length() > std::max(reachDistance, AVOID_FRONT_RAY_MAX)) // 느리게가도 차선변경은 미리 할수있게
             continue;
 
         // 교차/합류 방향(진행방향 차 45도 초과) 차에 대해 우선권을 가짐
         // 같은 방향 차(앞차/뒷차)는 우선순위 대상 X
-        bool crossing = egoFwd.Dot(other->GetForwardAxis()) < SAME_DIRECTION_COS;
+        bool crossing = myFwd.Dot(other->GetForwardAxis()) < SAME_DIRECTION_COS;
         nearby.push_back({other, crossing && HasPriorityOver(other)});
     }
     return nearby;
@@ -1698,17 +1698,17 @@ float Car::ComputeIdmAcceleration(const std::vector<RoadSpeedSample> &samples, c
         {
             bestAccel = a;
             if (outDebug != nullptr)
-                *outDebug = SpeedLimitDebug{sample.leader != nullptr ? "car:" + sample.leader->GetName() : sample.kind, leaderSpeed, gap, sample.leader};
+                *outDebug = SpeedLimitDebug{sample.leader != nullptr ? "car:" + sample.leader->GetName() : sample.debugStr, leaderSpeed, gap, sample.leader};
         }
     }
     return bestAccel;
 }
 
 // nearby 중 refLine 기준 bandCenter 밴드(±bandHalfWidth)에 속한 차들 + 그 밴드를 막고 있는 장애물
-// (m_sensorObstacles)에서 egoS 앞/뒤 가장 가까운 걸 MOBIL 상태로 뽑는다. position은 참조선 호길이 s.
+// (m_sensorObstacles)에서 myS 앞/뒤 가장 가까운 걸 MOBIL 상태로 뽑는다. position은 참조선 호길이 s.
 // 장애물은 리더 후보로만 쓴다(뒤차 역할은 못 함).
 Car::LaneNeighbors Car::GatherLaneNeighbors(const std::vector<NearbyCar> &nearby, const shared_ptr<Road> &road,
-                                            const Spline &refLine, float bandCenter, float bandHalfWidth, float egoS,
+                                            const Spline &refLine, float bandCenter, float bandHalfWidth, float myS,
                                             float dirSign) const
 {
     LaneNeighbors out;
@@ -1736,9 +1736,9 @@ Car::LaneNeighbors Car::GatherLaneNeighbors(const std::vector<NearbyCar> &nearby
         st.position = TravelS(refLine, other->GetPosition(), dirSign);
         st.length = other->GetLength();
 
-        if (st.position >= egoS)
+        if (st.position >= myS)
         {
-            float gap = st.position - egoS;
+            float gap = st.position - myS;
             if (gap < bestLeaderGap)
             {
                 bestLeaderGap = gap;
@@ -1748,7 +1748,7 @@ Car::LaneNeighbors Car::GatherLaneNeighbors(const std::vector<NearbyCar> &nearby
         }
         else
         {
-            float gap = egoS - st.position;
+            float gap = myS - st.position;
             if (gap < bestFollowerGap)
             {
                 bestFollowerGap = gap;
@@ -1775,10 +1775,10 @@ Car::LaneNeighbors Car::GatherLaneNeighbors(const std::vector<NearbyCar> &nearby
             continue; // 이 밴드 차로가 아님
 
         float s = TravelS(refLine, obstacle.center, dirSign);
-        if (s < egoS)
+        if (s < myS)
             continue; // 이미 지난 장애물은 리더 후보가 아님
 
-        float gap = s - egoS;
+        float gap = s - myS;
         if (gap < bestLeaderGap)
         {
             bestLeaderGap = gap;
@@ -1803,19 +1803,19 @@ bool Car::IsSafeLaneEntry(const RoadRef &road, float targetOffset, const std::ve
 
     const Spline &ref = road.road->GetReferenceLine();
     float dirSign = GetTravelSign(road.direction);
-    float egoS = TravelS(ref, GetPosition(), dirSign);
-    LaneNeighbors nbr = GatherLaneNeighbors(nearby, road.road, ref, target->centerOffset, target->width * 0.5f, egoS, dirSign);
+    float myS = TravelS(ref, GetPosition(), dirSign);
+    LaneNeighbors nbr = GatherLaneNeighbors(nearby, road.road, ref, target->centerOffset, target->width * 0.5f, myS, dirSign);
     if (!nbr.hasFollower)
         return true; // 뒤에 아무도 없으면 항상 진입 가능
 
-    Mobil::VehicleState ego;
-    ego.speed = m_speed;
-    ego.accel = m_acceleration;
-    ego.position = egoS;
-    ego.length = GetLength();
+    Mobil::VehicleState myState;
+    myState.speed = m_speed;
+    myState.accel = m_acceleration;
+    myState.position = myS;
+    myState.length = GetLength();
 
     Mobil::Params mobil{MOBIL_B_SAFE, m_personality.politeness, MOBIL_A_THR};
-    return Mobil::IsSafeLaneChange(ego, &nbr.follower, mobil, BuildIdmParams(road.road));
+    return Mobil::IsSafeLaneChange(myState, &nbr.follower, mobil, BuildIdmParams(road.road));
 }
 
 // nextRoad로 합류(끼어들기)해도 되는지 판정. 경로를 따라가려면 반드시 넘어가야 하는 전이라 '이득'은 안 따지고
@@ -2003,22 +2003,22 @@ float Car::ComputeLateralTarget(const std::vector<NearbyCar> &nearbyCars, const 
 
     const Spline &refLine = m_currentRoad->GetReferenceLine();
     float dirSign = TravelSign();
-    float egoS = TravelS(refLine, GetPosition(), dirSign);
+    float myS = TravelS(refLine, GetPosition(), dirSign);
 
-    Mobil::VehicleState ego;
-    ego.speed = m_speed;
-    ego.accel = m_acceleration;
-    ego.position = egoS;
-    ego.length = GetLength();
+    Mobil::VehicleState myState;
+    myState.speed = m_speed;
+    myState.accel = m_acceleration;
+    myState.position = myS;
+    myState.length = GetLength();
 
-    // 리더가 없을 때 넘길 아주 먼 가상 리더 (egoLeader/newLeader는 항상 존재해야 함).
+    // 리더가 없을 때 넘길 아주 먼 가상 리더 (myLeader/newLeader는 항상 존재해야 함).
     Mobil::VehicleState farLeader;
     farLeader.speed = idm.v0;
     farLeader.accel = 0.0f;
-    farLeader.position = egoS + 1000.0f;
+    farLeader.position = myS + 1000.0f;
     farLeader.length = 0.0f;
 
-    LaneNeighbors cur = GatherLaneNeighbors(nearbyCars, m_currentRoad, refLine, curBand.centerOffset, curBand.width * 0.5f, egoS, dirSign);
+    LaneNeighbors cur = GatherLaneNeighbors(nearbyCars, m_currentRoad, refLine, curBand.centerOffset, curBand.width * 0.5f, myS, dirSign);
     const Mobil::VehicleState *curLeader = cur.hasLeader ? &cur.leader : &farLeader;
     const Mobil::VehicleState *oldFollower = cur.hasFollower ? &cur.follower : nullptr;
 
@@ -2027,23 +2027,23 @@ float Car::ComputeLateralTarget(const std::vector<NearbyCar> &nearbyCars, const 
     {
         sensorLeader.speed = m_sensor.frontHitSpeed;
         sensorLeader.accel = 0.0f;
-        // Mobil::GetGap이 leader.position - ego.position - leader.length로 재므로, length를 0으로 두고
-        // 앞범퍼 기준 실측 거리를 egoS에 더하면 gap이 그대로 frontDistance가 된다.
-        sensorLeader.position = egoS + m_sensor.frontDistance;
+        // Mobil::GetGap이 leader.position -myState.position - leader.length로 재므로, length를 0으로 두고
+        // 앞범퍼 기준 실측 거리를 myS에 더하면 gap이 그대로 frontDistance가 된다.
+        sensorLeader.position = myS + m_sensor.frontDistance;
         sensorLeader.length = 0.0f;
         if (sensorLeader.position < curLeader->position)
             curLeader = &sensorLeader;
     }
-    const Mobil::VehicleState &egoLeader = *curLeader;
+    const Mobil::VehicleState &myLeader = *curLeader;
 
     // 내 앞을 막는 지점(차/장애물/센서/신호·정지선) 중 가장 가까운 s. 옆차로 앞차와 이 지점이 비슷하면
     // 차선을 바꿔봐야 곧 같은 자리에서 다시 막히므로, 아래에서 그 방향을 후보에서 뺀다.
-    float egoBlockS = (curLeader != &farLeader) ? curLeader->position : std::numeric_limits<float>::infinity();
+    float myBlockS = (curLeader != &farLeader) ? curLeader->position : std::numeric_limits<float>::infinity();
     for (const RoadSpeedSample &sample : m_lastRoadSamples)
     {
-        if (sample.leader == nullptr && std::strcmp(sample.kind, "signal") == 0)
+        if (sample.leader == nullptr && std::strcmp(sample.debugStr, "signal") == 0)
         {
-            egoBlockS = std::min(egoBlockS, egoS + sample.distance + MIN_SAFE_GAP);
+            myBlockS = std::min(myBlockS, myS + sample.distance + MIN_SAFE_GAP);
             break; // 스캔당 신호 샘플은 최대 1개
         }
     }
@@ -2081,13 +2081,13 @@ float Car::ComputeLateralTarget(const std::vector<NearbyCar> &nearbyCars, const 
                 mobil.b_safe *= 1.0f + ROUTE_BSAFE_RELAX * goal.urgency;
         }
 
-        LaneNeighbors nbr = GatherLaneNeighbors(nearbyCars, m_currentRoad, refLine, adjBand.centerOffset, adjBand.width * 0.5f, egoS, dirSign);
+        LaneNeighbors nbr = GatherLaneNeighbors(nearbyCars, m_currentRoad, refLine, adjBand.centerOffset, adjBand.width * 0.5f, myS, dirSign);
         // 옆차로 앞차가 내 앞을 막는 지점과 거의 같은 자리면(둘 다 같은 정체/신호에 걸림) 옮길 이유가 없다.
-        if (nbr.hasLeader && std::fabs(nbr.leader.position - egoBlockS) < MOBIL_LEADER_ALIGN_GAP)
+        if (nbr.hasLeader && std::fabs(nbr.leader.position - myBlockS) < MOBIL_LEADER_ALIGN_GAP)
             continue;
         const Mobil::VehicleState &newLeader = nbr.hasLeader ? nbr.leader : farLeader;
         const Mobil::VehicleState *newFollower = nbr.hasFollower ? &nbr.follower : nullptr;
-        if (Mobil::EvaluateLaneChange(ego, oldFollower, egoLeader, newLeader, newFollower, mobil, idm, bias))
+        if (Mobil::EvaluateLaneChange(myState, oldFollower, myLeader, newLeader, newFollower, mobil, idm, bias))
             return adjBand.centerOffset;
     }
     return curBand.centerOffset; // 차선 유지
@@ -2140,7 +2140,7 @@ bool Car::IsParallelClearSensorVehicle() const
 }
 
 // road 하나를 기준으로: 내가 그 도로의 반대 차로를 안 물고 있고, 상대는 반대 차로 안에만 있는가.
-bool Car::IsOncomingLaneVehicleOn(const RoadRef &road, float egoOffset, float egoHalfExtent,
+bool Car::IsOncomingLaneVehicleOn(const RoadRef &road, float myOffset, float myHalfExtent,
                                   const VehicleCollision::Obstacle &obstacle) const
 {
     float ownMin = 0.0f, ownMax = 0.0f, oppMin = 0.0f, oppMax = 0.0f;
@@ -2149,13 +2149,13 @@ bool Car::IsOncomingLaneVehicleOn(const RoadRef &road, float egoOffset, float eg
         return false; // 반대 차로 자체가 없는 도로
 
     // 중심이 아니라 차체 폭으로 본다 -- 경계를 물기만 해도 '넘어왔다'로 잡아야 안전한 쪽으로 틀린다.
-    if (egoOffset - egoHalfExtent < oppMax && egoOffset + egoHalfExtent > oppMin)
+    if (myOffset - myHalfExtent < oppMax && myOffset + myHalfExtent > oppMin)
         return false; // 내가 반대 차로를 물고 있다
 
     float d = 0.0f, halfExtent = 0.0f;
     ProjectObstacle(road.road->GetReferenceLine(), obstacle, d, halfExtent);
     if (d - halfExtent >= oppMax || d + halfExtent <= oppMin)
-        return false; // 이 도로의 반대 차로에 있는 차가 아니다(교차로 진입차 등)
+        return false;                                             // 이 도로의 반대 차로에 있는 차가 아니다(교차로 진입차 등)
     return !(d - halfExtent < ownMax && d + halfExtent > ownMin); // 내 차로까지 넘어왔으면 평소대로 대한다
 }
 
@@ -2166,9 +2166,9 @@ bool Car::IsOncomingLaneVehicle(const VehicleCollision::Obstacle &obstacle) cons
     if (!obstacle.isVehicle || m_currentRoad == nullptr)
         return false;
 
-    float egoOffset = 0.0f, egoHalfExtent = 0.0f;
-    ProjectObstacle(m_currentRoad->GetReferenceLine(), MakeVehicleObstacle(), egoOffset, egoHalfExtent);
-    if (IsOncomingLaneVehicleOn(CurrentRoadRef(), egoOffset, egoHalfExtent, obstacle))
+    float myOffset = 0.0f, myHalfExtent = 0.0f;
+    ProjectObstacle(m_currentRoad->GetReferenceLine(), MakeVehicleObstacle(), myOffset, myHalfExtent);
+    if (IsOncomingLaneVehicleOn(CurrentRoadRef(), myOffset, myHalfExtent, obstacle))
         return true;
 
     if (m_pathIndex + 1 >= m_path.size() || m_path[m_pathIndex + 1].road == nullptr)
@@ -2207,12 +2207,12 @@ Vec3 Car::GetBodyCenter() const
 std::vector<VehicleCollision::Obstacle> Car::CollectMapObstaclesInSensorRange() const
 {
     std::vector<VehicleCollision::Obstacle> obstacles;
-    Vec3 egoPosition = GetPosition();
+    Vec3 myPosition = GetPosition();
     float reach = AVOID_FRONT_RAY_MAX + GetLength();
 
     for (const VehicleCollision::Obstacle &obstacle : RoadDataManager::Get().GetObstacles())
     {
-        if ((obstacle.center - egoPosition).Length() > reach + obstacle.halfLength + obstacle.halfWidth)
+        if ((obstacle.center - myPosition).Length() > reach + obstacle.halfLength + obstacle.halfWidth)
             continue;
         obstacles.push_back(obstacle);
     }
@@ -2221,7 +2221,7 @@ std::vector<VehicleCollision::Obstacle> Car::CollectMapObstaclesInSensorRange() 
     // m_lastNearbyCars엔 안 잡히므로 여기서 별도로 합친다.
     for (const VehicleCollision::Obstacle &obstacle : RoadDataManager::Get().GetDynamicObstacles())
     {
-        if ((obstacle.center - egoPosition).Length() > reach + obstacle.halfLength + obstacle.halfWidth)
+        if ((obstacle.center - myPosition).Length() > reach + obstacle.halfLength + obstacle.halfWidth)
             continue;
         obstacles.push_back(obstacle);
     }
@@ -2673,12 +2673,12 @@ bool Car::IsBandClearAhead(float bandCenter, float bandHalfWidth) const
 {
     const Spline &ref = m_currentRoad->GetReferenceLine();
     float dirSign = TravelSign();
-    float egoS = TravelS(ref, GetPosition(), dirSign);
+    float myS = TravelS(ref, GetPosition(), dirSign);
 
     for (const VehicleCollision::Obstacle &obstacle : m_stationaryObstacles)
     {
         float s = TravelS(ref, obstacle.center, dirSign);
-        if (s < egoS)
+        if (s < myS)
             continue; // 이미 지나친 것은 이 차로를 막지 않는다
 
         float d = 0.0f;
@@ -2699,18 +2699,18 @@ bool Car::IsLaneEntryClear(float targetOffset) const
 
     const Spline &ref = m_currentRoad->GetReferenceLine();
     float dirSign = TravelSign();
-    float egoS = TravelS(ref, GetPosition(), dirSign);
-    LaneNeighbors nbr = GatherLaneNeighbors(m_lastNearbyCars, m_currentRoad, ref, target->centerOffset, target->width * 0.5f, egoS, dirSign);
+    float myS = TravelS(ref, GetPosition(), dirSign);
+    LaneNeighbors nbr = GatherLaneNeighbors(m_lastNearbyCars, m_currentRoad, ref, target->centerOffset, target->width * 0.5f, myS, dirSign);
 
     if (nbr.hasLeader)
     {
-        Mobil::VehicleState ego;
-        ego.speed = m_speed;
-        ego.accel = m_acceleration;
-        ego.position = egoS;
-        ego.length = GetLength();
-        float accel = IDM::CalculateAcceleration(ego.speed, ego.accel, nbr.leader.speed, nbr.leader.accel,
-                                                 Mobil::GetGap(ego, &nbr.leader), BuildIdmParams(m_currentRoad));
+        Mobil::VehicleState myState;
+        myState.speed = m_speed;
+        myState.accel = m_acceleration;
+        myState.position = myS;
+        myState.length = GetLength();
+        float accel = IDM::CalculateAcceleration(myState.speed, myState.accel, nbr.leader.speed, nbr.leader.accel,
+                                                 Mobil::GetGap(myState, &nbr.leader), BuildIdmParams(m_currentRoad));
         if (accel < -MOBIL_B_SAFE)
             return false; // 그 차 뒤에 붙으려면 안전한계보다 세게 밟아야 한다
     }

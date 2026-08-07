@@ -16,7 +16,8 @@ namespace IDM
     };
 
     // egoSpeed/egoAccel: 내 차량의 현재 속도/가속도. leaderSpeed/leaderAccel: 앞 차량의 현재 속도/가속도.
-    // gap: 앞 차량과의 범퍼 대 범퍼 실제 차간 거리 (s, m). 겹침/역전 시(gap<=0.001)엔 즉시 비상 제동을 반환.
+    // gap: 앞 차량과의 범퍼 대 범퍼 실제 차간 거리 (s, m).
+    /// @param gap: 앞 차량과의 범퍼 대 범퍼 거리
     float CalculateAcceleration(float egoSpeed, float egoAccel, float leaderSpeed, float leaderAccel,
                                 float gap, const Params &p);
 }
