@@ -2685,44 +2685,6 @@ void Car::DecideAvoidance()
 
     if (threat == ThreatKind::None)
     {
-        constexpr float JUNCTION_LEADER_AVOID_LOOK_DISTANCE = 12.0f;
-        constexpr float JUNCTION_LEADER_RIGHT_SHIFT = 0.75f;
-        bool stoppedJunctionLeader = false;
-        if (m_currentRoad != nullptr && m_pathIndex + 1 < m_path.size() &&
-            m_path[m_pathIndex + 1].road != nullptr && m_path[m_pathIndex + 1].road->GetJunctionId() >= 0)
-        {
-            for (const RoadSpeedSample &sample : m_lastRoadSamples)
-            {
-                if (sample.leader == nullptr || !m_SimState->IsCarAlive(sample.leader))
-                    continue;
-                Car *leader = sample.leader;
-                if (leader->m_currentRoad == m_currentRoad || leader->GetSpeed() > AVOID_BLOCK_SPEED)
-                    continue; // Keep normal same-road queues in the IDM following path.
-                if (sample.distance > JUNCTION_LEADER_AVOID_LOOK_DISTANCE)
-                    continue;
-                stoppedJunctionLeader = true;
-                break;
-            }
-        }
-        if (stoppedJunctionLeader)
-        {
-            float laneCenter = CurrentLaneCenter();
-            float minOffset = 0.0f;
-            float maxOffset = 0.0f;
-            ComputeDrivableRange(CurrentRoadRef(), minOffset, maxOffset);
-            float rightOffset = std::clamp(laneCenter + TravelSign() * JUNCTION_LEADER_RIGHT_SHIFT, minOffset, maxOffset);
-            if (std::fabs(rightOffset - laneCenter) >= AVOID_MIN_SHIFT && SimulateAvoidPath(rightOffset, m_sensorObstacles))
-            {
-                m_maneuver.laneOffset = laneCenter;
-                m_maneuver.avoidOffset = rightOffset;
-                m_maneuver.lastPlanTime = m_currentTime;
-                m_maneuver.clearTimer = -AVOID_CLEAR_DELAY;
-                m_speedCap = AVOID_LOW_SPEED;
-                SetSubMode(SubMode::D_Avoid);
-                DebugConsole::Log(GetName() + ": junction leader -> right offset " + ToString(rightOffset));
-                return;
-            }
-        }
         m_avoidTrigger.staticBlockTimer = 0.0f; // 트리거는 '같은 대상이 계속' 잡혀야 성립한다
         m_avoidTrigger.deadlockTimer = 0.0f;
         m_stuck.stuck = false;
