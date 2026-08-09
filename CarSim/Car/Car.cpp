@@ -547,14 +547,10 @@ void Car::UpdateDebugWindow()
         ImGui::Text("Cur offset d: %.2f m", m_currentOffset);
 
         ImGui::Text("Ray front: %.1f m %s", m_sensor.frontDistance, m_sensor.frontBlocked ? "(blocked)" : "");
-        ImGui::Text("Ray side: %s%s | rear %.1f m", m_sensor.leftBlocked ? "L" : "-",
-                    m_sensor.rightBlocked ? "R" : "-", m_sensor.rearDistance);
-        ImGui::Text("Body sweep: %.1f m", m_sensor.bodyContactDistance);
-        if (m_stuck.backingUp)
-            ImGui::Text("Avoid: backing up");
-        else if (m_subMode == SubMode::D_Avoid)
+        ImGui::Text("Ray side: %s%s", m_sensor.leftBlocked ? "L" : "-", m_sensor.rightBlocked ? "R" : "-");
+        if (m_subMode == SubMode::D_Avoid)
             ImGui::Text("Avoid: shifted d %.2f -> %.2f", m_maneuver.laneOffset, m_maneuver.avoidOffset);
-        else if (m_stuck.stuck)
+        else if (m_stuck)
             ImGui::Text("Avoid: stuck (no gap)");
 
         ImGui::Separator();
@@ -564,8 +560,7 @@ void Car::UpdateDebugWindow()
         ImGui::SliderFloat("Jerk Up Max", &m_jerkUp, 0.5f, 10.0f);
         ImGui::SliderFloat("Jerk Down Max", &m_jerkDown, 1.0f, 30.0f);
         ImGui::SliderFloat("Brake Factor", &m_personality.brakeFactor, 0.3f, 2.0f);
-        ImGui::SliderFloat("Politeness", &m_personality.politeness, 0.0f, 0.5f);
-        ImGui::SliderFloat("Lane Change Lerp", &m_personality.laneChangeLerpAlpha, 0.05f, 0.6f);
+        ImGui::SliderFloat("Lateral Lerp", &m_personality.laneChangeLerpAlpha, 0.05f, 0.6f);
     }
     ImGui::End();
 }
@@ -665,8 +660,6 @@ void Car::RebuildSensorRender()
     std::vector<DirectX::XMFLOAT3> points;
     for (const SensorRay &ray : m_sensor.rays)
     {
-        if (ray.hitDistance < 0.0f)
-            continue;
         DirectX::XMFLOAT3 origin = ToXMFLOAT3(ray.origin);
         DirectX::XMFLOAT3 end = ToXMFLOAT3(ray.end);
         origin.y += SENSOR_LINE_HEIGHT;

@@ -77,28 +77,6 @@ public:
     bool IsDone() const override { return false; }
 };
 
-class ReverseSegment : public VehicleSegment
-{
-public:
-    explicit ReverseSegment(float distance) : m_distance(distance) {}
-
-    void Tick(Car &car) override;
-    bool IsDone() const override { return m_done; }
-    ReedsShepp::Gear GetRequiredGear() const override { return ReedsShepp::Gear::Backward; }
-    std::optional<float> GetRequiredSteerAngle() const override { return 0.0f; }
-
-private:
-    static constexpr float REVERSE_STEER_RAMP_RATE = 1.0f;
-    static constexpr float REVERSE_SPEED = 1.5f;   // 저속 후진 속도 (m/s)
-    static constexpr float DECEL_ESTIMATE = 0.4f;  // 남은 거리 기준 감속 프로파일에 쓰는 가정 감속도 (m/s^2)
-    static constexpr float FINISH_DISTANCE = 0.1f; // 목표 거리 도달 판정 (m)
-    static constexpr float STOP_SPEED = 0.05f;     // 이 이하면 완전히 멈췄다고 보고 완료 처리 (m/s)
-
-    float m_distance;
-    float m_traveled = 0.0f;
-    bool m_done = false;
-};
-
 class CenterSteerSegment : public VehicleSegment
 {
 public:
