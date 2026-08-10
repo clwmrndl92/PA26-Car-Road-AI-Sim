@@ -2,6 +2,8 @@
 #include <vector>
 #include "Utill/MathUtil.h"
 
+class Car;
+
 // 차량/장애물 OBB 충돌판정. 원래 HybridAStar.h에 있었으나, 경로탐색(Hybrid A*)과 무관하게
 // RoadDataManager/EditApp의 장애물 정의, Car의 실시간 바운딩박스 스윕 판정에서 재사용되어 분리했다.
 namespace VehicleCollision
@@ -25,6 +27,7 @@ namespace VehicleCollision
         float speed = 0.0f; // headingRad 방향 기준 스칼라 속도. 정적 장애물은 0(기본값)로 둔다.
         ObstacleType type = ObstacleType::Static;
         bool isVehicle = false; // Car를 변환해 넣은 항목인가 -- 다른 경로(nearby car 목록)로 이미 처리되는 걸 걸러내는 용도.
+        Car *sourceCar = nullptr; // isVehicle이면 원본 Car. 아니면 nullptr.
     };
 
     struct VehicleShape
@@ -53,4 +56,10 @@ namespace VehicleCollision
     // 무엇에 맞았는지(그리고 그 obstacle.speed)를 알아야 하는 호출부용.
     const Obstacle *RaycastObstaclesHit(const Vec3 &origin, float directionRad, float maxDistance,
                                         const std::vector<Obstacle> &obstacles, float *outDistance);
+
+    // RaycastObstaclesHit과 달리 가장 가까운 것만 남기지 않고, maxDistance 안에서 맞은 obstacle을
+    // 전부(가려진 것 포함) distance와 함께 outHits에 채운다.
+    void RaycastObstaclesHitAll(const Vec3 &origin, float directionRad, float maxDistance,
+                                const std::vector<Obstacle> &obstacles,
+                                std::vector<std::pair<const Obstacle *, float>> &outHits);
 }

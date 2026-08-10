@@ -137,4 +137,17 @@ namespace VehicleCollision
         RaycastObstaclesHit(origin, directionRad, maxDistance, obstacles, &distance);
         return distance;
     }
+
+    void RaycastObstaclesHitAll(const Vec3 &origin, float directionRad, float maxDistance,
+                                const std::vector<Obstacle> &obstacles,
+                                std::vector<std::pair<const Obstacle *, float>> &outHits)
+    {
+        Vec3 dir(std::cos(directionRad), 0.0f, std::sin(directionRad));
+        for (const Obstacle &obstacle : obstacles)
+        {
+            auto [hit, distance] = RaySlabIntersect(origin, dir, maxDistance, obstacle);
+            if (hit)
+                outHits.emplace_back(&obstacle, distance);
+        }
+    }
 }

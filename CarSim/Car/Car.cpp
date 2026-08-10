@@ -96,8 +96,10 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
     using namespace DirectX;
 
     bool honking = m_hornFlashTimer > 0.0f && m_carModel != nullptr;
+    bool tint = (honking || m_highlighted) && m_carModel != nullptr;
+    XMFLOAT4 tintColor = honking ? XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f) : XMFLOAT4(0.0f, 0.4f, 1.0f, 1.0f);
     std::vector<std::pair<size_t, XMFLOAT4>> savedDiffuse;
-    if (honking)
+    if (tint)
     {
         for (size_t i = 0; i < m_carModel->materials.size(); ++i)
         {
@@ -105,7 +107,7 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
             if (!mat.Has<XMFLOAT4>("$DiffuseColor"))
                 continue;
             savedDiffuse.emplace_back(i, mat.Get<XMFLOAT4>("$DiffuseColor"));
-            mat.Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f));
+            mat.Set<XMFLOAT4>("$DiffuseColor", tintColor);
         }
     }
     GameObject::Draw(context, effect);

@@ -154,10 +154,17 @@ void RoadDataManager::BuildRoadData(const string &filePath)
                 auto typeIt = laneTypeByName.find(bandJson.value("type", "driving"));
                 band.type = typeIt != laneTypeByName.end() ? typeIt->second : LaneType::Driving;
 
-                // direction(optional): 없으면 forward -- 방향을 안 적은 기존 단방향 데이터가 그대로 동작해야 한다.
-                const auto &laneDirByName = GetLaneDirectionByName();
-                auto dirIt = laneDirByName.find(bandJson.value("direction", "forward"));
-                band.direction = dirIt != laneDirByName.end() ? dirIt->second : LaneDirection::Forward;
+                // direction(optional): 없으면 center_offset 부호로 추론(+ forward, - backward)
+                if (bandJson.contains("direction"))
+                {
+                    const auto &laneDirByName = GetLaneDirectionByName();
+                    auto dirIt = laneDirByName.find(bandJson.value("direction", "forward"));
+                    band.direction = dirIt != laneDirByName.end() ? dirIt->second : LaneDirection::Forward;
+                }
+                else
+                {
+                    band.direction = band.centerOffset < 0.0f ? LaneDirection::Backward : LaneDirection::Forward;
+                }
 
                 if (bandJson.contains("boundary_mark"))
                     band.boundaryMark = ParseBoundaryMark(bandJson["boundary_mark"]);
