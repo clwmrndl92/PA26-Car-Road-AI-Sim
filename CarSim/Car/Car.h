@@ -12,6 +12,7 @@
 #include "Nav/ReedsShepp.h"
 #include "Nav/VehicleCollision.h"
 #include "Nav/IDM.h"
+#include "Nav/Mobil.h"
 
 class SimulationState;
 class Spline;
@@ -117,6 +118,7 @@ private:
         D_Normal,     // 일반 주행
         D_WaitSignal, // 신호대기
         D_Avoid,      // 장애물 회피(차로 중심을 벗어난 오프셋 주행)
+        D_LaneChange, // MOBIL 차선변경
 
         // Park
         P_EXIT,        // 출차
@@ -136,6 +138,8 @@ private:
             return "WaitSignal";
         case SubMode::D_Avoid:
             return "Avoid";
+        case SubMode::D_LaneChange:
+            return "LaneChange";
         case SubMode::P_EXIT:
             return "ParkExit";
         case SubMode::P_ENTER_LEG1:
@@ -223,10 +227,21 @@ private:
         bool yieldsToMe = false;
     };
 
+    // MOBIL 판정용
+    struct LaneNeighbors
+    {
+        bool hasLeader = false;
+        bool hasFollower = false;
+        Mobil::VehicleState leader;
+        Mobil::VehicleState follower;
+    };
+
     void UpdateDrivePlan();
     IDM::Params BuildIdmParams(const shared_ptr<Road> &road) const; // road 제한속도를 v0로 반영한 IDM 파라미터
     float ComputeIdmAcceleration(const std::vector<RoadSpeedSample> &samples, const IDM::Params &params,
                                  float distanceOffset, float elapsedTime, SpeedLimitDebug *outDebug = nullptr) const;
+    bool IsSafeLaneEntry(const RoadRef &road, float targetOffset, const std::vector<NearbyCar> &nearby) const;
+    bool ShouldHoldForMerge(const RoadRef &nextRoad) const;
     bool ShouldHoldForJunction(const RoadRef &nextRoad) const;
     bool TryReserveJunction(const RoadRef &nextRoad);
     void ReleaseJunctionReservation();
@@ -235,7 +250,21 @@ private:
     bool HasPriorityOver(const Car *other) const;
     void AppendCarConstraintSamples(std::vector<RoadSpeedSample> &samples,
                                     const std::vector<NearbyCar> &nearbyCars, float lookDistance) const; // nearbyCars 중 내 예정 경로 코리도 안의 차를 도로제약 샘플(가상 리더)로 변환해 추가
+    LaneNeighbors GatherLaneNeighbors(const std::vector<NearbyCar> &nearby, const shared_ptr<Road> &road,
+                                      const Spline &refLine, float bandCenter, float bandHalfWidth, float egoS,
+                                      float dirSign) const;
     float CurrentLaneCenter() const;
+
+    struct RouteLaneGoal
+    {
+        bool active = false;       // 다음 road가 진입 차로를 제약하는가(아니면 아래 값들은 무의미)
+        float targetOffset = 0.0f; // 진입 가능한 밴드 중 지금 오프셋에서 가장 가까운 것의 중심 d
+        float urgency = 0.0f;      // 0~1. 남은 시간 대비 필요한 차선변경 시간. 교차로가 가까울수록 1에 붙는다
+        float bias = 0.0f;         // urgency를 MOBIL 유인 기준 단위(m/s^2)로 환산한 값
+    };
+    RouteLaneGoal ComputeRouteLaneGoal() const;
+    float ComputeLateralTarget(const std::vector<NearbyCar> &nearbyCars, const IDM::Params &idm,
+                               float *outLaneCenter = nullptr, const char **outReason = nullptr) const;
     std::vector<RoadSpeedSample> ScanRoadSpeedConstraints(float lookDistance) const;
     void AppendSensorConstraintSample(std::vector<RoadSpeedSample> &samples) const;
     void ComputeDrivableRange(const RoadRef &road, float &outMin, float &outMax) const;
@@ -261,13 +290,15 @@ private:
         bool hasFrontHitObstacle = false;            // 아래 원본 정보가 유효한가
         VehicleCollision::Obstacle frontHitObstacle; // 위 히트의 원본(위협 분류용)
         std::vector<SensorRay> rays;                 // 디버그 렌더용 전체 목록
+        std::vector<VehicleCollision::Obstacle> hitObstacles; // 레이가 실제로 맞은 장애물 원본들
     };
 
-    // D_Avoid 매뉴버 진행 상태.
+    // D_Avoid/D_LaneChange 매뉴버 진행 상태. laneOffset은 두 서브모드가 재계획/취소 기준점으로 같이 쓴다.
     struct ManeuverState
     {
-        float laneOffset = 0.0f;       // 회피 시작 시점의 원래 차로 중심 d -- 재계획/복귀 기준점
+        float laneOffset = 0.0f;       // 매뉴버 시작 시점의 원래 차로 중심 d -- 재계획/취소 기준점
         float avoidOffset = 0.0f;      // D_Avoid 목표 d
+        float laneChangeTarget = 0.0f; // D_LaneChange 목표 차로 중심 d
         float clearTimer = 0.0f;       // 레이가 깨끗한 채로 지난 시간 (회피 종료 디바운스용)
         float lastPlanTime = -1000.0f; // 마지막으로 오프셋을 (재)탐색한 시각 -- 재계획 디더링 방지
     };
@@ -285,10 +316,13 @@ private:
     bool HandleContactPending();            // (공통) 실제 물리 충돌 뒷수습. 서브모드와 무관하게 먼저 끊는다
     void DecideAvoidance();                 // D_Normal: 위협을 분류해 다음 서브모드를 고른다
     void UpdateAvoid();                     // D_Avoid: 오프셋 회피 재계획/복귀/종료
+    void UpdateLaneChange();                // D_LaneChange: 차선변경 진행/취소/완료
     void HandleAvoidStuck();                // 회피 불가: 그 자리에 정지 유지
     ThreatKind ClassifyFrontThreat() const; // 전방 최근접 히트를 차/정적으로 분류
-    // 회피가 지금 실제로 향하고 있는 횡오프셋. 진행 중이 아니면 현재 오프셋.
+    // 회피/차선변경이 지금 실제로 향하고 있는 횡오프셋. 진행 중이 아니면 현재 오프셋.
     float AvoidTargetOffset() const;
+    // 그 차로에 들어갔을 때 앞차 gap을 감당할 수 있는가(진행 중인 D_LaneChange 취소 판정용).
+    bool IsLaneEntryClear(float targetOffset) const;
     Vec3 GetBodyCenter() const;                                           // 콜라이더(차체 사각)의 중심 -- 레이 원점/OBB 판정 기준
     std::vector<VehicleCollision::Obstacle> BuildSensorObstacles() const; // 정적 장애물 + 주변 차를 OBB 목록으로
     // 지도 정적 장애물 중 센서 사거리(AVOID_FRONT_RAY_MAX) 안에 든 것만. BuildSensorObstacles가
@@ -388,14 +422,23 @@ private:
     static constexpr float BEHAVIOR_PLAN_INTERVAL = 0.2f; // 행동 후보 재판단 주기
     static constexpr float MIN_SAFE_GAP = 2.0f;           // 앞차/정지선과 유지할 표준 범퍼 gap(m). IDM s0로도 쓴다.
 
+    // IDM(종방향) / MOBIL(차선변경) 파라미터. 이타성(politeness)은 m_personality에서 옴.
+    static constexpr float MOBIL_B_SAFE = 3.0f; // 뒤차에 강제 가능한 최대 안전 감속도(m/s^2)
+    static constexpr float MOBIL_A_THR = 0.2f;  // 차선변경 최소 진입 장벽(m/s^2)
+    // 내 앞과 옆차로 앞차가 이 거리(m) 안으로 겹쳐 있으면 옮겨봐야 곧 같이 막히므로 후보에서 제외한다.
+    static constexpr float MOBIL_LEADER_ALIGN_GAP = 5.0f;
+    static constexpr float MOBIL_LANE_CHANGE_COOLDOWN = 2.0f; // 차선변경 후 이 시간(s) 동안 MOBIL 재평가 금지
+
     // 횡오프셋을 목표(밴드 중심/회피 오프셋)로 당기는 Lerp 비율은 m_personality.laneChangeLerpAlpha에서 옴.
     float m_lastBehaviorPlanTime = -1000.0f; // 처음 Drive 진입 시 바로 첫 판단이 돌도록 충분히 과거로 초기화
+    float m_lastLaneChangeTime = -1000.0f;   // 마지막 MOBIL 차선변경 시각 -- 쿨다운 게이팅용
     float m_planAccelDebug = 0.0f;           // DriveControl이 매프레임 계산한 IDM 목표가속도(디버그 UI 표시용 캐시)
     SpeedLimitDebug m_limitDebug;            // 위 목표가속도를 결정한 근거(디버그 UI 표시용 캐시)
     // 이번 프레임 IDM이 실제로 고른 앞차. 다른 차가 "쟤가 날 리더로 삼고 있나"를 여기서 읽어, 서로를
     // 리더로 잡고 둘 다 서버리는 교착을 끊는다. 역참조는 안 하므로 dangling이어도 비교는 안전하다.
     Car *m_currentLeader = nullptr;
     float m_prevSpeedForStallLog = 0.0f;            // 정지 감지 로그(DriveControl)용 -- 직전 프레임 속도
+    bool m_wasAccelerating = false;                 // 액셀 상승 에지 로그용 -- 직전 프레임 가속 여부
     std::vector<NearbyCar> m_lastNearbyCars;        // UpdateBehaviorPlan이 마지막으로 수집한 주변 차 목록 -- 센서 장애물 목록이 매 프레임 재사용(재수집 비용 회피)
     std::vector<RoadSpeedSample> m_lastRoadSamples; // UpdateBehaviorPlan이 마지막으로 스캔한 리더/제약 목록 -- DriveControl이 매프레임 IDM 가속도 재계산에 재사용
     IDM::Params m_lastIdmParams;                    // 위 스캔 시점의 IDM 파라미터(v0 등) 캐시
@@ -408,10 +451,8 @@ private:
     static constexpr float AVOID_LOW_SPEED = 18.26f / 3.6f;
     static constexpr float AVOID_CLEAR_DELAY = 0.5f;      // 레이가 이만큼 계속 깨끗해야 원래 차로로 복귀(s)
     static constexpr float AVOID_RETURN_TOLERANCE = 0.3f; // 복귀 목표 오프셋에 이만큼 가까워지면 회피 종료(m)
-    static constexpr float AVOID_MIN_SHIFT = 0.5f;        // 이보다 작은 횡이동은 회피 효과가 없다고 보고 후보에서 뺀다(m)
-    // 전방 히트를 '내 진로 위'로 볼 기준: 주행 스플라인까지의 거리가 차체 반폭 + 이 여유 이내(m).
-    // 회피를 걸지 말지(frontBlocked) 판단용이라 넉넉하게 -- 결과가 '옆으로 조금 비켜라'라서 싸다.
-    static constexpr float AVOID_CORRIDOR_MARGIN = 0.5f;
+    static constexpr float AVOID_MIN_SHIFT = 0.5f; // 이보다 작은 횡이동은 회피 효과가 없다고 보고 후보에서 뺀다(m)
+    static constexpr float AVOID_CORRIDOR_MARGIN = 0.3f; // 회피/제동 코리도 공유
     static constexpr float AVOID_PASS_CLEARANCE = 0.2f; // 종방향 제동(IDM 가상 리더/비상제동)을 걸 기준 여유(m)
     static constexpr float AVOID_SIM_TIME = 3.0f;       // 스윕 예측시간(s)
     static constexpr float AVOID_SIM_MIN_SPEED = 3.0f;  // 스윕 최소속도(m/s)

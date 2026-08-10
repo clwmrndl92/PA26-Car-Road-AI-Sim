@@ -560,6 +560,7 @@ void Car::UpdateDebugWindow()
         ImGui::SliderFloat("Jerk Up Max", &m_jerkUp, 0.5f, 10.0f);
         ImGui::SliderFloat("Jerk Down Max", &m_jerkDown, 1.0f, 30.0f);
         ImGui::SliderFloat("Brake Factor", &m_personality.brakeFactor, 0.3f, 2.0f);
+        ImGui::SliderFloat("Politeness", &m_personality.politeness, 0.0f, 0.5f);
         ImGui::SliderFloat("Lateral Lerp", &m_personality.laneChangeLerpAlpha, 0.05f, 0.6f);
     }
     ImGui::End();

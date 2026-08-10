@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <utility>
@@ -23,6 +24,35 @@ namespace
     {
         const LaneBand *band = RoadDataManager::Get().FindNearestBand(road.road, d, road.direction);
         return band != nullptr ? band->centerOffset : d;
+    }
+
+    float TravelS(const Spline &referenceLine, const Vec3 &position, float dirSign)
+    {
+        return referenceLine.GetSplinePosition(position) * referenceLine.GetLength() * dirSign;
+    }
+
+    // 반환값: 투영이 유효한가
+    bool ProjectObstacle(const Spline &referenceLine, const VehicleCollision::Obstacle &obstacle,
+                         float &outOffset, float &outHalfExtent)
+    {
+        float t = referenceLine.GetSplinePosition(obstacle.center);
+        Vec3 onRef = referenceLine.GetPositionAt(t);
+        Vec3 dir = referenceLine.GetDirectionAt(t);
+        Vec3 rightN(dir.GetZ(), 0.0f, -dir.GetX());
+        outOffset = (obstacle.center - onRef).Dot(rightN);
+
+        Vec3 forward(cosf(obstacle.headingRad), 0.0f, sinf(obstacle.headingRad));
+        Vec3 right(forward.GetZ(), 0.0f, -forward.GetX());
+        outHalfExtent = std::fabs(rightN.Dot(right)) * obstacle.halfWidth +
+                        std::fabs(rightN.Dot(forward)) * obstacle.halfLength;
+
+        const std::vector<Vec3> &samples = referenceLine.GetSplinePoints();
+        float sampleSpacing = samples.size() > 1 ? referenceLine.GetLength() / (samples.size() - 1.0f) : 0.0f;
+        constexpr float PROJECTION_RESIDUAL_SLACK = 2.0f;
+        constexpr float PROJECTION_RESIDUAL_MIN = 0.5f; // 최소 허용치
+        float tolerance = sampleSpacing * PROJECTION_RESIDUAL_SLACK + PROJECTION_RESIDUAL_MIN;
+        float alongResidual = (obstacle.center - onRef).Dot(dir);
+        return std::fabs(alongResidual) <= tolerance;
     }
 
     float ComputeReferenceOffset(const Spline &referenceLine, const Vec3 &position)
@@ -122,6 +152,59 @@ namespace
         return atanf((2.0f * wheelbase * sinf(headingError)) / distance) * directionSign;
     }
 
+    // BuildOffsetSpline과 같은 규약
+    Vec3 OffsetSampleAt(const std::vector<Vec3> &samples, size_t i, float d)
+    {
+        const size_t n = samples.size();
+        const Vec3 &next = samples[i + 1 < n ? i + 1 : i];
+        const Vec3 &prev = samples[i > 0 ? i - 1 : i];
+        float tx = next.GetX() - prev.GetX();
+        float tz = next.GetZ() - prev.GetZ();
+        float len = std::sqrt(tx * tx + tz * tz);
+        float rx = len > 1e-5f ? tz / len : 0.0f;
+        float rz = len > 1e-5f ? -tx / len : 0.0f;
+        return Vec3(samples[i].GetX() + rx * d, samples[i].GetY(), samples[i].GetZ() + rz * d);
+    }
+
+    // BuildOffsetSpline(d).GetLookaheadPoint(from, lookahead)와 동일. 스플라인 생성 없이 계산만.
+    Vec3 OffsetLookaheadPoint(const Spline &referenceLine, const Vec3 &from, float lookahead, float d, bool reversed)
+    {
+        const std::vector<Vec3> &samples = referenceLine.GetSplinePoints();
+        const size_t n = samples.size();
+        if (n == 0)
+            return from;
+        if (n == 1)
+            return OffsetSampleAt(samples, 0, d);
+
+        size_t closest = 0;
+        float bestDistance = std::numeric_limits<float>::max();
+        Vec3 current;
+        for (size_t i = 0; i < n; ++i)
+        {
+            Vec3 p = OffsetSampleAt(samples, i, d);
+            float distance = (p - from).Length();
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                closest = i;
+                current = p;
+            }
+        }
+
+        float accumulated = 0.0f;
+        size_t index = closest;
+        while (accumulated < lookahead)
+        {
+            if (reversed ? index == 0 : index + 1 >= n)
+                break;
+            size_t nextIndex = reversed ? index - 1 : index + 1;
+            Vec3 nextPoint = OffsetSampleAt(samples, nextIndex, d);
+            accumulated += (nextPoint - current).Length();
+            current = nextPoint;
+            index = nextIndex;
+        }
+        return current;
+    }
 }
 
 #pragma region Common
@@ -156,6 +239,8 @@ void Car::UpdateFindPath()
     RoadPose pose = RoadDataManager::Get().GetClosestRoad(position, GetForwardAxis());
     RoadRef entry{pose.road, pose.direction};
     float targetOffset = NearestBandOffset(entry, pose.d);
+    if (pose.road != nullptr && !IsSafeLaneEntry(entry, targetOffset, CollectNearbyCars()))
+        return;
     SetCurrentRoad(entry.road, targetOffset, entry.direction);
     TryFindPathAndSetRoad();
 }
@@ -339,6 +424,8 @@ void Car::EnsureRoamingPath()
         RoadPose pose = RoadDataManager::Get().GetClosestRoad(GetPosition(), GetForwardAxis());
         RoadRef entry{pose.road, pose.direction};
         float targetOffset = NearestBandOffset(entry, pose.d);
+        if (pose.road != nullptr && !IsSafeLaneEntry(entry, targetOffset, CollectNearbyCars()))
+            return;
         SetCurrentRoad(entry.road, targetOffset, entry.direction);
         m_path = BuildRoamingPath(CurrentRoadRef());
         m_pathIndex = 0;
@@ -949,16 +1036,24 @@ void Car::UpdateDrive()
 
     if (!HandleContactPending())
     {
-        if (m_subMode == SubMode::D_Avoid)
+        switch (m_subMode)
+        {
+        case SubMode::D_Avoid:
             UpdateAvoid();
-        else
+            break;
+        case SubMode::D_LaneChange:
+            UpdateLaneChange();
+            break;
+        default:
             DecideAvoidance();
+            break;
+        }
     }
 
     if (m_currentTime - m_lastBehaviorPlanTime >= BEHAVIOR_PLAN_INTERVAL)
     {
-        m_lastBehaviorPlanTime = m_currentTime;
         UpdateDrivePlan();
+        m_lastBehaviorPlanTime = m_currentTime;
     }
 
     m_wantSegmentTick = true;
@@ -1059,6 +1154,9 @@ bool Car::CheckPath()
         if (!CanEnterFromCurrentBand(m_path[m_pathIndex + 1]) && !RepathFromCurrentBand())
             break;
 
+        if (ShouldHoldForMerge(m_path[m_pathIndex + 1]))
+            break;
+
         if (!TryReserveJunction(m_path[m_pathIndex + 1]))
             break;
 
@@ -1084,7 +1182,7 @@ void Car::DriveControl()
     const Spline &spline = m_currentSpline;
 
     constexpr float LOOKAHEAD_TIME = 1.5f;
-    float lookaheadDistance = m_currentSpline.IsStraight() ? m_speed * LOOKAHEAD_TIME : 5;
+    float lookaheadDistance = 5.0f;
     Vec3 target = spline.GetLookaheadPoint(GetRigidbodyPosition(), lookaheadDistance);
     float targetSteer = PurePursuit(target);
 
@@ -1117,11 +1215,16 @@ void Car::DriveControl()
 
     m_prevSpeedForStallLog = m_speed;
 
+    bool isAccelerating = accelIDM > 0.0f;
+    if (isAccelerating && !m_wasAccelerating)
+        DebugConsole::Log(GetName() + ": accel up (" + m_limitDebug.label + ") v " + ToString(m_speed) +
+                          " -> " + ToString(m_limitDebug.targetSpeed));
+    m_wasAccelerating = isAccelerating;
+
     Accelerate(accelIDM);
 
-    float pathT = spline.GetSplinePosition(GetPosition());
-    Vec3 pathPoint = spline.GetPositionAt(pathT);
-    DirectX::XMFLOAT3 targetMarkerPos = ToXMFLOAT3(pathPoint);
+    // Debug
+    DirectX::XMFLOAT3 targetMarkerPos = ToXMFLOAT3(target);
     targetMarkerPos.y = GetPosition().GetY() + 0.2f;
     m_targetMarker.GetTransform().SetPosition(targetMarkerPos);
 }
@@ -1220,9 +1323,12 @@ std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistan
                 break;
             }
 
-            if (segment.road == m_currentRoad && ShouldHoldForJunction(nextRoad))
+            bool holdForMerge = ShouldHoldForMerge(nextRoad);
+            bool holdForJunction = segment.road == m_currentRoad && ShouldHoldForJunction(nextRoad);
+            if (holdForMerge || holdForJunction)
             {
-                samples.push_back({splineEnd(spline), traveledDistance - MIN_SAFE_GAP, 0.0f, nullptr, "junctionWait"});
+                const char *kind = holdForJunction ? "junctionWait" : "mergeWait";
+                samples.push_back({splineEnd(spline), traveledDistance - MIN_SAFE_GAP, 0.0f, nullptr, kind});
                 break;
             }
 
@@ -1259,8 +1365,7 @@ std::vector<Car::NearbyCar> Car::CollectNearbyCars() const
 
         float reachDistance = (m_speed + other->GetSpeed()) * SAFE_TIME +
                               0.5f * m_maxAccel * SAFE_TIME * SAFE_TIME +
-                              GetLength() * 0.5f + other->GetLength() * 0.5f
-                              + MIN_SAFE_GAP;
+                              GetLength() * 0.5f + other->GetLength() * 0.5f + MIN_SAFE_GAP;
 
         if ((other->GetPosition() - myPosition).Length() > std::max(reachDistance, AVOID_FRONT_RAY_MAX))
             continue;
@@ -1488,6 +1593,121 @@ float Car::ComputeIdmAcceleration(const std::vector<RoadSpeedSample> &samples, c
     return bestAccel;
 }
 
+Car::LaneNeighbors Car::GatherLaneNeighbors(const std::vector<NearbyCar> &nearby, const shared_ptr<Road> &road,
+                                            const Spline &refLine, float bandCenter, float bandHalfWidth, float myS,
+                                            float dirSign) const
+{
+    LaneNeighbors out;
+    float bestLeaderGap = std::numeric_limits<float>::max();
+    float bestFollowerGap = std::numeric_limits<float>::max();
+    for (const NearbyCar &nb : nearby)
+    {
+        if (!m_SimState->IsCarAlive(nb.car))
+            continue;
+        Car *other = nb.car;
+        if (other->m_currentRoad != road)
+            continue;
+        float d = ComputeReferenceOffset(refLine, other->GetPosition());
+        if (std::fabs(d - bandCenter) > bandHalfWidth)
+            continue;
+
+        float otherT = refLine.GetSplinePosition(other->GetPosition());
+        if (refLine.GetDirectionAt(otherT).Dot(other->GetForwardAxis()) * dirSign <= 0.0f)
+            continue;
+
+        Mobil::VehicleState st;
+        st.speed = other->GetSpeed();
+        st.accel = other->GetAcceleration();
+        st.position = TravelS(refLine, other->GetPosition(), dirSign);
+        st.length = other->GetLength();
+
+        if (st.position >= myS)
+        {
+            float gap = st.position - myS;
+            if (gap < bestLeaderGap)
+            {
+                bestLeaderGap = gap;
+                out.leader = st;
+                out.hasLeader = true;
+            }
+        }
+        else
+        {
+            float gap = myS - st.position;
+            if (gap < bestFollowerGap)
+            {
+                bestFollowerGap = gap;
+                out.follower = st;
+                out.hasFollower = true;
+            }
+        }
+    }
+
+    for (const VehicleCollision::Obstacle &obstacle : m_sensor.hitObstacles)
+    {
+        if (obstacle.isVehicle)
+            continue;
+
+        float d = 0.0f;
+        float halfExtent = 0.0f;
+        if (!ProjectObstacle(refLine, obstacle, d, halfExtent))
+            continue;
+        if (std::fabs(d - bandCenter) > bandHalfWidth + halfExtent)
+            continue;
+
+        float s = TravelS(refLine, obstacle.center, dirSign);
+        if (s < myS)
+            continue;
+
+        float gap = s - myS;
+        if (gap < bestLeaderGap)
+        {
+            bestLeaderGap = gap;
+            out.leader.speed = obstacle.speed;
+            out.leader.accel = 0.0f;
+            out.leader.position = s;
+            out.leader.length = obstacle.halfLength * 2.0f;
+            out.hasLeader = true;
+        }
+    }
+
+    return out;
+}
+
+bool Car::IsSafeLaneEntry(const RoadRef &road, float targetOffset, const std::vector<NearbyCar> &nearby) const
+{
+    const LaneBand *target = RoadDataManager::Get().FindNearestBand(road.road, targetOffset, road.direction);
+    if (target == nullptr)
+        return true;
+
+    const Spline &ref = road.road->GetReferenceLine();
+    float dirSign = GetTravelSign(road.direction);
+    float myS = TravelS(ref, GetPosition(), dirSign);
+    LaneNeighbors nbr = GatherLaneNeighbors(nearby, road.road, ref, target->centerOffset, target->width * 0.5f, myS, dirSign);
+    if (!nbr.hasFollower)
+        return true;
+
+    Mobil::VehicleState myState;
+    myState.speed = m_speed;
+    myState.accel = m_acceleration;
+    myState.position = myS;
+    myState.length = GetLength();
+
+    Mobil::Params mobil{MOBIL_B_SAFE, m_personality.politeness, MOBIL_A_THR};
+    return Mobil::IsSafeLaneChange(myState, &nbr.follower, mobil, BuildIdmParams(road.road));
+}
+
+bool Car::ShouldHoldForMerge(const RoadRef &nextRoad) const
+{
+    if (nextRoad.road == nullptr)
+        return false;
+    bool hasLaneMapping = false;
+    float targetOffset = RoadDataManager::Get().ResolveConnectingOffset(CurrentRoadRef(), nextRoad, m_currentOffset, &hasLaneMapping);
+    if (!hasLaneMapping)
+        targetOffset = ComputeReferenceOffset(nextRoad.road->GetReferenceLine(), GetPosition());
+    return !IsSafeLaneEntry(nextRoad, targetOffset, m_lastNearbyCars);
+}
+
 bool Car::ShouldHoldForJunction(const RoadRef &nextRoad) const
 {
     if (nextRoad.road == nullptr || m_currentRoad == nullptr || nextRoad.road->GetJunctionId() < 0 || m_SimState == nullptr)
@@ -1535,7 +1755,37 @@ void Car::UpdateDrivePlan()
     AppendSensorConstraintSample(m_lastRoadSamples);
     m_planScanPosition = GetPosition();
 
-    float targetOffset = (m_subMode == SubMode::D_Avoid) ? AvoidTargetOffset() : CurrentLaneCenter();
+    float laneCenter = m_currentOffset;
+    float targetOffset;
+    if (m_subMode == SubMode::D_Avoid || m_subMode == SubMode::D_LaneChange)
+    {
+        targetOffset = AvoidTargetOffset();
+    }
+    else
+    {
+        bool coolingDown = (m_currentTime - m_lastLaneChangeTime) < MOBIL_LANE_CHANGE_COOLDOWN;
+        const char *reason = "";
+        targetOffset = coolingDown ? CurrentLaneCenter() : ComputeLateralTarget(m_lastNearbyCars, m_lastIdmParams, &laneCenter, &reason);
+        if (coolingDown)
+            laneCenter = targetOffset;
+        bool isLaneChange = std::fabs(targetOffset - laneCenter) > 0.01f;
+        bool sideBlocked = ((targetOffset - laneCenter) * TravelSign() > 0.0f) ? m_sensor.rightBlocked : m_sensor.leftBlocked;
+        if (isLaneChange && sideBlocked)
+        {
+            isLaneChange = false;
+            targetOffset = laneCenter;
+        }
+
+        if (isLaneChange)
+        {
+            m_maneuver.laneOffset = laneCenter;
+            m_maneuver.laneChangeTarget = targetOffset;
+            m_lastLaneChangeTime = m_currentTime;
+            DebugConsole::Log(GetName() + ": lane change d " + ToString(laneCenter) + " -> " + ToString(targetOffset) +
+                              " (" + reason + ")");
+        }
+        SetSubMode(isLaneChange ? SubMode::D_LaneChange : SubMode::D_Normal);
+    }
     m_currentOffset += (targetOffset - m_currentOffset) * m_personality.laneChangeLerpAlpha;
     m_currentSpline = RoadDataManager::Get().BuildOffsetSpline(m_currentRoad, m_currentOffset, m_travelDir);
     RebuildSplineRender();
@@ -1545,6 +1795,152 @@ float Car::CurrentLaneCenter() const
 {
     const LaneBand *closest = RoadDataManager::Get().FindNearestBand(m_currentRoad, m_currentOffset, m_travelDir);
     return closest != nullptr ? closest->centerOffset : m_currentOffset;
+}
+
+Car::RouteLaneGoal Car::ComputeRouteLaneGoal() const
+{
+    constexpr float ROUTE_BIAS_MAX = 3.0f;
+    constexpr float ROUTE_LANE_CHANGE_TIME = 4.0f;
+    constexpr float ROUTE_MIN_PLAN_SPEED = 2.0f;
+
+    RouteLaneGoal goal;
+    if (m_currentRoad == nullptr || m_pathIndex + 1 >= m_path.size())
+        return goal;
+
+    std::vector<const LaneBand *> entry = RoadDataManager::Get().GetEntryBands(CurrentRoadRef(), m_path[m_pathIndex + 1]);
+    if (entry.empty())
+        return goal;
+
+    const LaneBand *target = entry.front();
+    for (const LaneBand *band : entry)
+        if (std::fabs(m_currentOffset - band->centerOffset) < std::fabs(m_currentOffset - target->centerOffset))
+            target = band;
+    goal.active = true;
+    goal.targetOffset = target->centerOffset;
+
+    std::vector<const LaneBand *> bands = RoadDataManager::Get().GetDrivingBands(m_currentRoad, m_travelDir);
+    int curIdx = -1;
+    int targetIdx = -1;
+    for (size_t i = 0; i < bands.size(); ++i)
+    {
+        if (curIdx < 0 || std::fabs(m_currentOffset - bands[i]->centerOffset) < std::fabs(m_currentOffset - bands[curIdx]->centerOffset))
+            curIdx = static_cast<int>(i);
+        if (bands[i] == target)
+            targetIdx = static_cast<int>(i);
+    }
+    int lanesToCross = (curIdx >= 0 && targetIdx >= 0) ? ((targetIdx > curIdx) ? targetIdx - curIdx : curIdx - targetIdx) : 1;
+    lanesToCross = std::max(lanesToCross, 1);
+
+    float t = m_currentSpline.GetSplinePosition(GetPosition());
+    float remainDistance = m_currentSpline.GetLength() * (1.0f - t);
+    float timeLeft = remainDistance / std::max(m_speed, ROUTE_MIN_PLAN_SPEED);
+    float timeNeeded = lanesToCross * ROUTE_LANE_CHANGE_TIME;
+    goal.urgency = std::clamp(timeNeeded / std::max(timeLeft, 0.0001f), 0.0f, 1.0f);
+    goal.bias = ROUTE_BIAS_MAX * goal.urgency;
+    return goal;
+}
+
+float Car::ComputeLateralTarget(const std::vector<NearbyCar> &nearbyCars, const IDM::Params &idm,
+                                float *outLaneCenter, const char **outReason) const
+{
+    constexpr float ROUTE_BSAFE_RELAX = 1.0f;
+
+    if (outLaneCenter != nullptr)
+        *outLaneCenter = m_currentOffset;
+
+    std::vector<const LaneBand *> bands = RoadDataManager::Get().GetDrivingBands(m_currentRoad, m_travelDir);
+    if (bands.empty())
+        return m_currentOffset;
+
+    size_t curIdx = 0;
+    for (size_t i = 1; i < bands.size(); ++i)
+        if (std::fabs(m_currentOffset - bands[i]->centerOffset) < std::fabs(m_currentOffset - bands[curIdx]->centerOffset))
+            curIdx = i;
+    const LaneBand &curBand = *bands[curIdx];
+    if (outLaneCenter != nullptr)
+        *outLaneCenter = curBand.centerOffset;
+
+    const Spline &refLine = m_currentRoad->GetReferenceLine();
+    float dirSign = TravelSign();
+    float myS = TravelS(refLine, GetPosition(), dirSign);
+
+    Mobil::VehicleState myState;
+    myState.speed = m_speed;
+    myState.accel = m_acceleration;
+    myState.position = myS;
+    myState.length = GetLength();
+
+    Mobil::VehicleState farLeader;
+    farLeader.speed = idm.v0;
+    farLeader.accel = 0.0f;
+    farLeader.position = myS + 1000.0f;
+    farLeader.length = 0.0f;
+
+    LaneNeighbors cur = GatherLaneNeighbors(nearbyCars, m_currentRoad, refLine, curBand.centerOffset, curBand.width * 0.5f, myS, dirSign);
+    const Mobil::VehicleState *curLeader = cur.hasLeader ? &cur.leader : &farLeader;
+    const Mobil::VehicleState *oldFollower = cur.hasFollower ? &cur.follower : nullptr;
+
+    Mobil::VehicleState sensorLeader;
+    if (m_sensor.frontDistance >= 0.0f)
+    {
+        sensorLeader.speed = m_sensor.frontHitSpeed;
+        sensorLeader.accel = 0.0f;
+        sensorLeader.position = myS + m_sensor.frontDistance;
+        sensorLeader.length = 0.0f;
+        if (sensorLeader.position < curLeader->position)
+            curLeader = &sensorLeader;
+    }
+    const Mobil::VehicleState &myLeader = *curLeader;
+
+    float myBlockS = (curLeader != &farLeader) ? curLeader->position : std::numeric_limits<float>::infinity();
+    for (const RoadSpeedSample &sample : m_lastRoadSamples)
+    {
+        if (sample.leader == nullptr && std::strcmp(sample.debugStr, "signal") == 0)
+        {
+            myBlockS = std::min(myBlockS, myS + sample.distance + MIN_SAFE_GAP);
+            break;
+        }
+    }
+
+    RouteLaneGoal goal = ComputeRouteLaneGoal();
+
+    int preferDir;
+    if (goal.active && std::fabs(goal.targetOffset - curBand.centerOffset) > 0.01f)
+        preferDir = (goal.targetOffset > curBand.centerOffset) ? 1 : -1;
+    else
+        preferDir = (m_currentOffset > curBand.centerOffset) ? 1 : -1;
+
+    for (int di : {preferDir, -preferDir})
+    {
+        long adjIdx = static_cast<long>(curIdx) + di;
+        if (adjIdx < 0 || adjIdx >= static_cast<long>(bands.size()))
+            continue;
+
+        const LaneBand &adjBand = *bands[adjIdx];
+        Mobil::Params mobil{MOBIL_B_SAFE, m_personality.politeness, MOBIL_A_THR};
+        float bias = 0.0f;
+        if (goal.active)
+        {
+            bool towardGoal = std::fabs(adjBand.centerOffset - goal.targetOffset) <
+                              std::fabs(curBand.centerOffset - goal.targetOffset);
+            bias = towardGoal ? goal.bias : -goal.bias;
+            if (towardGoal)
+                mobil.b_safe *= 1.0f + ROUTE_BSAFE_RELAX * goal.urgency;
+        }
+
+        LaneNeighbors nbr = GatherLaneNeighbors(nearbyCars, m_currentRoad, refLine, adjBand.centerOffset, adjBand.width * 0.5f, myS, dirSign);
+        if (nbr.hasLeader && std::fabs(nbr.leader.position - myBlockS) < MOBIL_LEADER_ALIGN_GAP)
+            continue;
+        const Mobil::VehicleState &newLeader = nbr.hasLeader ? nbr.leader : farLeader;
+        const Mobil::VehicleState *newFollower = nbr.hasFollower ? &nbr.follower : nullptr;
+        if (Mobil::EvaluateLaneChange(myState, oldFollower, myLeader, newLeader, newFollower, mobil, idm, bias))
+        {
+            if (outReason != nullptr)
+                *outReason = (goal.active && bias > 0.0f) ? "route" : "overtake";
+            return adjBand.centerOffset;
+        }
+    }
+    return curBand.centerOffset;
 }
 
 void Car::AppendSensorConstraintSample(std::vector<RoadSpeedSample> &samples) const
@@ -1656,11 +2052,13 @@ Car::SensorScan Car::ScanSensors(const std::vector<VehicleCollision::Obstacle> &
         ray.end = origin + Vec3(cosf(directionRad), 0.0f, sinf(directionRad)) *
                                (hit != nullptr ? distance : maxDistance);
         scan.rays.push_back(ray);
+        if (hit != nullptr)
+            scan.hitObstacles.push_back(*hit);
         return {hit, distance};
     };
 
     float corridorHalfWidth = halfWidth + AVOID_CORRIDOR_MARGIN;
-    float brakeHalfWidth = halfWidth + AVOID_PASS_CLEARANCE;
+    float brakeHalfWidth = corridorHalfWidth;
     auto pathDistance = [&](const Vec3 &point) -> float
     {
         float t = m_currentSpline.GetSplinePosition(point);
@@ -1689,13 +2087,13 @@ Car::SensorScan Car::ScanSensors(const std::vector<VehicleCollision::Obstacle> &
         {frontLeft, 0.0f, farLength},
         {frontRight, ToRadians(5.0f), farLength},
         {frontLeft, ToRadians(-5.0f), farLength},
-        
-        {frontRight, ToRadians(15.0f), farLength*0.5f},
-        {frontLeft, ToRadians(-15.0f), farLength*0.5f},
-        {frontRight, ToRadians(30.0f), farLength*0.5f},
-        {frontLeft, ToRadians(-30.0f), farLength*0.5f},
-        {frontRight, ToRadians(45.0f), farLength*0.5f},
-        {frontLeft, ToRadians(-45.0f), farLength*0.5f},
+
+        {frontRight, ToRadians(15.0f), farLength * 0.5f},
+        {frontLeft, ToRadians(-15.0f), farLength * 0.5f},
+        {frontRight, ToRadians(30.0f), farLength * 0.5f},
+        {frontLeft, ToRadians(-30.0f), farLength * 0.5f},
+        {frontRight, ToRadians(45.0f), farLength * 0.5f},
+        {frontLeft, ToRadians(-45.0f), farLength * 0.5f},
     };
     for (const FrontRay &frontRay : frontRays)
     {
@@ -1754,7 +2152,37 @@ Car::SensorScan Car::ScanSensors(const std::vector<VehicleCollision::Obstacle> &
 
 float Car::AvoidTargetOffset() const
 {
-    return (m_subMode == SubMode::D_Avoid) ? m_maneuver.avoidOffset : m_currentOffset;
+    if (m_subMode == SubMode::D_Avoid)
+        return m_maneuver.avoidOffset;
+    if (m_subMode == SubMode::D_LaneChange)
+        return m_maneuver.laneChangeTarget;
+    return m_currentOffset;
+}
+
+bool Car::IsLaneEntryClear(float targetOffset) const
+{
+    const LaneBand *target = RoadDataManager::Get().FindNearestBand(m_currentRoad, targetOffset, m_travelDir);
+    if (target == nullptr)
+        return true;
+
+    const Spline &ref = m_currentRoad->GetReferenceLine();
+    float dirSign = TravelSign();
+    float myS = TravelS(ref, GetPosition(), dirSign);
+    LaneNeighbors nbr = GatherLaneNeighbors(m_lastNearbyCars, m_currentRoad, ref, target->centerOffset, target->width * 0.5f, myS, dirSign);
+
+    if (nbr.hasLeader)
+    {
+        Mobil::VehicleState myState;
+        myState.speed = m_speed;
+        myState.accel = m_acceleration;
+        myState.position = myS;
+        myState.length = GetLength();
+        float accel = IDM::CalculateAcceleration(myState.speed, myState.accel, nbr.leader.speed, nbr.leader.accel,
+                                                 Mobil::GetGap(myState, &nbr.leader), BuildIdmParams(m_currentRoad));
+        if (accel < -MOBIL_B_SAFE)
+            return false;
+    }
+    return true;
 }
 
 float Car::SweepBodyPath(float targetOffset, const std::vector<VehicleCollision::Obstacle> &obstacles,
@@ -1765,7 +2193,7 @@ float Car::SweepBodyPath(float targetOffset, const std::vector<VehicleCollision:
     const Spline &referenceLine = m_currentRoad->GetReferenceLine();
     VehicleCollision::VehicleShape shape = BuildVehicleShape();
 
-    bool isStraight = m_currentSpline.IsStraight();
+    bool reversed = m_travelDir == LaneDirection::Backward;
     Vec3 position = GetRigidbodyPosition();
     float headingRad = DirectionToAngleRad(GetForwardAxis());
     float maxSteerAngle = CalcMaxSteerAngle(speed);
@@ -1779,8 +2207,7 @@ float Car::SweepBodyPath(float targetOffset, const std::vector<VehicleCollision:
     for (int i = 0; i < AVOID_SWEEP_STEPS; ++i)
     {
         offset += (targetOffset - offset) * lerpPerStep;
-        Spline offsetSpline = RoadDataManager::Get().BuildOffsetSpline(m_currentRoad, offset, m_travelDir);
-        Vec3 aim = offsetSpline.GetLookaheadPoint(position, lookahead);
+        Vec3 aim = OffsetLookaheadPoint(referenceLine, position, lookahead, offset, reversed);
         float steerAngle = std::clamp(PurePursuitSteerAt(position, headingRad, aim, m_wheelbase),
                                       -maxSteerAngle, maxSteerAngle);
         headingRad -= stepDistance * tanf(steerAngle) / m_wheelbase;
@@ -1818,6 +2245,8 @@ bool Car::FindAvoidOffset(float laneCenter, float &outOffset) const
             float candidate = std::clamp(laneCenter + side * magnitude, minOffset, maxOffset);
             if (std::fabs(candidate - laneCenter) < AVOID_MIN_SHIFT)
                 continue;
+            if (!IsSafeLaneEntry(CurrentRoadRef(), candidate, m_lastNearbyCars))
+                continue;
             if (!SimulateAvoidPath(candidate, m_sensorObstacles))
                 continue;
             outOffset = candidate;
@@ -1839,6 +2268,7 @@ void Car::UpdateSensors()
 {
     m_sensorObstacles = BuildSensorObstacles();
     m_sensor = ScanSensors(m_sensorObstacles);
+
     RebuildSensorRender();
     m_speedCap = -1.0f;
 }
@@ -1903,6 +2333,26 @@ void Car::UpdateAvoid()
     }
 }
 
+void Car::UpdateLaneChange()
+{
+    bool arrived = std::fabs(m_currentOffset - m_maneuver.laneChangeTarget) < AVOID_RETURN_TOLERANCE;
+    bool canAbort = std::fabs(m_currentOffset - m_maneuver.laneOffset) <
+                    std::fabs(m_currentOffset - m_maneuver.laneChangeTarget) * 0.8f;
+    bool blocked = canAbort && !IsLaneEntryClear(m_maneuver.laneChangeTarget);
+    if (arrived || blocked)
+    {
+        if (!arrived)
+            DebugConsole::Log(GetName() + ": lane change blocked -> cancel at d " + ToString(m_currentOffset));
+        else
+            DebugConsole::Log(GetName() + ": lane change done at d " + ToString(m_currentOffset));
+        m_staticBlockTimer = 0.0f;
+        m_stuck = false;
+        m_maneuver = ManeuverState{};
+        m_speedCap = -1.0f;
+        SetSubMode(SubMode::D_Normal);
+    }
+}
+
 void Car::DecideAvoidance()
 {
     constexpr float AVOID_TRIGGER_DELAY = 0.6f;
@@ -1943,6 +2393,7 @@ void Car::DecideAvoidance()
 void Car::HandleAvoidStuck()
 {
     m_stuck = true;
+    m_speedCap = 0.0f;
     DebugConsole::Log(GetName() + ": stuck (submode " + SubStateToString(m_subMode) + ", d " + ToString(m_currentOffset) + ")");
 }
 
