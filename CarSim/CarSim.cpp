@@ -227,6 +227,23 @@ void CarSim::SpawnAllCars()
     }
 }
 
+void CarSim::SpawnAllNodes()
+{
+    static const float kCarTypeWeights[] = {3.0f, 3.0f, 1.0f, 1.5f, 1.5f}; // Car0:Car1:Jeep:LittleTruck:Van
+    static const float kPersonalityWeights[] = {7.0f, 1.5f, 1.5f};         // Normal:Aggressive:Cautious
+
+    for (const auto &[id, node] : m_RoadDataManager.GetNodes())
+    {
+        if (node->nodeType == RoadNodeType::TrafficLight)
+            continue;
+
+        CarType type = static_cast<CarType>(PickWeightedIndex(kCarTypeWeights, IM_ARRAYSIZE(kCarTypeWeights)));
+        CarPersonalityType personality =
+            static_cast<CarPersonalityType>(PickWeightedIndex(kPersonalityWeights, IM_ARRAYSIZE(kPersonalityWeights)));
+        SpawnCarAt(node->position, node->direction, type, personality, /*roaming=*/true);
+    }
+}
+
 void CarSim::RemoveCar(const std::shared_ptr<Car> &car)
 {
     if (m_pPickedObject.lock() == car)
@@ -487,6 +504,9 @@ void CarSim::UpdateUI(float dt)
         ImGui::Separator();
         if (ImGui::Button(("Spawn All (" + std::to_string(kMaxSpawnAllCount) + ")").c_str()))
             SpawnAllCars();
+        ImGui::SameLine();
+        if (ImGui::Button("Spawn All Nodes"))
+            SpawnAllNodes();
     }
     ImGui::End();
 
