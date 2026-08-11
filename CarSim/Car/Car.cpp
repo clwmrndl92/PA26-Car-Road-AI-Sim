@@ -216,7 +216,7 @@ void Car::SetRotation(Vec3 direction)
 void Car::EmergBrake()
 {
     m_acceleration = -m_maxBrake;
-    m_planAccelDebug = -m_maxBrake; // 디버그 UI 표시용 캐시
+    m_planAccelDebug = -m_maxBrake;
 }
 
 void Car::AccelerateVel(float desiredVelocity)
@@ -232,7 +232,7 @@ void Car::Accelerate(float desiredAccel)
     float jerkLimit = (aTarget > m_acceleration) ? m_jerkUp : m_jerkDown;
     float maxStep = jerkLimit * m_deltaTime;
     m_acceleration += std::clamp(aTarget - m_acceleration, -maxStep, maxStep);
-    m_planAccelDebug = m_acceleration; // 디버그 UI 표시용 캐시
+    m_planAccelDebug = m_acceleration;
 }
 
 void Car::Steer(float radian, float steerRamp)
@@ -660,6 +660,50 @@ void Car::RebuildSplineRender()
     pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f));
     pModel->materials[0].Set<float>("$Opacity", 1.0f);
     m_splineRender.SetModel(pModel);
+}
+
+void Car::RebuildSensorRender()
+{
+    if (m_sweepDebugCorners.empty())
+    {
+        m_sensorRender.SetModel(nullptr);
+        return;
+    }
+
+    constexpr float DEBUG_LINE_HEIGHT = 0.15f;
+
+    GeometryData geoData;
+    geoData.vertices.reserve(m_sweepDebugCorners.size());
+    for (const Vec3 &corner : m_sweepDebugCorners)
+    {
+        DirectX::XMFLOAT3 p = ToXMFLOAT3(corner);
+        p.y += DEBUG_LINE_HEIGHT;
+        geoData.vertices.push_back(p);
+    }
+    geoData.normals.assign(geoData.vertices.size(), DirectX::XMFLOAT3(0.0f, 1.0f, 0.0f));
+    geoData.texcoords.assign(geoData.vertices.size(), DirectX::XMFLOAT2(0.0f, 0.0f));
+
+    std::vector<uint32_t> indices;
+    size_t boxCount = m_sweepDebugCorners.size() / 4;
+    indices.reserve(boxCount * 8);
+    for (size_t box = 0; box < boxCount; ++box)
+    {
+        uint32_t base = static_cast<uint32_t>(box * 4);
+        for (uint32_t i = 0; i < 4; ++i)
+        {
+            indices.push_back(base + i);
+            indices.push_back(base + (i + 1) % 4);
+        }
+    }
+    if (indices.size() > 65535)
+        geoData.indices32 = std::move(indices);
+    else
+        geoData.indices16.assign(indices.begin(), indices.end());
+
+    Model *pModel = ModelManager::Get().CreateFromGeometry("__sensor_sweep__:" + GetName(), geoData);
+    pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f));
+    pModel->materials[0].Set<float>("$Opacity", 1.0f);
+    m_sensorRender.SetModel(pModel);
 }
 
 void Car::RebuildRSDebugRender(const ReedsShepp::Path &path, const Vec3 &startPos, float startAngleRad,

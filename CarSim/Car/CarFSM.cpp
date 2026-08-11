@@ -31,7 +31,6 @@ namespace
         return referenceLine.GetSplinePosition(position) * referenceLine.GetLength() * dirSign;
     }
 
-    // 반환값: 투영이 유효한가
     bool ProjectObstacle(const Spline &referenceLine, const VehicleCollision::Obstacle &obstacle,
                          float &outOffset, float &outHalfExtent)
     {
@@ -49,7 +48,7 @@ namespace
         const std::vector<Vec3> &samples = referenceLine.GetSplinePoints();
         float sampleSpacing = samples.size() > 1 ? referenceLine.GetLength() / (samples.size() - 1.0f) : 0.0f;
         constexpr float PROJECTION_RESIDUAL_SLACK = 2.0f;
-        constexpr float PROJECTION_RESIDUAL_MIN = 0.5f; // 최소 허용치
+        constexpr float PROJECTION_RESIDUAL_MIN = 0.5f;
         float tolerance = sampleSpacing * PROJECTION_RESIDUAL_SLACK + PROJECTION_RESIDUAL_MIN;
         float alongResidual = (obstacle.center - onRef).Dot(dir);
         return std::fabs(alongResidual) <= tolerance;
@@ -152,7 +151,7 @@ namespace
         return atanf((2.0f * wheelbase * sinf(headingError)) / distance) * directionSign;
     }
 
-    // BuildOffsetSpline과 같은 규약
+    // 오프셋 규약 동일
     Vec3 OffsetSampleAt(const std::vector<Vec3> &samples, size_t i, float d)
     {
         const size_t n = samples.size();
@@ -166,7 +165,7 @@ namespace
         return Vec3(samples[i].GetX() + rx * d, samples[i].GetY(), samples[i].GetZ() + rz * d);
     }
 
-    // BuildOffsetSpline(d).GetLookaheadPoint(from, lookahead)와 동일. 스플라인 생성 없이 계산만.
+    // 스플라인 생성 없이 계산
     Vec3 OffsetLookaheadPoint(const Spline &referenceLine, const Vec3 &from, float lookahead, float d, bool reversed)
     {
         const std::vector<Vec3> &samples = referenceLine.GetSplinePoints();
@@ -1209,7 +1208,6 @@ void Car::DriveControl()
 
     Accelerate(accelIDM);
 
-    // Debug
     DirectX::XMFLOAT3 targetMarkerPos = ToXMFLOAT3(target);
     targetMarkerPos.y = GetPosition().GetY() + 0.2f;
     m_targetMarker.GetTransform().SetPosition(targetMarkerPos);
@@ -1390,13 +1388,22 @@ float Car::ComputeIdmAcceleration(const std::vector<RoadSpeedSample> &samples, c
 
     for (const RoadSpeedSample &sample : samples)
     {
+        bool isSensorFront = std::strcmp(sample.debugStr, "sensorFront") == 0;
 
         if (sample.leader != nullptr && !m_SimState->IsCarAlive(sample.leader))
+        {
+            if (isSensorFront)
+                DebugConsole::Log(GetName() + ": [IDM] sensorFront leader dead, skipped");
             continue;
+        }
 
         // 서로를 리더로 잡고 둘 다 서는 교착
         if (sample.leader != nullptr && sample.leader->GetIdmLeader() == this)
+        {
+            if (isSensorFront)
+                DebugConsole::Log(GetName() + ": [IDM] sensorFront mutual-leader deadlock with " + sample.leader->GetName() + ", skipped");
             continue;
+        }
 
         float leaderSpeed;
         float leaderAccel;
@@ -1417,7 +1424,12 @@ float Car::ComputeIdmAcceleration(const std::vector<RoadSpeedSample> &samples, c
             float remaining = sample.distance - distanceOffset + sample.speed * elapsedTime;
             bool hardStop = sample.speed <= 0.0f;
             if (!hardStop && (remaining <= 0.0f || m_speed <= sample.speed))
+            {
+                if (isSensorFront)
+                    DebugConsole::Log(GetName() + ": [IDM] sensorFront static hit outrun/cleared, skipped (remaining " +
+                                      ToString(remaining) + ", mySpeed " + ToString(m_speed) + ", hitSpeed " + ToString(sample.speed) + ")");
                 continue;
+            }
 
             leaderSpeed = sample.speed;
             leaderAccel = 0.0f;
@@ -1431,6 +1443,11 @@ float Car::ComputeIdmAcceleration(const std::vector<RoadSpeedSample> &samples, c
                 *outLeader = sample.hasObstacle ? &sample.obstacle : nullptr;
             if (outDebug != nullptr)
                 *outDebug = SpeedLimitDebug{sample.leader != nullptr ? "car:" + sample.leader->GetName() : sample.debugStr, leaderSpeed, gap};
+        }
+        else if (isSensorFront)
+        {
+            DebugConsole::Log(GetName() + ": [IDM] sensorFront a=" + ToString(a) + " gap=" + ToString(gap) +
+                              " not binding (best " + ToString(bestAccel) + ")");
         }
     }
     return bestAccel;
@@ -1546,7 +1563,7 @@ bool Car::IsSafeLaneEntry(const RoadRef &road, float targetOffset, bool checkLea
     myState.length = GetLength();
     IDM::Params idm = BuildIdmParams(road.road);
 
-    // 앞차: 내가 감당 못 할 감속을 강요당하면 진입 불가
+    // 앞차 감속강요 과함
     if (checkLeader && nbr.hasLeader)
     {
         float accel = IDM::CalculateAcceleration(myState.speed, myState.accel, nbr.leader.speed, nbr.leader.accel,
@@ -1555,7 +1572,7 @@ bool Car::IsSafeLaneEntry(const RoadRef &road, float targetOffset, bool checkLea
             return false;
     }
 
-    // 뒤차: 내가 끼어들어 강요하는 감속이 안전 한계 안인가
+    // 뒤차 강요감속 안전한지
     if (nbr.hasFollower)
     {
         Mobil::Params mobil{MOBIL_B_SAFE, m_personality.politeness, MOBIL_A_THR};
@@ -1619,6 +1636,7 @@ void Car::UpdateDrivePlan()
 
     m_lastRoadSamples = ScanRoadSpeedConstraints(lookDistance);
     AppendSensorConstraintSample(m_lastRoadSamples);
+    RebuildSensorRender();
     m_planScanPosition = GetPosition();
 
     float laneCenter = m_currentOffset;
@@ -1720,7 +1738,6 @@ float Car::ComputeLateralTarget(const IDM::Params &idm,
     float dirSign = TravelSign();
     float myS = TravelS(refLine, GetPosition(), dirSign);
 
-    // 내 상태(myState: 속도/가속/위치/길이)와 "앞이 완전히 뚫려있다"고 가정한 가상 리더(farLeader, 1000m 앞·자유속도)를 만듦
     Mobil::VehicleState myState;
     myState.speed = m_speed;
     myState.accel = m_acceleration;
@@ -1733,7 +1750,7 @@ float Car::ComputeLateralTarget(const IDM::Params &idm,
     farLeader.position = myS + 1000.0f;
     farLeader.length = 0.0f;
 
-    // GatherLaneNeighbors로 내 밴드의 실제 앞차/뒷차를 구함 — 앞차나 뒷차가 있는데 걔가 자기 차선을 벗어나 있으면(!IsOnLane(), 회피/차선변경 중) 이번엔 판단을 보류하고 그냥 현재 오프셋 유지
+    // 앞차 차선이탈시 보류
     LaneNeighbors cur = GatherLaneNeighbors(m_currentRoad, refLine, m_currentBand->centerOffset, m_currentBand->width * 0.5f, myS, dirSign);
     if (cur.leaderCar != nullptr && !cur.leaderCar->IsOnLane(cur.leaderCar->m_currentOffset))
         return m_currentOffset;
@@ -1741,7 +1758,7 @@ float Car::ComputeLateralTarget(const IDM::Params &idm,
     const Mobil::VehicleState *oldFollower = cur.hasFollower ? &cur.follower : nullptr;
     const Mobil::VehicleState &myLeader = *curLeader;
 
-    // myBlockS: 앞차 위치 or 전방 신호(빨간불) 위치 중 더 가까운 쪽을 "내가 못 넘어가는 지점"으로 잡음 — 신호 대기 때문에 굳이 위험한 추월을 시도하지 않게 하는 용도
+    // 신호도 막는지점 포함
     float myBlockS = (curLeader != &farLeader) ? curLeader->position : std::numeric_limits<float>::infinity();
     for (const RoadSpeedSample &sample : m_lastRoadSamples)
     {
@@ -1752,7 +1769,7 @@ float Car::ComputeLateralTarget(const IDM::Params &idm,
         }
     }
 
-    // ComputeRouteLaneGoal()로 "곧 회전해야 해서 특정 방향 차선으로 붙어야 하는 압박"(goal.urgency/goal.bias)을 구함 — 급할수록 그쪽 방향 차선변경의 안전기준(b_safe)을 완화해줌
+    // 급할수록 안전기준 완화
     RouteLaneGoal goal = ComputeRouteLaneGoal();
 
     std::vector<const LaneBand *> bands = RoadDataManager::Get().GetDrivingBands(m_currentRoad, m_travelDir);
@@ -1764,7 +1781,6 @@ float Car::ComputeLateralTarget(const IDM::Params &idm,
             break;
         }
 
-    // 선호 방향(경로상 필요한 방향, 없으면 그냥 순서대로)부터 좌우 인접 밴드를 순서대로 검사:
     int preferDir;
     if (goal.active && std::fabs(goal.targetOffset - m_currentBand->centerOffset) > 0.01f)
         preferDir = (goal.targetOffset > m_currentBand->centerOffset) ? 1 : -1;
@@ -1789,7 +1805,7 @@ float Car::ComputeLateralTarget(const IDM::Params &idm,
                 mobil.b_safe *= 1.0f + ROUTE_BSAFE_RELAX * goal.urgency;
         }
 
-        // 그 밴드의 새 리더/팔로워를 구하고, 새 리더가 myBlockS와 거의 같은 위치면(신호 대기 중인 같은 대상) 스킵
+        // 신호대기 중복 스킵
         LaneNeighbors nbr = GatherLaneNeighbors(m_currentRoad, refLine, adjBand.centerOffset, adjBand.width * 0.5f, myS, dirSign);
         if (nbr.leaderCar != nullptr && !nbr.leaderCar->IsOnLane(nbr.leaderCar->m_currentOffset))
             continue;
@@ -1797,28 +1813,27 @@ float Car::ComputeLateralTarget(const IDM::Params &idm,
             continue;
         const Mobil::VehicleState &newLeader = nbr.hasLeader ? nbr.leader : farLeader;
         const Mobil::VehicleState *newFollower = nbr.hasFollower ? &nbr.follower : nullptr;
-        // Mobil::EvaluateLaneChange(표준 MOBIL 이득+안전성 기준, 경로 바이어스 포함)로 옮길 가치가 있는지 판정
         if (Mobil::EvaluateLaneChange(myState, oldFollower, myLeader, newLeader, newFollower, mobil, idm, bias))
         {
-            // 되면 그 밴드 중심 오프셋을 반환(이유는 "route" 아니면 "overtake")
             if (outReason != nullptr)
                 *outReason = (goal.active && bias > 0.0f) ? "route" : "overtake";
             return adjBand.centerOffset;
         }
     }
-    // 어느 쪽도 안 되면 현재 밴드 중심 유지
 
     return m_currentBand->centerOffset;
 }
 
 void Car::AppendSensorConstraintSample(std::vector<RoadSpeedSample> &samples) const
 {
+    m_sweepDebugCorners.clear();
+
     if (m_currentRoad == nullptr)
         return;
 
     constexpr int SWEEP_STEPS = 24;
-    constexpr float SWEEP_MIN = 8.0f;
-    constexpr float SWEEP_MAX = 30.0f;
+    constexpr float SWEEP_MIN = 30.0f;
+    constexpr float SWEEP_MAX = 100.0f;
 
     float maxDistance = std::clamp(m_speed * m_speed / (2.0f * m_maxBrake) + SAFE_GAP, SWEEP_MIN, SWEEP_MAX);
     float stepDistance = maxDistance / SWEEP_STEPS;
@@ -1827,10 +1842,45 @@ void Car::AppendSensorConstraintSample(std::vector<RoadSpeedSample> &samples) co
     Vec3 forward = GetForwardAxis();
     Vec3 position = GetRigidbodyPosition();
 
+    float currentRemain = m_currentSpline.GetLength() * (1.0f - m_currentSpline.GetSplinePosition(position));
+
+    Spline nextSplineStorage;
+    const Spline *nextSpline = nullptr;
+    Vec3 nextSplineStart = Vec3::sZero();
+    if (currentRemain < maxDistance && m_pathIndex + 1 < m_path.size())
+    {
+        const RoadRef &next = m_path[m_pathIndex + 1];
+        if (next.road != nullptr)
+        {
+            float nextOffset = RoadDataManager::Get().ResolveConnectingOffset(CurrentRoadRef(), next, m_currentOffset, nullptr);
+            nextSplineStorage = RoadDataManager::Get().BuildOffsetSpline(next.road, nextOffset, next.direction);
+            if (!nextSplineStorage.GetSplinePoints().empty())
+            {
+                nextSpline = &nextSplineStorage;
+                nextSplineStart = nextSplineStorage.GetSplinePoints().front();
+            }
+        }
+    }
+
+    m_sweepDebugCorners.reserve(SWEEP_STEPS * 4);
+
     for (int i = 1; i <= SWEEP_STEPS; ++i)
     {
-        Vec3 point = m_currentSpline.GetLookaheadPoint(position, stepDistance * i);
-        float headingRad = DirectionToAngleRad(m_currentSpline.GetDirectionAt(m_currentSpline.GetSplinePosition(point)));
+        float d = stepDistance * static_cast<float>(i);
+        bool onNextRoad = nextSpline != nullptr && d > currentRemain;
+        const Spline &activeSpline = onNextRoad ? *nextSpline : m_currentSpline;
+        Vec3 point = onNextRoad ? nextSpline->GetLookaheadPoint(nextSplineStart, d - currentRemain)
+                                 : m_currentSpline.GetLookaheadPoint(position, d);
+        float headingRad = DirectionToAngleRad(activeSpline.GetDirectionAt(activeSpline.GetSplinePosition(point)));
+
+        Vec3 boxFwd(cosf(headingRad), 0.0f, sinf(headingRad));
+        Vec3 boxRight(boxFwd.GetZ(), 0.0f, -boxFwd.GetX());
+        Vec3 boxCenter = point + boxFwd * shape.pivotToCenter;
+        m_sweepDebugCorners.push_back(boxCenter + boxFwd * shape.halfLength - boxRight * shape.halfWidth);
+        m_sweepDebugCorners.push_back(boxCenter + boxFwd * shape.halfLength + boxRight * shape.halfWidth);
+        m_sweepDebugCorners.push_back(boxCenter - boxFwd * shape.halfLength + boxRight * shape.halfWidth);
+        m_sweepDebugCorners.push_back(boxCenter - boxFwd * shape.halfLength - boxRight * shape.halfWidth);
+
         const VehicleCollision::Obstacle *hit = VehicleCollision::FindColliding(point, headingRad, m_obstacles, shape);
         if (hit == nullptr)
             continue;
@@ -1841,13 +1891,13 @@ void Car::AppendSensorConstraintSample(std::vector<RoadSpeedSample> &samples) co
 
         Vec3 hitDir(cosf(hit->headingRad), 0.0f, sinf(hit->headingRad));
         float hitSpeed = std::max(0.0f, forward.Dot(hitDir) * hit->speed);
-        float distance = stepDistance * static_cast<float>(i) - (leader == nullptr ? SAFE_GAP : 0.0f);
+        float distance = d - (leader == nullptr ? SAFE_GAP : 0.0f);
 
         RoadSpeedSample sample{point, distance, hitSpeed, leader, "sensorFront"};
         if (leader != nullptr)
             sample.leaderScanPosition = leader->GetPosition();
         sample.obstacle = *hit;
-        sample.obstacle.sourceCar = leader; // 죽은 차면 leader처럼 nullptr로 맞춤
+        sample.obstacle.sourceCar = leader; // 죽은 차 nullptr 처리
         sample.hasObstacle = true;
         samples.push_back(sample);
         return;
@@ -2056,7 +2106,7 @@ void Car::UpdateAvoid()
     }
 
     bool clear = IsSafeLaneEntry(CurrentRoadRef(), m_maneuver.laneOffset) &&
-                SimulateAvoidPath(m_maneuver.laneOffset, m_obstacles);
+                 SimulateAvoidPath(m_maneuver.laneOffset, m_obstacles);
     m_maneuver.clearTimer = clear ? m_maneuver.clearTimer + m_deltaTime : 0.0f;
 
     if (m_maneuver.clearTimer >= AVOID_CLEAR_DELAY)
@@ -2079,7 +2129,7 @@ void Car::UpdateLaneChange()
     float headingRad = DirectionToAngleRad(GetForwardAxis());
     VehicleCollision::VehicleShape shape = BuildVehicleShape();
 
-    // 옆 밴드로 옮긴 내 박스: 지금 위치(옆) + 거기서 한 차체 길이 앞(옆의 앞)
+    // 옆+옆앞 두 지점 검사
     Vec3 sidePivot = OffsetLookaheadPoint(referenceLine, rigidPosition, 0.0f, m_maneuver.laneChangeTarget, reversed);
     Vec3 sideFrontPivot = OffsetLookaheadPoint(referenceLine, rigidPosition, GetLength(), m_maneuver.laneChangeTarget, reversed);
     bool sideBlocked = VehicleCollision::IsColliding(sidePivot, headingRad, m_obstacles, shape) ||
