@@ -39,6 +39,7 @@ private:
     void SpawnAllCars();
     void SpawnAllNodes();
     void RemoveCar(const std::shared_ptr<Car> &car);
+    void RemoveAllCars();
     void UpdateSignalMarkers();
     void SpawnManualCar(CarType type);
     void RemoveManualCar();

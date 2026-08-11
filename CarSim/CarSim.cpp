@@ -259,6 +259,17 @@ void CarSim::RemoveCar(const std::shared_ptr<Car> &car)
     m_GameObjects.erase(std::remove(m_GameObjects.begin(), m_GameObjects.end(), car), m_GameObjects.end());
 }
 
+void CarSim::RemoveAllCars()
+{
+    std::vector<std::shared_ptr<Car>> cars = m_CarObjects;
+    for (const std::shared_ptr<Car> &car : cars)
+    {
+        if (car == m_ManualCar)
+            continue;
+        RemoveCar(car);
+    }
+}
+
 void CarSim::SpawnManualCar(CarType type)
 {
     // 기존 사용자 조작 차가 있으면 그 자리(위치/방향)를 기억해두고 제거한 뒤 같은 자리에 새 차종으로 소환한다.
@@ -502,6 +513,8 @@ void CarSim::UpdateUI(float dt)
         }
 
         ImGui::Separator();
+        if (ImGui::Button("Remove All"))
+            RemoveAllCars();
         if (ImGui::Button(("Spawn All (" + std::to_string(kMaxSpawnAllCount) + ")").c_str()))
             SpawnAllCars();
         ImGui::SameLine();

@@ -1831,12 +1831,12 @@ void Car::AppendSensorConstraintSample(std::vector<RoadSpeedSample> &samples) co
     if (m_currentRoad == nullptr)
         return;
 
-    constexpr int SWEEP_STEPS = 24;
     constexpr float SWEEP_MIN = 30.0f;
     constexpr float SWEEP_MAX = 100.0f;
 
     float maxDistance = std::clamp(m_speed * m_speed / (2.0f * m_maxBrake) + SAFE_GAP, SWEEP_MIN, SWEEP_MAX);
-    float stepDistance = maxDistance / SWEEP_STEPS;
+    float stepDistance = GetLength() - MIN_SAFE_GAP;
+    int sweepSteps = std::max(static_cast<int>(maxDistance / stepDistance), 8);
 
     VehicleCollision::VehicleShape shape = BuildVehicleShape();
     Vec3 forward = GetForwardAxis();
@@ -1862,16 +1862,52 @@ void Car::AppendSensorConstraintSample(std::vector<RoadSpeedSample> &samples) co
         }
     }
 
-    m_sweepDebugCorners.reserve(SWEEP_STEPS * 4);
+    constexpr float STEER_LOOKAHEAD = 2.0f;
 
-    for (int i = 1; i <= SWEEP_STEPS; ++i)
+    float realOffset = ComputeReferenceOffset(m_currentRoad->GetReferenceLine(), GetPosition());
+    bool onLane = IsOnLane(realOffset);
+
+    bool reversed = m_travelDir == LaneDirection::Backward;
+    float targetOffset = AvoidTargetOffset();
+    float maxSteerAngle = CalcMaxSteerAngle(m_speed);
+    Vec3 bikePos = position;
+    float bikeHeadingRad = DirectionToAngleRad(forward);
+    bool useBike = !onLane;
+    Vec3 splineAnchor = position;
+    float anchorDistance = 0.0f;
+
+    m_sweepDebugCorners.reserve(sweepSteps * 4);
+
+    for (int i = 1; i <= sweepSteps; ++i)
     {
         float d = stepDistance * static_cast<float>(i);
-        bool onNextRoad = nextSpline != nullptr && d > currentRemain;
-        const Spline &activeSpline = onNextRoad ? *nextSpline : m_currentSpline;
-        Vec3 point = onNextRoad ? nextSpline->GetLookaheadPoint(nextSplineStart, d - currentRemain)
-                                 : m_currentSpline.GetLookaheadPoint(position, d);
-        float headingRad = DirectionToAngleRad(activeSpline.GetDirectionAt(activeSpline.GetSplinePosition(point)));
+        Vec3 point;
+        float headingRad;
+        if (useBike)
+        {
+            Vec3 aim = OffsetLookaheadPoint(m_currentRoad->GetReferenceLine(), bikePos, STEER_LOOKAHEAD, targetOffset, reversed);
+            float steerAngle = std::clamp(PurePursuitSteerAt(bikePos, bikeHeadingRad, aim, m_wheelbase),
+                                          -maxSteerAngle, maxSteerAngle);
+            bikeHeadingRad -= stepDistance * tanf(steerAngle) / m_wheelbase;
+            bikePos += Vec3(cosf(bikeHeadingRad), 0.0f, sinf(bikeHeadingRad)) * stepDistance;
+            point = bikePos;
+            headingRad = bikeHeadingRad;
+            if ((aim - bikePos).Length() <= STEER_LOOKAHEAD)
+            {
+                useBike = false;
+                splineAnchor = bikePos;
+                anchorDistance = d;
+            }
+        }
+        else
+        {
+            float remain = d - anchorDistance;
+            bool onNextRoad = nextSpline != nullptr && d > currentRemain;
+            const Spline &activeSpline = onNextRoad ? *nextSpline : m_currentSpline;
+            point = onNextRoad ? nextSpline->GetLookaheadPoint(nextSplineStart, d - currentRemain)
+                               : m_currentSpline.GetLookaheadPoint(splineAnchor, remain);
+            headingRad = DirectionToAngleRad(activeSpline.GetDirectionAt(activeSpline.GetSplinePosition(point)));
+        }
 
         Vec3 boxFwd(cosf(headingRad), 0.0f, sinf(headingRad));
         Vec3 boxRight(boxFwd.GetZ(), 0.0f, -boxFwd.GetX());
