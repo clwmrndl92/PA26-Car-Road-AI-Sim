@@ -62,7 +62,7 @@ bool CarSim::Init()
     if (!GameApp::Init())
         return false;
 
-    m_RoadDataManager.Init(NAV_DATA_DIR "/data4.json");
+    m_RoadDataManager.Init(NAV_DATA_DIR "/data.json");
     m_MarkingDataManager.Init(NAV_DATA_DIR "/marking.json");
 
     if (!InitResource())
@@ -903,8 +903,8 @@ void CarSim::InitRoadColliders()
 
 void CarSim::InitDynamicObstacleRenders()
 {
-    // 정적 장애물(InitObstacleColliders)과 달리 물리 콜라이더는 안 만든다 -- 지금은 Car의 레이 감지
-    // (BuildSensorObstacles)만 검증하는 테스트용이라, 실제로 부딪혀도 뚫고 지나간다.
+    // 정적 장애물(InitObstacleColliders)과 달리 물리 콜라이더는 안 만든다 -- 지금은 Car의 OBB 감지
+    // (UpdateSensors/m_obstacles)만 검증하는 테스트용이라, 실제로 부딪혀도 뚫고 지나간다.
     constexpr float OBSTACLE_HEIGHT = 1.5f;
 
     m_DynamicObstacleRenders.clear();

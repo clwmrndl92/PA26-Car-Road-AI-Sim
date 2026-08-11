@@ -97,9 +97,9 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
 
     bool honking = m_hornFlashTimer > 0.0f && m_carModel != nullptr;
     bool tint = (honking || m_highlighted || m_mobilHighlighted) && m_carModel != nullptr;
-    XMFLOAT4 tintColor = honking          ? XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f)
-                          : m_highlighted ? XMFLOAT4(0.0f, 0.4f, 1.0f, 1.0f)
-                                          : XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f);
+    XMFLOAT4 tintColor = honking         ? XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f)
+                         : m_highlighted ? XMFLOAT4(0.0f, 0.4f, 1.0f, 1.0f)
+                                         : XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f);
     std::vector<std::pair<size_t, XMFLOAT4>> savedDiffuse;
     if (tint)
     {
@@ -273,11 +273,17 @@ void Car::SetCurrentRoad(const shared_ptr<Road> &road, float offset, LaneDirecti
         ReleaseJunctionReservation();
 
     m_currentRoad = road;
-    m_currentOffset = offset;
     m_travelDir = direction;
+    SetCurrentOffset(offset);
     m_currentSpline = RoadDataManager::Get().BuildOffsetSpline(road, offset, direction);
 
     RebuildSplineRender();
+}
+
+void Car::SetCurrentOffset(float offset)
+{
+    m_currentOffset = offset;
+    m_currentBand = RoadDataManager::Get().FindNearestBand(m_currentRoad, m_currentOffset, m_travelDir);
 }
 
 bool Car::ShouldStopForSignal(const shared_ptr<Road> &road, LaneDirection direction, int nextRoadId) const
@@ -550,8 +556,12 @@ void Car::UpdateDebugWindow()
                     m_limitDebug.targetSpeed * 3.6f, m_limitDebug.gap);
         ImGui::Text("Cur offset d: %.2f m", m_currentOffset);
 
-        ImGui::Text("Ray front: %.1f m %s", m_sensor.frontDistance, m_sensor.frontBlocked ? "(blocked)" : "");
-        ImGui::Text("Ray side: %s%s", m_sensor.leftBlocked ? "L" : "-", m_sensor.rightBlocked ? "R" : "-");
+        ThreatKind frontThreat = ClassifyFrontThreat();
+        const char *frontThreatStr = frontThreat == ThreatKind::Vehicle ? "vehicle"
+                                     : frontThreat == ThreatKind::Static ? "static"
+                                                                          : "none";
+        float leaderDist = m_currentLeader != nullptr ? (m_currentLeader->center - GetPosition()).Length() : -1.0f;
+        ImGui::Text("Front leader: %s (dist %.1f m)", frontThreatStr, leaderDist);
         if (m_subMode == SubMode::D_Avoid)
             ImGui::Text("Avoid: shifted d %.2f -> %.2f", m_maneuver.laneOffset, m_maneuver.avoidOffset);
         else if (m_stuck)
@@ -650,40 +660,6 @@ void Car::RebuildSplineRender()
     pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f));
     pModel->materials[0].Set<float>("$Opacity", 1.0f);
     m_splineRender.SetModel(pModel);
-}
-
-void Car::RebuildSensorRender()
-{
-    if (!m_drawCollider || m_sensor.rays.empty())
-    {
-        m_sensorRender.SetModel(nullptr);
-        return;
-    }
-
-    constexpr float SENSOR_LINE_HEIGHT = 0.3f;
-
-    std::vector<DirectX::XMFLOAT3> points;
-    for (const SensorRay &ray : m_sensor.rays)
-    {
-        DirectX::XMFLOAT3 origin = ToXMFLOAT3(ray.origin);
-        DirectX::XMFLOAT3 end = ToXMFLOAT3(ray.end);
-        origin.y += SENSOR_LINE_HEIGHT;
-        end.y += SENSOR_LINE_HEIGHT;
-        points.push_back(origin);
-        points.push_back(end);
-        points.push_back(origin);
-    }
-    if (points.empty())
-    {
-        m_sensorRender.SetModel(nullptr);
-        return;
-    }
-
-    Model *pModel = ModelManager::Get().CreateFromGeometry("__sensor_rays__:" + GetName(),
-                                                           Geometry::CreatePolyline(points));
-    pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(1.0f, 0.5f, 0.0f, 1.0f));
-    pModel->materials[0].Set<float>("$Opacity", 1.0f);
-    m_sensorRender.SetModel(pModel);
 }
 
 void Car::RebuildRSDebugRender(const ReedsShepp::Path &path, const Vec3 &startPos, float startAngleRad,
