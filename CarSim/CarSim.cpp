@@ -62,7 +62,7 @@ bool CarSim::Init()
     if (!GameApp::Init())
         return false;
 
-    m_RoadDataManager.Init(NAV_DATA_DIR "/data.json");
+    m_RoadDataManager.Init(NAV_DATA_DIR "/data4.json");
     m_MarkingDataManager.Init(NAV_DATA_DIR "/marking.json");
 
     if (!InitResource())
@@ -307,6 +307,7 @@ void CarSim::UpdateCamera(float dt)
     {
         car->SetFocused(car == pickedObj);
         car->SetHighlighted(false);
+        car->SetMobilHighlighted(false);
     }
     if (pickedObj != nullptr)
     {
@@ -316,9 +317,9 @@ void CarSim::UpdateCamera(float dt)
         Car *laneFollower = nullptr;
         pickedObj->GetLaneChangeNeighbors(laneLeader, laneFollower);
         if (laneLeader != nullptr)
-            laneLeader->SetHighlighted(true);
+            laneLeader->SetMobilHighlighted(true);
         if (laneFollower != nullptr)
-            laneFollower->SetHighlighted(true);
+            laneFollower->SetMobilHighlighted(true);
     }
     if (auto picked = m_pPickedObject.lock())
     {

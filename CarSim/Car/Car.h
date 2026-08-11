@@ -46,6 +46,7 @@ public:
         m_drawCollider = focused;
     }
     void SetHighlighted(bool on) { m_highlighted = on; }
+    void SetMobilHighlighted(bool on) { m_mobilHighlighted = on; }
     Car *GetIdmLeader() const; // 죽은 차면 nullptr
     void GetLaneChangeNeighbors(Car *&outLeader, Car *&outFollower) const;
     void SetDestination(const shared_ptr<RoadNode> &parkNode);
@@ -206,13 +207,21 @@ private:
 #pragma endregion
 
 #pragma region BehaviorPlan
+    // 로직이 실제로 분기하는 샘플만 태그. 그 외는 debugStr(표시용)만으로 충분.
+    enum class RoadSampleKind
+    {
+        Other,
+        Signal,
+        JunctionWait,
+    };
     struct RoadSpeedSample
     {
         Vec3 position;
         float distance;
         float speed;
         Car *leader = nullptr;
-        const char *debugStr = "";
+        const char *debugStr = ""; // 디버그 표시 전용 -- 로직 분기엔 kind를 쓴다
+        RoadSampleKind kind = RoadSampleKind::Other;
         Vec3 leaderScanPosition = Vec3::sZero();
     };
 
@@ -251,6 +260,7 @@ private:
     void ReleaseJunctionReservation();
     std::vector<NearbyCar> CollectNearbyCars() const;
     bool IsTurningAhead() const;                  // 전방 15m 안에 회전이 있나
+    bool IsJunctionWaiting() const;               // 교차로 진입 대기중인가
     bool HasPriorityOver(const Car *other) const; // 교차 시 우선권 전순서
     LaneNeighbors GatherLaneNeighbors(const shared_ptr<Road> &road, const Spline &refLine, float bandCenter,
                                       float bandHalfWidth, float egoS, float dirSign) const;
@@ -267,6 +277,9 @@ private:
     float ComputeLateralTarget(const IDM::Params &idm,
                                float *outLaneCenter = nullptr, const char **outReason = nullptr) const;
     std::vector<RoadSpeedSample> ScanRoadSpeedConstraints(float lookDistance) const;
+    // 센서 전방 히트가 내 진로 밴드(현재 도로, 아니면 다음 도로) 안인가. IDM/MOBIL 공용 기준.
+    // outGap: 참조선 진행거리 기준 전방 gap
+    bool FrontHitInPlannedBand(float &outGap) const;
     void AppendSensorConstraintSample(std::vector<RoadSpeedSample> &samples) const;
     void ComputeDrivableRange(const RoadRef &road, float &outMin, float &outMax) const;
 #pragma endregion
@@ -284,6 +297,8 @@ private:
         bool frontBlocked = false;                            // 전방 코리도 안에 (거의) 멈춰 있는 장애물이 잡힘 -- 회피 트리거 후보
         bool leftBlocked = false;                             // 왼쪽 바로 옆에 뭔가 있음 -- 그쪽으로는 못 피한다
         bool rightBlocked = false;                            // 오른쪽 바로 옆에 뭔가 있음
+        bool leftMergeBlocked = false;                        // 왼쪽 앞+중간 레이 -- 차선변경 초반 취소 판정용(뒤 레이는 제외)
+        bool rightMergeBlocked = false;                       // 오른쪽 앞+중간 레이
         float frontDistance = -1.0f;                          // 내 진로 코리도 안에 들어온 전방 히트 중 최단 거리(범퍼 기준). 없으면 -1
         Vec3 frontHitPosition;                                // 위 히트 지점 (IDM 가상 리더 샘플 위치)
         float frontHitSpeed = 0.0f;                           // 위 히트 대상이 '내 진행방향으로' 멀어지는 속도
@@ -301,6 +316,7 @@ private:
         float laneChangeTarget = 0.0f; // D_LaneChange 목표 차로 중심 d
         float clearTimer = 0.0f;       // 레이가 깨끗한 채로 지난 시간 (회피 종료 디바운스용)
         float lastPlanTime = -1000.0f; // 마지막으로 오프셋을 (재)탐색한 시각 -- 재계획 디더링 방지
+        bool sideBlockedLogged = false; // 진행중 sideBlocked 로그, 1회만
     };
 
     // 전방 최근접 위협을 무엇으로 볼 것인가. 대상마다 대응이 갈리므로 여기서 한 번만 분기한다.
@@ -371,7 +387,8 @@ private:
 
     bool m_wantSegmentTick = false;
     bool m_isFocused = false;   // 포커스 여부 (입력 처리용)
-    bool m_highlighted = false; // 파란색 표시
+    bool m_highlighted = false; // 파란색 표시 (IDM 리더)
+    bool m_mobilHighlighted = false; // 초록색 표시 (MOBIL 앞/뒤차)
     bool m_isControl = false;   // 사용자 조작 차 여부 (true면 AI FSM 대신 UpdateWithControl로 구동)
     int m_id = -1;              // CarSim이 스폰 시 부여하는 고유 id
 

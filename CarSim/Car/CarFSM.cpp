@@ -1302,7 +1302,7 @@ std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistan
                                          ? (signalNode->position - calPosition).Length()
                                          : traveledDistance + (nodeT - startT) * splineLength;
                 float stopDistance = std::min(nodeDistance, traveledDistance + segmentDistance);
-                samples.push_back({signalNode->position, stopDistance - SAFE_GAP, 0.0f, nullptr, "signal"});
+                samples.push_back({signalNode->position, stopDistance - SAFE_GAP, 0.0f, nullptr, "signal", RoadSampleKind::Signal});
                 break;
             }
 
@@ -1323,8 +1323,9 @@ std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistan
             bool holdForJunction = segment.road == m_currentRoad && ShouldHoldForJunction(nextRoad);
             if (holdForMerge || holdForJunction)
             {
-                const char *kind = holdForJunction ? "junctionWait" : "mergeWait";
-                samples.push_back({splineEnd(spline), traveledDistance - SAFE_GAP, 0.0f, nullptr, kind});
+                const char *label = holdForJunction ? "junctionWait" : "mergeWait";
+                RoadSampleKind kind = holdForJunction ? RoadSampleKind::JunctionWait : RoadSampleKind::Other;
+                samples.push_back({splineEnd(spline), traveledDistance - SAFE_GAP, 0.0f, nullptr, label, kind});
                 break;
             }
 
@@ -1417,8 +1418,22 @@ bool Car::IsTurningAhead() const
 }
 
 // 직진이 우선, 같으면 id 낮은 쪽. 양쪽에서 부르면 항상 한쪽만 true인 전순서
+bool Car::IsJunctionWaiting() const
+{
+    for (const RoadSpeedSample &sample : m_lastRoadSamples)
+        if (sample.leader == nullptr && (sample.kind == RoadSampleKind::JunctionWait || sample.kind == RoadSampleKind::Signal))
+            return true;
+    return false;
+}
+
 bool Car::HasPriorityOver(const Car *other) const
 {
+    // 대기중인 쪽이 무조건 양보
+    bool meWaiting = IsJunctionWaiting();
+    bool otherWaiting = other->IsJunctionWaiting();
+    if (meWaiting != otherWaiting)
+        return !meWaiting;
+
     bool meTurning = IsTurningAhead();
     bool otherTurning = other->IsTurningAhead();
     if (meTurning != otherTurning)
@@ -1791,6 +1806,70 @@ Car::RouteLaneGoal Car::ComputeRouteLaneGoal() const
     return goal;
 }
 
+bool Car::FrontHitInPlannedBand(float &outGap) const
+{
+    outGap = m_sensor.frontDistance;
+    if (m_sensor.frontDistance < 0.0f || m_currentRoad == nullptr)
+        return false;
+
+    const LaneBand *curBand = RoadDataManager::Get().FindNearestBand(m_currentRoad, m_currentOffset, m_travelDir);
+    if (curBand == nullptr)
+        return false;
+
+    const Spline &refLine = m_currentRoad->GetReferenceLine();
+    float dirSign = TravelSign();
+    Car *sensorCar = m_sensor.frontHitObstacle.sourceCar;
+
+    if (sensorCar == nullptr)
+    {
+        float d = ComputeReferenceOffset(refLine, m_sensor.frontHitPosition);
+        return std::fabs(d - curBand->centerOffset) <= curBand->width * 0.5f;
+    }
+    if (m_SimState == nullptr || !m_SimState->IsCarAlive(sensorCar))
+        return false;
+
+    auto overlapsBand = [&](const RoadRef &road, const LaneBand &band)
+    {
+        if (sensorCar->m_currentRoad != road.road || sensorCar->m_travelDir != road.direction)
+            return false;
+
+        float d = 0.0f;
+        float halfExtent = 0.0f;
+        return ProjectObstacle(road.road->GetReferenceLine(), m_sensor.frontHitObstacle, d, halfExtent) &&
+               std::fabs(d - band.centerOffset) <= band.width * 0.5f + halfExtent;
+    };
+
+    float myS = TravelS(refLine, GetPosition(), dirSign);
+    if (overlapsBand(CurrentRoadRef(), *curBand))
+    {
+        outGap = TravelS(refLine, sensorCar->GetPosition(), dirSign) - myS;
+        return outGap > 0.0f;
+    }
+
+    if (m_pathIndex + 1 >= m_path.size())
+        return false;
+
+    const RoadRef &nextRoad = m_path[m_pathIndex + 1];
+    if (nextRoad.road == nullptr)
+        return false;
+
+    bool hasLaneMapping = false;
+    float nextOffset = RoadDataManager::Get().ResolveConnectingOffset(CurrentRoadRef(), nextRoad,
+                                                                      curBand->centerOffset, &hasLaneMapping);
+    bool unconstrained = RoadDataManager::Get().GetEntryBands(CurrentRoadRef(), nextRoad).empty();
+    if (!hasLaneMapping && !unconstrained)
+        return false;
+
+    const LaneBand *nextBand = RoadDataManager::Get().FindNearestBand(nextRoad.road, nextOffset, nextRoad.direction);
+    if (nextBand == nullptr || !overlapsBand(nextRoad, *nextBand))
+        return false;
+
+    Spline nextSpline = RoadDataManager::Get().BuildOffsetSpline(nextRoad.road, nextBand->centerOffset, nextRoad.direction);
+    float currentRemain = m_currentSpline.GetLength() * (1.0f - m_currentSpline.GetSplinePosition(GetPosition()));
+    outGap = currentRemain + nextSpline.GetLength() * nextSpline.GetSplinePosition(sensorCar->GetPosition());
+    return outGap > 0.0f;
+}
+
 float Car::ComputeLateralTarget(const IDM::Params &idm,
                                 float *outLaneCenter, const char **outReason) const
 {
@@ -1834,33 +1913,23 @@ float Car::ComputeLateralTarget(const IDM::Params &idm,
     const Mobil::VehicleState *oldFollower = cur.hasFollower ? &cur.follower : nullptr;
 
     Mobil::VehicleState sensorLeader;
-    if (m_sensor.frontDistance >= 0.0f)
+    float sensorGap = 0.0f;
+    if (FrontHitInPlannedBand(sensorGap))
     {
         Car *sensorCar = m_sensor.frontHitObstacle.sourceCar;
-        bool inMyBand;
-        if (sensorCar != nullptr)
-            inMyBand = sensorCar->IsOnLane();
-        else
-        {
-            float sensorD = ComputeReferenceOffset(refLine, m_sensor.frontHitPosition);
-            inMyBand = std::fabs(sensorD - curBand.centerOffset) <= curBand.width * 0.5f;
-        }
-        if (inMyBand)
-        {
-            sensorLeader.speed = m_sensor.frontHitSpeed;
-            sensorLeader.accel = 0.0f;
-            sensorLeader.position = myS + m_sensor.frontDistance;
-            sensorLeader.length = 0.0f;
-            if (sensorLeader.position < curLeader->position)
-                curLeader = &sensorLeader;
-        }
+        sensorLeader.speed = sensorCar != nullptr ? sensorCar->GetSpeed() : m_sensor.frontHitSpeed;
+        sensorLeader.accel = sensorCar != nullptr ? sensorCar->GetAcceleration() : 0.0f;
+        sensorLeader.position = myS + sensorGap;
+        sensorLeader.length = sensorCar != nullptr ? sensorCar->GetLength() : 0.0f;
+        if (sensorLeader.position < curLeader->position)
+            curLeader = &sensorLeader;
     }
     const Mobil::VehicleState &myLeader = *curLeader;
 
     float myBlockS = (curLeader != &farLeader) ? curLeader->position : std::numeric_limits<float>::infinity();
     for (const RoadSpeedSample &sample : m_lastRoadSamples)
     {
-        if (sample.leader == nullptr && std::strcmp(sample.debugStr, "signal") == 0)
+        if (sample.leader == nullptr && sample.kind == RoadSampleKind::Signal)
         {
             myBlockS = std::min(myBlockS, myS + sample.distance + SAFE_GAP);
             break;
@@ -1929,6 +1998,12 @@ void Car::AppendSensorConstraintSample(std::vector<RoadSpeedSample> &samples) co
     float leaderLateral = std::fabs((leader->GetPosition() - GetPosition()).Dot(right));
     bool inMyLane = leaderLateral <= GetHalfWidth() + leader->GetHalfWidth();
     bool crossing = !inMyLane && forward.Dot(leader->GetForwardAxis()) < SAME_DIRECTION_COS;
+
+    // 같은 방향인데 내 밴드 밖 = 옆차로 차. 교차 차량은 아래 우선권 로직이 맡는다
+    float bandGap = 0.0f;
+    if (!crossing && !FrontHitInPlannedBand(bandGap))
+        return;
+
     bool priorityTimedOut = m_priorityStuckElapsed >= PRIORITY_STUCK_TIMEOUT;
     bool canClaimPriority = crossing && HasPriorityOver(leader) && m_sensor.frontDistance > brakingGap &&
                             (IsOnLane() || priorityTimedOut);
@@ -2138,9 +2213,15 @@ Car::SensorScan Car::ScanSensors(const std::vector<VehicleCollision::Obstacle> &
 
         bool blocked = lateralHit || rearLateralHit;
         if (side < 0)
+        {
             scan.leftBlocked = blocked;
+            scan.leftMergeBlocked = lateralHit;
+        }
         else
+        {
             scan.rightBlocked = blocked;
+            scan.rightMergeBlocked = lateralHit;
+        }
     }
 
     return scan;
@@ -2311,6 +2392,26 @@ void Car::UpdateAvoid()
 
 void Car::UpdateLaneChange()
 {
+    float total = m_maneuver.laneChangeTarget - m_maneuver.laneOffset;
+    bool towardRight = total * TravelSign() > 0.0f;
+    bool sideBlocked = towardRight ? m_sensor.rightBlocked : m_sensor.leftBlocked;
+    bool mergeSideBlocked = towardRight ? m_sensor.rightMergeBlocked : m_sensor.leftMergeBlocked;
+    float progress = std::fabs(total) > 0.0001f ? (m_currentOffset - m_maneuver.laneOffset) / total : 1.0f;
+
+    if (mergeSideBlocked && progress < 0.3f)
+    {
+        DebugConsole::Log(GetName() + ": lane change canceled, side blocked at d " + ToString(m_currentOffset));
+        m_currentOffset = m_maneuver.laneOffset;
+        m_maneuver.laneChangeTarget = m_maneuver.laneOffset;
+        m_currentSpline = RoadDataManager::Get().BuildOffsetSpline(m_currentRoad, m_currentOffset, m_travelDir);
+        RebuildSplineRender();
+    }
+    else if (sideBlocked && !m_maneuver.sideBlockedLogged)
+    {
+        m_maneuver.sideBlockedLogged = true;
+        DebugConsole::Log(GetName() + ": lane change continues despite side blocked at d " + ToString(m_currentOffset));
+    }
+
     bool arrived = std::fabs(m_currentOffset - m_maneuver.laneChangeTarget) < AVOID_RETURN_TOLERANCE;
     if (arrived)
     {
