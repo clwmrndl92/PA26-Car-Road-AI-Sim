@@ -398,7 +398,7 @@ void Car::ApplyMotion()
         m_acceleration = 0.0f;
         m_speed = 0.0f;
         m_contactPending = true;
-        DebugConsole::Log("CRASH!!");
+        DebugConsole::Log(GetName() + ": CRASH!!");
         return;
     }
 
@@ -486,7 +486,6 @@ void Car::UpdateHorn(float dt)
         {
             m_hornStoppedDuration = 0.0f;
             m_hornFlashTimer = HORN_FLASH_DURATION;
-            DebugConsole::Log(GetName() + ": HONK!");
         }
     }
     else

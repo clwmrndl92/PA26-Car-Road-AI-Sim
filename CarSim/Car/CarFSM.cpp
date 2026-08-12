@@ -8,7 +8,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <cstring>
 #include <limits>
 #include <memory>
 #include <utility>
@@ -385,7 +384,6 @@ void Car::OnModeEnter(Mode prev)
         SetSubMode(prev == Mode::Stop ? SubMode::P_EXIT : SubMode::P_ENTER_LEG1);
         m_parkPlanPending = true;
         m_parkSequenceActive = true;
-        DebugConsole::Log(GetName() + ": Park plan pending: waiting for full stop before planning");
     }
     else if (m_mode == Mode::Stop)
     {
@@ -591,8 +589,6 @@ bool Car::BeginParkCruise()
     m_destDir = m_path.back().direction;
     SetCurrentRoad(m_path[0].road, RoadDriveOffset(m_path[0], GetPosition()), m_path[0].direction);
 
-    DebugConsole::Log(GetName() + ": lot cruise -> spot " + std::to_string(spot->id) + " via road " +
-                      std::to_string(m_path[0].road->GetId()) + " .. " + std::to_string(m_destRoad->GetId()));
     return true;
 }
 
@@ -642,8 +638,6 @@ bool Car::BeginParkExitCruise(int lotNodeId)
     m_destDir = m_path.back().direction;
     SetCurrentRoad(m_path[0].road, RoadDriveOffset(m_path[0], GetPosition()), m_path[0].direction);
 
-    DebugConsole::Log(GetName() + ": lot exit -> road " + std::to_string(exitAisle.road->GetId()) + " -> " +
-                      std::to_string(exitRoad.road->GetId()) + " .. dest " + std::to_string(m_destRoad->GetId()));
     return true;
 }
 
@@ -658,7 +652,6 @@ void Car::UpdatePark()
             return;
         }
         m_parkPlanPending = false;
-        DebugConsole::Log(GetName() + ": Park plan pending resolved: fully stopped, beginning RS plan");
         BeginParkPlan();
     }
 
@@ -771,7 +764,6 @@ void Car::BeginParkPlan()
             exitPose = RoadDataManager::Get().GetClosestRoad(frontPos, GetForwardAxis());
         if (exitPose.road == nullptr)
         {
-            DebugConsole::Log(GetName() + ": BeginParkPlan: no road found to exit onto, abandoning this park attempt");
             m_destRoad = nullptr;
             SetSubMode(SubMode::None);
             return;
@@ -816,7 +808,6 @@ void Car::BeginParkPlan()
             return;
         }
 
-        DebugConsole::Log(GetName() + ": BeginParkPlan: RS exit failed for all lead distances, driving as-is");
         m_vehicleController.BeginPlan({});
         return;
     }
@@ -838,9 +829,6 @@ void Car::BeginParkPlan()
                                               });
             if (hasAnyParkSpot)
             {
-
-                DebugConsole::Log(GetName() + ": Park spot reservation failed for node " + std::to_string(parkNodeId) +
-                                  ": all ParkSpot children reserved, abandoning destination");
                 m_parkSequenceActive = false;
                 m_destRoad = nullptr;
                 return;
@@ -862,8 +850,6 @@ void Car::BeginParkPlan()
     {
         if (!BeginParkEnterOrRetry())
         {
-            DebugConsole::Log(GetName() + ": BeginParkPlan: no reachable ParkSpot for node " + std::to_string(parkNodeId) +
-                              ", abandoning destination");
             m_destRoad = nullptr;
             m_parkSequenceActive = false;
         }
@@ -933,7 +919,6 @@ bool Car::PlanEnterForCurrentSpot()
             float entryAngleRad = DirectionToAngleRad(bestSpline->GetDirectionAt(entryT) * dirSign);
             if (PlanParkLegTo(entryPos, entryAngleRad))
             {
-                DebugConsole::Log(GetName() + ": PlanEnterForCurrentSpot: P unreachable, detouring via aisle entry point");
                 SetSubMode(SubMode::P_ENTER_LEG1);
                 return true;
             }
@@ -946,8 +931,6 @@ bool Car::PlanEnterForCurrentSpot()
     float spotAngleRad = DirectionToAngleRad(m_parkSpot->direction);
     if ((spotTarget - m_rigidbody.GetPosition()).Length() > MAX_DIRECT_LEG_DISTANCE)
     {
-        DebugConsole::Log(GetName() + ": PlanEnterForCurrentSpot: direct park target too far (" +
-                          std::to_string((spotTarget - m_rigidbody.GetPosition()).Length()) + "m), giving up");
         return false;
     }
     if (PlanParkLegTo(spotTarget, spotAngleRad))
@@ -1019,13 +1002,9 @@ void Car::BeginParkSpotLeg()
     if (PlanParkLegTo(spotTarget, spotAngleRad))
         return;
 
-    DebugConsole::Log(GetName() + ": BeginParkSpotLeg: can't tuck into ParkSpot " + std::to_string(m_parkSpot->id) +
-                      " from P, trying next spot");
-
     if (ReserveNextParkSpot() && BeginParkEnterOrRetry())
         return;
 
-    DebugConsole::Log(GetName() + ": BeginParkSpotLeg: no reachable ParkSpot left, stopping");
     m_destRoad = nullptr;
     m_vehicleController.BeginPlan({});
 }
@@ -1133,7 +1112,6 @@ bool Car::RepathFromCurrentBand()
         m_path.resize(m_pathIndex + 1);
         m_path.push_back(candidates[rand() % candidates.size()]);
         MaintainRoamingPath();
-        DebugConsole::Log(GetName() + ": lane missed -> reroute (roaming) via road " + ToString(m_path[m_pathIndex + 1].road->GetId()));
         return true;
     }
 
@@ -1147,7 +1125,6 @@ bool Car::RepathFromCurrentBand()
     if (best.empty())
         return false;
 
-    DebugConsole::Log(GetName() + ": lane missed -> reroute via road " + ToString(best.front().road->GetId()));
     m_path.resize(m_pathIndex + 1);
     m_path.insert(m_path.end(), best.begin(), best.end());
     m_destDir = m_path.back().direction;
@@ -1447,22 +1424,12 @@ float Car::ComputeIdmAcceleration(const std::vector<RoadSpeedSample> &samples, c
 
     for (const RoadSpeedSample &sample : samples)
     {
-        bool isSensorFront = std::strcmp(sample.debugStr, "sensorFront") == 0;
-
         if (sample.leader != nullptr && !m_SimState->IsCarAlive(sample.leader))
-        {
-            if (isSensorFront)
-                DebugConsole::Log(GetName() + ": [IDM] sensorFront leader dead, skipped");
             continue;
-        }
 
         // 서로를 리더로 잡고 둘 다 서는 교착
         if (sample.leader != nullptr && sample.leader->GetIdmLeader() == this)
-        {
-            if (isSensorFront)
-                DebugConsole::Log(GetName() + ": [IDM] sensorFront mutual-leader deadlock with " + sample.leader->GetName() + ", skipped");
             continue;
-        }
 
         float leaderSpeed;
         float leaderAccel;
@@ -1485,12 +1452,7 @@ float Car::ComputeIdmAcceleration(const std::vector<RoadSpeedSample> &samples, c
             float remaining = sample.distance - distanceOffset + sample.speed * elapsedTime;
             bool hardStop = sample.speed <= 0.0f;
             if (!hardStop && (remaining <= 0.0f || m_speed <= sample.speed))
-            {
-                if (isSensorFront)
-                    DebugConsole::Log(GetName() + ": [IDM] sensorFront static hit outrun/cleared, skipped (remaining " +
-                                      ToString(remaining) + ", mySpeed " + ToString(m_speed) + ", hitSpeed " + ToString(sample.speed) + ")");
                 continue;
-            }
 
             leaderSpeed = sample.speed;
             leaderAccel = 0.0f;
@@ -1505,11 +1467,6 @@ float Car::ComputeIdmAcceleration(const std::vector<RoadSpeedSample> &samples, c
             if (outDebug != nullptr)
                 *outDebug = SpeedLimitDebug{sample.leader != nullptr ? "car:" + sample.leader->GetName() : sample.debugStr, leaderSpeed, gap};
         }
-        else if (isSensorFront)
-        {
-            DebugConsole::Log(GetName() + ": [IDM] sensorFront a=" + ToString(a) + " gap=" + ToString(gap) +
-                              " not binding (best " + ToString(bestAccel) + ")");
-        }
     }
     return bestAccel;
 }
@@ -1521,58 +1478,127 @@ Car::LaneNeighbors Car::GatherLaneNeighbors(const shared_ptr<Road> &road, const 
     float bestLeaderGap = std::numeric_limits<float>::max();
     float bestFollowerGap = std::numeric_limits<float>::max();
 
-    for (const VehicleCollision::Obstacle &obstacle : m_obstacles)
+    struct ScanRoad
     {
-        float d = 0.0f;
-        float halfExtent = 0.0f;
-        if (!ProjectObstacle(refLine, obstacle, d, halfExtent))
-            continue;
-        if (std::fabs(d - bandCenter) > bandHalfWidth + halfExtent)
-            continue;
+        const Spline *refLine = nullptr;
+        float dirSign = 1.0f;
+        float sBias = 0.0f; // 로컬 s + sBias = 기준로드 s
+        float bandCenter = 0.0f;
+        bool allowLeader = true;   // 다음로드 차는 무조건 앞
+        bool allowFollower = true; // 이전로드 차는 무조건 뒤
+    };
 
-        Mobil::VehicleState st;
-        Car *other = obstacle.sourceCar;
-        if (other != nullptr)
+    ScanRoad scans[3];
+    int scanCount = 0;
+    scans[scanCount++] = ScanRoad{&refLine, dirSign, 0.0f, bandCenter, true, true};
+
+    // 로드가 짧아 앞/뒤차가 인접 로드에 있는 일이 잦다
+    if (road == m_currentRoad && m_pathIndex < m_path.size() && m_path[m_pathIndex].road == m_currentRoad)
+    {
+        RoadDataManager &rdm = RoadDataManager::Get();
+        // TravelS는 정방향 [0,L], 역방향 [-L,0] -- 양쪽 다 진행할수록 증가
+        auto travelStartS = [](const Spline &line, float sign)
+        { return sign > 0.0f ? 0.0f : -line.GetLength(); };
+        auto travelEndS = [](const Spline &line, float sign)
+        { return sign > 0.0f ? line.GetLength() : 0.0f; };
+
+        if (m_pathIndex + 1 < m_path.size() && m_path[m_pathIndex + 1].road != nullptr)
         {
-            if (!m_SimState->IsCarAlive(other) || other->m_currentRoad != road)
-                continue;
-
-            float otherT = refLine.GetSplinePosition(other->GetPosition());
-            float dirDot = refLine.GetDirectionAt(otherT).Dot(other->GetForwardAxis()) * dirSign;
-
-            st.speed = std::max(0.0f, other->GetSpeed() * dirDot);
-            st.accel = other->GetAcceleration() * dirDot;
-            st.position = TravelS(refLine, other->GetPosition(), dirSign);
-            st.length = other->GetLength();
+            const RoadRef &next = m_path[m_pathIndex + 1];
+            const Spline &nextRef = next.road->GetReferenceLine();
+            float nextSign = GetTravelSign(next.direction);
+            scans[scanCount++] = ScanRoad{&nextRef, nextSign,
+                                          travelEndS(refLine, dirSign) - travelStartS(nextRef, nextSign),
+                                          rdm.ResolveConnectingOffset(CurrentRoadRef(), next, bandCenter, nullptr),
+                                          true, false};
         }
-        else
+        if (m_pathIndex > 0 && m_path[m_pathIndex - 1].road != nullptr)
         {
-            st.speed = obstacle.speed;
-            st.accel = 0.0f;
-            st.position = TravelS(refLine, obstacle.center, dirSign);
-            st.length = obstacle.halfLength * 2.0f;
-        }
-
-        if (st.position >= myS)
-        {
-            float gap = st.position - myS;
-            if (gap < bestLeaderGap)
+            const RoadRef &prev = m_path[m_pathIndex - 1];
+            // 역매핑이 없어서 prev 밴드를 정방향으로 훑어 내 밴드로 오는 걸 찾는다
+            for (const LaneBand *band : rdm.GetDrivingBands(prev.road, prev.direction))
             {
-                bestLeaderGap = gap;
-                out.leader = st;
-                out.leaderCar = other;
-                out.hasLeader = true;
+                float mapped = rdm.ResolveConnectingOffset(prev, CurrentRoadRef(), band->centerOffset, nullptr);
+                if (std::fabs(mapped - bandCenter) > bandHalfWidth)
+                    continue;
+
+                const Spline &prevRef = prev.road->GetReferenceLine();
+                float prevSign = GetTravelSign(prev.direction);
+                scans[scanCount++] = ScanRoad{&prevRef, prevSign,
+                                              travelStartS(refLine, dirSign) - travelEndS(prevRef, prevSign),
+                                              band->centerOffset, false, true};
+                break;
             }
         }
-        else if (other != nullptr) // 정적 장애물은 뒤차로 안 본다
+    }
+
+    for (int si = 0; si < scanCount; ++si)
+    {
+        const ScanRoad &scan = scans[si];
+        for (const VehicleCollision::Obstacle &obstacle : m_obstacles)
         {
-            float gap = myS - st.position;
-            if (gap < bestFollowerGap)
+            float d = 0.0f;
+            float halfExtent = 0.0f;
+            if (!ProjectObstacle(*scan.refLine, obstacle, d, halfExtent))
+                continue;
+            if (std::fabs(d - scan.bandCenter) > bandHalfWidth + halfExtent)
+                continue;
+
+            Mobil::VehicleState st;
+            Car *other = obstacle.sourceCar;
+            if (other != nullptr)
             {
-                bestFollowerGap = gap;
-                out.follower = st;
-                out.followerCar = other;
-                out.hasFollower = true;
+                if (!m_SimState->IsCarAlive(other))
+                    continue;
+
+                // m_currentRoad로 거르면 경계 걸친 차가 양쪽 스캔에서 다 빠진다.
+                // 투영 잔차 + 밴드 검사가 이미 "이 로드 이 차선인가"를 판정한다.
+                float otherT = scan.refLine->GetSplinePosition(other->GetPosition());
+                float dirDot = scan.refLine->GetDirectionAt(otherT).Dot(other->GetForwardAxis()) * scan.dirSign;
+                if (dirDot <= 0.0f) // 마주오는 차는 MOBIL 대상 아님
+                    continue;
+
+                st.speed = std::max(0.0f, other->GetSpeed() * dirDot);
+                st.accel = other->GetAcceleration() * dirDot;
+                st.position = TravelS(*scan.refLine, other->GetPosition(), scan.dirSign) + scan.sBias;
+                st.length = other->GetLength();
+            }
+            else
+            {
+                if (si != 0) // 정적은 기준로드만 (로드체크가 없어 중복됨)
+                    continue;
+                st.speed = obstacle.speed;
+                st.accel = 0.0f;
+                st.position = TravelS(*scan.refLine, obstacle.center, scan.dirSign) + scan.sBias;
+                st.length = obstacle.halfLength * 2.0f;
+            }
+
+            // 인접로드는 앞뒤가 기하학적으로 정해져 있다. s비교로 뒤집히면 버린다.
+            bool ahead = st.position >= myS;
+            if (ahead ? !scan.allowLeader : !scan.allowFollower)
+                continue;
+
+            if (ahead)
+            {
+                float gap = st.position - myS;
+                if (gap < bestLeaderGap)
+                {
+                    bestLeaderGap = gap;
+                    out.leader = st;
+                    out.leaderCar = other;
+                    out.hasLeader = true;
+                }
+            }
+            else if (other != nullptr) // 정적 장애물은 뒤차로 안 본다
+            {
+                float gap = myS - st.position;
+                if (gap < bestFollowerGap)
+                {
+                    bestFollowerGap = gap;
+                    out.follower = st;
+                    out.followerCar = other;
+                    out.hasFollower = true;
+                }
             }
         }
     }
@@ -1719,8 +1745,6 @@ void Car::UpdateDrivePlan()
             m_maneuver.laneOffset = laneCenter;
             m_maneuver.laneChangeTarget = targetOffset;
             m_lastLaneChangeTime = m_currentTime;
-            DebugConsole::Log(GetName() + ": lane change d " + ToString(laneCenter) + " -> " + ToString(targetOffset) +
-                              " (" + reason + ")");
         }
         SetSubMode(isLaneChange ? SubMode::D_LaneChange : SubMode::D_Normal);
     }
@@ -1877,6 +1901,20 @@ float Car::ComputeLateralTarget(const IDM::Params &idm,
         {
             if (outReason != nullptr)
                 *outReason = (goal.active && bias > 0.0f) ? "route" : "overtake";
+            auto describe = [](Car *car) -> std::string
+            {
+                if (car == nullptr)
+                    return "static";
+                return car->GetName() + "(road " +
+                       (car->m_currentRoad != nullptr ? ToString(car->m_currentRoad->GetId()) : "?") + ")";
+            };
+            std::string leaderName = nbr.hasLeader ? describe(nbr.leaderCar) : "none";
+            std::string followerName = nbr.hasFollower ? describe(nbr.followerCar) : "none";
+            float leaderGap = nbr.hasLeader ? nbr.leader.position - myS : -1.0f;
+            float followerGap = nbr.hasFollower ? myS - nbr.follower.position : -1.0f;
+            DebugConsole::Log(GetName() + ": lane change decide on road " + ToString(m_currentRoad->GetId()) +
+                              " myS " + ToString(myS) + ", leader " + leaderName + " gap " + ToString(leaderGap) +
+                              ", follower " + followerName + " gap " + ToString(followerGap));
             return adjBand.centerOffset;
         }
     }
@@ -2323,7 +2361,6 @@ void Car::UpdateLaneChange()
 
     if (sideBlocked && progress < 0.3f)
     {
-        DebugConsole::Log(GetName() + ": lane change canceled, side blocked at d " + ToString(m_currentOffset));
         SetCurrentOffset(m_maneuver.laneOffset);
         m_maneuver.laneChangeTarget = m_maneuver.laneOffset;
         m_currentSpline = RoadDataManager::Get().BuildOffsetSpline(m_currentRoad, m_currentOffset, m_travelDir);
@@ -2333,7 +2370,6 @@ void Car::UpdateLaneChange()
     bool arrived = std::fabs(m_currentOffset - m_maneuver.laneChangeTarget) < AVOID_RETURN_TOLERANCE;
     if (arrived)
     {
-        DebugConsole::Log(GetName() + ": lane change done at d " + ToString(m_currentOffset));
         m_lastLaneChangeTime = m_currentTime; // 쿨다운은 완료 시점부터
         m_staticBlockTimer = 0.0f;
         m_stuck = false;
