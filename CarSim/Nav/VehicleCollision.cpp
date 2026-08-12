@@ -102,6 +102,16 @@ namespace VehicleCollision
         return nullptr;
     }
 
+    Vec3 ClosestPointOnObstacle(const Vec3 &point, const Obstacle &obstacle)
+    {
+        Vec3 fwd(std::cos(obstacle.headingRad), 0.0f, std::sin(obstacle.headingRad));
+        Vec3 right(-fwd.GetZ(), 0.0f, fwd.GetX());
+        Vec3 local = point - obstacle.center;
+        float u = std::clamp(local.Dot(fwd), -obstacle.halfLength, obstacle.halfLength);
+        float v = std::clamp(local.Dot(right), -obstacle.halfWidth, obstacle.halfWidth);
+        return obstacle.center + fwd * u + right * v;
+    }
+
     bool IsColliding(const Vec3 &position, float headingRad,
                      const std::vector<Obstacle> &obstacles, const VehicleShape &shape)
     {

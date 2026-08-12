@@ -46,6 +46,10 @@ namespace VehicleCollision
     const Obstacle *FindColliding(const Vec3 &position, float headingRad,
                                   const std::vector<Obstacle> &obstacles, const VehicleShape &shape);
 
+    // point에서 obstacle(OBB) 표면/내부 중 가장 가까운 점. point를 obstacle 로컬축에 투영 후
+    // [-halfLength,halfLength]x[-halfWidth,halfWidth]로 clamp -- 면/꼭짓점 케이스 모두 정확함.
+    Vec3 ClosestPointOnObstacle(const Vec3 &point, const Obstacle &obstacle);
+
     // origin에서 directionRad 방향(XZ 평면, y 무시)으로 뻗은 반직선이 obstacles 중 하나와 만나는
     // 가장 가까운 거리(0 이상)를 반환한다. maxDistance 안에 아무것도 안 맞으면 -1.
     float RaycastObstacles(const Vec3 &origin, float directionRad, float maxDistance,

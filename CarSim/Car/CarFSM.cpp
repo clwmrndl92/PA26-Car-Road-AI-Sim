@@ -1411,11 +1411,13 @@ float Car::ComputeIdmAcceleration(const std::vector<RoadSpeedSample> &samples, c
         if (sample.leader != nullptr)
         {
 
-            leaderSpeed = sample.leader->GetSpeed();
-            leaderAccel = sample.leader->GetAcceleration();
+            // 리더 자기 헤딩 기준 스칼라를 내 진행축으로 투영 (비스듬한 리더도 일관되게)
+            float leaderAlign = GetForwardAxis().Dot(sample.leader->GetForwardAxis());
+            leaderSpeed = std::max(0.0f, leaderAlign * sample.leader->GetSpeed());
+            leaderAccel = leaderAlign * sample.leader->GetAcceleration();
 
             float leaderTravel = (sample.leader->GetPosition() - sample.leaderScanPosition)
-                                     .Dot(sample.leader->GetForwardAxis());
+                                     .Dot(GetForwardAxis());
             gap = sample.distance - distanceOffset + leaderTravel;
         }
         else
@@ -1479,9 +1481,8 @@ Car::LaneNeighbors Car::GatherLaneNeighbors(const shared_ptr<Road> &road, const 
             float otherT = refLine.GetSplinePosition(other->GetPosition());
             float dirDot = refLine.GetDirectionAt(otherT).Dot(other->GetForwardAxis()) * dirSign;
 
-            float sign = dirDot < 0.0f ? -1.0f : 1.0f;
-            st.speed = other->GetSpeed() * sign;
-            st.accel = other->GetAcceleration() * sign;
+            st.speed = std::max(0.0f, other->GetSpeed() * dirDot);
+            st.accel = other->GetAcceleration() * dirDot;
             st.position = TravelS(refLine, other->GetPosition(), dirSign);
             st.length = other->GetLength();
         }
@@ -1846,7 +1847,6 @@ void Car::AppendSensorConstraintSample(std::vector<RoadSpeedSample> &samples) co
 
     Spline nextSplineStorage;
     const Spline *nextSpline = nullptr;
-    Vec3 nextSplineStart = Vec3::sZero();
     if (currentRemain < maxDistance && m_pathIndex + 1 < m_path.size())
     {
         const RoadRef &next = m_path[m_pathIndex + 1];
@@ -1855,59 +1855,31 @@ void Car::AppendSensorConstraintSample(std::vector<RoadSpeedSample> &samples) co
             float nextOffset = RoadDataManager::Get().ResolveConnectingOffset(CurrentRoadRef(), next, m_currentOffset, nullptr);
             nextSplineStorage = RoadDataManager::Get().BuildOffsetSpline(next.road, nextOffset, next.direction);
             if (!nextSplineStorage.GetSplinePoints().empty())
-            {
                 nextSpline = &nextSplineStorage;
-                nextSplineStart = nextSplineStorage.GetSplinePoints().front();
-            }
         }
     }
 
-    constexpr float STEER_LOOKAHEAD = 2.0f;
-
-    float realOffset = ComputeReferenceOffset(m_currentRoad->GetReferenceLine(), GetPosition());
-    bool onLane = IsOnLane(realOffset);
+    constexpr float STEER_LOOKAHEAD = 5.0f; // DriveControl과 동일값
+    constexpr float BIKE_SUBSTEP = 0.25f;   // 궤적 적분 정밀도
 
     bool reversed = m_travelDir == LaneDirection::Backward;
     float targetOffset = AvoidTargetOffset();
     float maxSteerAngle = CalcMaxSteerAngle(m_speed);
+
+    int substeps = std::max(1, static_cast<int>(std::ceil(stepDistance / BIKE_SUBSTEP)));
+    float substepDistance = stepDistance / static_cast<float>(substeps);
+
+    // 현재 pose부터 자전거모델로만 적분, 스플라인 스냅 없음
     Vec3 bikePos = position;
     float bikeHeadingRad = DirectionToAngleRad(forward);
-    bool useBike = !onLane;
-    Vec3 splineAnchor = position;
-    float anchorDistance = 0.0f;
+    float traveled = 0.0f;
 
-    m_sweepDebugCorners.reserve(sweepSteps * 4);
+    m_sweepDebugCorners.reserve((sweepSteps + 1) * 4);
 
-    for (int i = 1; i <= sweepSteps; ++i)
+    for (int i = 0; i <= sweepSteps; ++i)
     {
-        float d = stepDistance * static_cast<float>(i);
-        Vec3 point;
-        float headingRad;
-        if (useBike)
-        {
-            Vec3 aim = OffsetLookaheadPoint(m_currentRoad->GetReferenceLine(), bikePos, STEER_LOOKAHEAD, targetOffset, reversed);
-            float steerAngle = std::clamp(PurePursuitSteerAt(bikePos, bikeHeadingRad, aim, m_wheelbase),
-                                          -maxSteerAngle, maxSteerAngle);
-            bikeHeadingRad -= stepDistance * tanf(steerAngle) / m_wheelbase;
-            bikePos += Vec3(cosf(bikeHeadingRad), 0.0f, sinf(bikeHeadingRad)) * stepDistance;
-            point = bikePos;
-            headingRad = bikeHeadingRad;
-            if ((aim - bikePos).Length() <= STEER_LOOKAHEAD)
-            {
-                useBike = false;
-                splineAnchor = bikePos;
-                anchorDistance = d;
-            }
-        }
-        else
-        {
-            float remain = d - anchorDistance;
-            bool onNextRoad = nextSpline != nullptr && d > currentRemain;
-            const Spline &activeSpline = onNextRoad ? *nextSpline : m_currentSpline;
-            point = onNextRoad ? nextSpline->GetLookaheadPoint(nextSplineStart, d - currentRemain)
-                               : m_currentSpline.GetLookaheadPoint(splineAnchor, remain);
-            headingRad = DirectionToAngleRad(activeSpline.GetDirectionAt(activeSpline.GetSplinePosition(point)));
-        }
+        Vec3 point = bikePos;
+        float headingRad = bikeHeadingRad;
 
         Vec3 boxFwd(cosf(headingRad), 0.0f, sinf(headingRad));
         Vec3 boxRight(boxFwd.GetZ(), 0.0f, -boxFwd.GetX());
@@ -1918,25 +1890,45 @@ void Car::AppendSensorConstraintSample(std::vector<RoadSpeedSample> &samples) co
         m_sweepDebugCorners.push_back(boxCenter - boxFwd * shape.halfLength - boxRight * shape.halfWidth);
 
         const VehicleCollision::Obstacle *hit = VehicleCollision::FindColliding(point, headingRad, m_obstacles, shape);
-        if (hit == nullptr)
-            continue;
+        if (hit != nullptr)
+        {
+            Car *leader = hit->sourceCar;
+            if (leader != nullptr && !m_SimState->IsCarAlive(leader))
+                leader = nullptr;
 
-        Car *leader = hit->sourceCar;
-        if (leader != nullptr && !m_SimState->IsCarAlive(leader))
-            leader = nullptr;
+            Vec3 hitDir(cosf(hit->headingRad), 0.0f, sinf(hit->headingRad));
+            float hitSpeed = std::max(0.0f, forward.Dot(hitDir) * hit->speed);
 
-        Vec3 hitDir(cosf(hit->headingRad), 0.0f, sinf(hit->headingRad));
-        float hitSpeed = std::max(0.0f, forward.Dot(hitDir) * hit->speed);
-        float distance = d - (leader == nullptr ? SAFE_GAP : 0.0f);
+            // 뒷범퍼 중심 -> 리더 박스 위 가장 가까운 점 -> 그 점을 내 진행축에 투영해 보정
+            Vec3 rearCenter = boxCenter - boxFwd * shape.halfLength;
+            Vec3 closestOnLeader = VehicleCollision::ClosestPointOnObstacle(rearCenter, *hit);
+            float t = (closestOnLeader - rearCenter).Dot(boxFwd);
 
-        RoadSpeedSample sample{point, distance, hitSpeed, leader, "sensorFront"};
-        if (leader != nullptr)
-            sample.leaderScanPosition = leader->GetPosition();
-        sample.obstacle = *hit;
-        sample.obstacle.sourceCar = leader; // 죽은 차 nullptr 처리
-        sample.hasObstacle = true;
-        samples.push_back(sample);
-        return;
+            float distance = (traveled - 2.0f * shape.halfLength + t) - (leader == nullptr ? SAFE_GAP : 0.0f);
+
+            RoadSpeedSample sample{point, distance, hitSpeed, leader, "sensorFront"};
+            if (leader != nullptr)
+                sample.leaderScanPosition = leader->GetPosition();
+            sample.obstacle = *hit;
+            sample.obstacle.sourceCar = leader; // 죽은 차 nullptr 처리
+            sample.hasObstacle = true;
+            samples.push_back(sample);
+            return;
+        }
+
+        // 다음 박스 pose까지 잘게 적분
+        for (int s = 0; s < substeps; ++s)
+        {
+            bool onNextRoad = nextSpline != nullptr && traveled > currentRemain;
+            Vec3 aim = onNextRoad
+                           ? nextSpline->GetLookaheadPoint(bikePos, STEER_LOOKAHEAD)
+                           : OffsetLookaheadPoint(m_currentRoad->GetReferenceLine(), bikePos, STEER_LOOKAHEAD, targetOffset, reversed);
+            float steerAngle = std::clamp(PurePursuitSteerAt(bikePos, bikeHeadingRad, aim, m_wheelbase),
+                                          -maxSteerAngle, maxSteerAngle);
+            bikeHeadingRad -= substepDistance * tanf(steerAngle) / m_wheelbase;
+            bikePos += Vec3(cosf(bikeHeadingRad), 0.0f, sinf(bikeHeadingRad)) * substepDistance;
+            traveled += substepDistance;
+        }
     }
 }
 
