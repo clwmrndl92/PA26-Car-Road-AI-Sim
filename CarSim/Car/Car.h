@@ -46,6 +46,8 @@ public:
     }
     void SetHighlighted(bool on) { m_highlighted = on; }
     void SetMobilHighlighted(bool on) { m_mobilHighlighted = on; }
+    void SetSirenOn(bool on);
+    bool IsSirenOn() const { return m_sirenOn; }
     Car *GetIdmLeader() const; // 죽은 차면 nullptr
     void GetLaneChangeNeighbors(Car *&outLeader, Car *&outFollower) const;
     void SetDestination(const shared_ptr<RoadNode> &parkNode);
@@ -119,6 +121,7 @@ private:
         D_WaitSignal, // 신호대기
         D_Avoid,      // 오프셋 회피주행
         D_LaneChange, // MOBIL 차선변경
+        D_SirenWait,  // 사이렌차 양보정차
 
         // Park
         P_EXIT,        // 출차
@@ -140,6 +143,8 @@ private:
             return "Avoid";
         case SubMode::D_LaneChange:
             return "LaneChange";
+        case SubMode::D_SirenWait:
+            return "SirenWait";
         case SubMode::P_EXIT:
             return "ParkExit";
         case SubMode::P_ENTER_LEG1:
@@ -294,6 +299,9 @@ private:
 
     void UpdateSensors();                   // 장애물 목록 수집
     bool HandleContactPending();            // 충돌 뒷수습, 최우선
+    bool UpdateSirenWait();                 // 사이렌차 감지→강제전환/해제, 처리시 true
+    bool HasSirenCarBehind() const;         // 반경 내 뒤쪽 사이렌차 존재?
+    float ComputeSirenStopOffset() const;   // 가장 오른쪽 밴드 오른쪽 경계 d
     void DecideAvoidance();                 // 위협분류→서브모드
     void UpdateAvoid();                     // D_Avoid: 오프셋 회피 재계획/복귀/종료
     void UpdateLaneChange();                // 차선변경 진행/취소/완료
@@ -328,6 +336,7 @@ private:
     float m_jerkUp = 4.0f;                            // 가속 저크 상한
     float m_jerkDown = 15.0f;                         // 제동 저크 상한
     CarPersonality m_personality;                     // IDM 파라미터에 반영
+    CarPersonality m_prevPersonality;                 // 사이렌 끄면 복원할 원래 성격
 
     float m_wheelbase = 0.0f;
     float m_mass = 1.0f;
@@ -346,6 +355,8 @@ private:
     bool m_isFocused = false;
     bool m_highlighted = false;      // IDM 리더 표시
     bool m_mobilHighlighted = false; // MOBIL 앞/뒤차 표시
+    bool m_sirenOn = false;          // 사이렌 on/off(디버그 토글)
+    bool m_sirenPulledOver = false;  // 도로끝 도착후에만 정차
     bool m_isControl = false;        // true면 수동조작
     int m_id = -1;
 

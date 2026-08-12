@@ -19,6 +19,8 @@ namespace
 
     constexpr float VERTICAL_SEPARATION = 3.0f;
 
+    constexpr float SIREN_DETECT_RADIUS = 40.0f; // 사이렌 감지반경
+
     float NearestBandOffset(const RoadRef &road, float d)
     {
         const LaneBand *band = RoadDataManager::Get().FindNearestBand(road.road, d, road.direction);
@@ -377,6 +379,7 @@ void Car::OnModeEnter(Mode prev)
         m_stuck = false;
         m_maneuver = ManeuverState{};
         m_speedCap = -1.0f;
+        m_sirenPulledOver = false;
         BeginSegment(std::make_unique<SplineFollowSegment>());
     }
     else if (m_mode == Mode::Park)
@@ -1058,7 +1061,8 @@ void Car::UpdateDrive()
         return;
     }
 
-    if (!HandleContactPending())
+    m_speedCap = -1.0f; // 매 프레임 해제, 핸들러가 다시 주장
+    if (!HandleContactPending() && !UpdateSirenWait())
     {
         switch (m_subMode)
         {
@@ -1297,6 +1301,9 @@ std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistan
             float entryDistance = (entryT - currentNodeT) * m_currentSpline.GetLength();
             samples.push_back({m_pendingParkNode->position, entryDistance - SAFE_GAP, 0.0f, nullptr, "lotEntry"});
         }
+
+        if (m_subMode == SubMode::D_SirenWait && m_sirenPulledOver)
+            samples.push_back({calPosition, -SAFE_GAP, 0.0f, nullptr, "sirenWait"});
     }
     {
 
@@ -1727,7 +1734,7 @@ void Car::UpdateDrivePlan()
 
     float laneCenter = m_currentOffset;
     float targetOffset;
-    if (m_subMode == SubMode::D_Avoid || m_subMode == SubMode::D_LaneChange)
+    if (m_subMode == SubMode::D_Avoid || m_subMode == SubMode::D_LaneChange || m_subMode == SubMode::D_SirenWait)
     {
         targetOffset = AvoidTargetOffset();
     }
@@ -2077,7 +2084,7 @@ Vec3 Car::GetBodyCenter() const
 
 float Car::AvoidTargetOffset() const
 {
-    if (m_subMode == SubMode::D_Avoid)
+    if (m_subMode == SubMode::D_Avoid || m_subMode == SubMode::D_SirenWait)
         return m_maneuver.avoidOffset;
     if (m_subMode == SubMode::D_LaneChange)
         return m_maneuver.laneChangeTarget;
@@ -2134,7 +2141,7 @@ bool Car::FindAvoidOffset(float laneCenter, float &outOffset) const
     float maxOffset = 0.0f;
     ComputeDrivableRange(CurrentRoadRef(), minOffset, maxOffset);
 
-    const float magnitudes[] = {laneWidth * 0.25f, laneWidth * 0.5f, laneWidth * 1.0f};
+    const float magnitudes[] = {laneWidth * 0.25f, laneWidth * 0.5f, laneWidth * 1.0f, laneWidth * 1.5f};
 
     bool leanPositive = m_currentOffset > 0.0f;
     for (float magnitude : magnitudes)
@@ -2286,8 +2293,6 @@ void Car::UpdateSensors()
             continue;
         m_obstacles.push_back(nearbyCar->MakeVehicleObstacle());
     }
-
-    m_speedCap = -1.0f;
 }
 
 bool Car::HandleContactPending()
@@ -2377,6 +2382,93 @@ void Car::UpdateLaneChange()
         m_speedCap = -1.0f;
         SetSubMode(SubMode::D_Normal);
     }
+}
+
+bool Car::HasSirenCarBehind() const
+{
+    if (m_currentRoad == nullptr)
+        return false;
+
+    const Spline &ref = m_currentRoad->GetReferenceLine();
+    float dirSign = TravelSign();
+    float myS = TravelS(ref, GetPosition(), dirSign);
+
+    for (Car *other : m_nearbyCars)
+    {
+        if (!other->m_sirenOn || !m_SimState->IsCarAlive(other))
+            continue;
+        if ((other->GetPosition() - GetPosition()).Length() > SIREN_DETECT_RADIUS)
+            continue;
+
+        if (other->m_currentRoad == m_currentRoad)
+        {
+            if (TravelS(ref, other->GetPosition(), dirSign) < myS)
+                return true;
+            continue;
+        }
+
+        // 직전 도로 위의 사이렌차는 항상 내 뒤
+        if (m_pathIndex > 0 && m_path[m_pathIndex - 1].road == other->m_currentRoad)
+            return true;
+    }
+    return false;
+}
+
+float Car::ComputeSirenStopOffset() const
+{
+    std::vector<const LaneBand *> bands = RoadDataManager::Get().GetDrivingBands(m_currentRoad, m_travelDir);
+    if (bands.empty())
+        return m_currentOffset;
+
+    // centerOffset 오름차순 정렬됨: Forward는 마지막이, Backward는 첫번째가 참조선기준 최우측
+    bool forward = m_travelDir == LaneDirection::Forward;
+    const LaneBand *rightmost = forward ? bands.back() : bands.front();
+    float edge = forward ? (rightmost->centerOffset + rightmost->width * 0.5f)
+                         : (rightmost->centerOffset - rightmost->width * 0.5f);
+
+    float minOffset = 0.0f;
+    float maxOffset = 0.0f;
+    ComputeDrivableRange(CurrentRoadRef(), minOffset, maxOffset);
+    edge = std::clamp(edge, minOffset, maxOffset);
+
+    // 오른쪽 끝 vs 참조선(0) 중 지금 위치에서 가까운 쪽
+    return std::fabs(m_currentOffset - edge) < std::fabs(m_currentOffset) ? edge : 0.0f;
+}
+
+bool Car::UpdateSirenWait()
+{
+    constexpr float SIREN_PULLOVER_MAX_TIME = 5.0f; // 못 붙어도 정차
+
+    bool exempt = m_reservedJunctionId >= 0; // 교차로 통과중은 예외
+    if (!exempt && HasSirenCarBehind())
+    {
+        if (m_subMode != SubMode::D_SirenWait)
+        {
+            m_maneuver = ManeuverState{};
+            m_maneuver.avoidOffset = ComputeSirenStopOffset();
+            m_maneuver.lastPlanTime = m_currentTime;
+            m_sirenPulledOver = false;
+            SetSubMode(SubMode::D_SirenWait);
+        }
+
+        // 계획 d는 정차중에도 수렴해 실측으로 판정
+        float realOffset = ComputeReferenceOffset(m_currentRoad->GetReferenceLine(), GetPosition());
+        if (std::fabs(realOffset - m_maneuver.avoidOffset) < AVOID_RETURN_TOLERANCE ||
+            m_currentTime - m_maneuver.lastPlanTime > SIREN_PULLOVER_MAX_TIME)
+            m_sirenPulledOver = true;
+
+        if (!m_sirenPulledOver)
+            m_speedCap = AVOID_LOW_SPEED; // 붙는 동안 서행
+        return true;
+    }
+
+    if (m_subMode == SubMode::D_SirenWait)
+    {
+        m_maneuver = ManeuverState{};
+        m_sirenPulledOver = false;
+        SetSubMode(SubMode::D_Normal);
+    }
+    return false;
 }
 
 void Car::DecideAvoidance()

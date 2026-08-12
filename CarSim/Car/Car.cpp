@@ -349,6 +349,25 @@ void Car::UpdateCar()
     m_steerAngle = std::clamp(m_steerAngle, -m_maxSteerAngle, m_maxSteerAngle);
 }
 
+void Car::SetSirenOn(bool on)
+{
+    if (on == m_sirenOn)
+        return;
+
+    if (on)
+    {
+        m_prevPersonality = m_personality;
+        m_personality = GetCarPersonality(CarPersonalityType::Siren);
+    }
+    else
+    {
+        m_personality = m_prevPersonality;
+    }
+    m_jerkUp = m_personality.jerkUp;
+    m_jerkDown = m_personality.jerkDown;
+    m_sirenOn = on;
+}
+
 void Car::UpdateWithControl()
 {
     if (!m_isFocused)
@@ -552,6 +571,9 @@ void Car::UpdateDebugWindow()
             ImGui::Text("Mode: %s / %s", StateToString(m_mode), SubStateToString(m_subMode));
         else
             ImGui::Text("Mode: %s", StateToString(m_mode));
+        bool sirenOn = m_sirenOn;
+        if (ImGui::Checkbox("Siren", &sirenOn))
+            SetSirenOn(sirenOn);
 
         ImGui::Text("Plan accel(IDM): %.2f m/s^2", m_planAccelDebug);
         ImGui::Text("Limit cause: %s (target %.1f km/h, gap %.1f m)", m_limitDebug.label.c_str(),
@@ -566,6 +588,9 @@ void Car::UpdateDebugWindow()
         ImGui::Text("Front leader: %s (dist %.1f m)", frontThreatStr, leaderDist);
         if (m_subMode == SubMode::D_Avoid)
             ImGui::Text("Avoid: shifted d %.2f -> %.2f", m_maneuver.laneOffset, m_maneuver.avoidOffset);
+        else if (m_subMode == SubMode::D_SirenWait)
+            ImGui::Text("SirenWait: d %.2f (%s)", m_maneuver.avoidOffset,
+                        m_sirenPulledOver ? "stopped" : "pulling over");
         else if (m_stuck)
             ImGui::Text("Avoid: stuck (no gap)");
 

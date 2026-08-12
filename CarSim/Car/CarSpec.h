@@ -48,6 +48,7 @@ enum class CarPersonalityType
     Normal,
     Aggressive,
     Cautious,
+    Siren,
 };
 
 const CarSpec &GetCarSpec(CarType type);

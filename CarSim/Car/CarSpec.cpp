@@ -27,9 +27,10 @@ const CarPersonality &GetCarPersonality(CarPersonalityType type)
         // float politeness = 0.2f;          // MOBIL 이타성 계수 (0=완전 이기주의 ~ 0.5=현실적 양보)
         // float laneChangeLerpAlpha = 0.2f; // 횡오프셋 Lerp 비율 (리플랜 주기마다 목표로 이만큼 이동, 클수록 급하게 붙음)
         static const CarPersonality personalities[] = {
-            CarPersonality{1.0f, 1.0f, 4.0f, 15.0f, 1.0f, 0.2f, 0.2f}, // Normal
-            CarPersonality{1.2f, 0.8f, 6.0f, 20.0f, 1.2f, 0.1f, 0.3f}, // Aggressive
-            CarPersonality{0.8f, 1.2f, 3.0f, 10.0f, 0.8f, 0.3f, 0.1f}, // Cautious
+            CarPersonality{1.0f, 1.0f, 4.0f, 15.0f, 1.0f, 0.2f, 0.2f},  // Normal
+            CarPersonality{1.2f, 0.8f, 6.0f, 20.0f, 1.2f, 0.1f, 0.3f},  // Aggressive
+            CarPersonality{0.8f, 1.2f, 3.0f, 10.0f, 0.8f, 0.3f, 0.1f},  // Cautious
+            CarPersonality{2.0f, 0.5f, 10.0f, 30.0f, 1.2f, 0.1f, 0.4f}, // Siren
         };
         return personalities[static_cast<size_t>(type)];
 }
