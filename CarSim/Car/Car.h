@@ -48,6 +48,10 @@ public:
     void SetMobilHighlighted(bool on) { m_mobilHighlighted = on; }
     void SetSirenOn(bool on);
     bool IsSirenOn() const { return m_sirenOn; }
+    void SetChaseOn(bool on);
+    bool IsChaseOn() const { return m_chaseOn; }
+    void SetFleeOn(bool on);
+    bool IsFleeOn() const { return m_fleeOn; }
     Car *GetIdmLeader() const; // 죽은 차면 nullptr
     void GetLaneChangeNeighbors(Car *&outLeader, Car *&outFollower) const;
     void SetDestination(const shared_ptr<RoadNode> &parkNode);
@@ -122,6 +126,7 @@ private:
         D_Avoid,      // 오프셋 회피주행
         D_LaneChange, // MOBIL 차선변경
         D_SirenWait,  // 사이렌차 양보정차
+        D_ChaseBlock, // 도망차 앞 차단정차
 
         // Park
         P_EXIT,        // 출차
@@ -145,6 +150,8 @@ private:
             return "LaneChange";
         case SubMode::D_SirenWait:
             return "SirenWait";
+        case SubMode::D_ChaseBlock:
+            return "ChaseBlock";
         case SubMode::P_EXIT:
             return "ParkExit";
         case SubMode::P_ENTER_LEG1:
@@ -172,6 +179,9 @@ private:
     float TravelSign() const { return GetTravelSign(m_travelDir); }
     RoadRef CurrentRoadRef() const { return RoadRef{m_currentRoad, m_travelDir}; }
     bool ShouldStopForSignal(const shared_ptr<Road> &road, LaneDirection direction, int nextRoadId = -1) const;
+    bool IsChasing() const { return m_chaseOn && m_sirenOn; } // 대상 잡고 사이렌 켠 상태
+    // 추격/도망은 신호·교차로 대기 무시
+    bool IgnoresTrafficRules() const { return IsChasing() || m_fleeOn; }
     bool TryFindPathAndSetRoad();
 
     void EnsureRoamingPath();
@@ -206,6 +216,7 @@ private:
     bool IsHornSituation() const;
     bool KnowsRedSignalAhead() const;
     bool IsEmergencyRayBlocked() const;
+    bool IsChaseCarObstacle(const VehicleCollision::Obstacle &obstacle) const; // 추격차 차체인가
 
 #pragma endregion
 
@@ -250,6 +261,8 @@ private:
 
     void UpdateDrivePlan();
     IDM::Params BuildIdmParams(const shared_ptr<Road> &road) const; // v0=도로 제한속도
+    float RoadTargetSpeed(const shared_ptr<Road> &road) const;      // 무시상태면 차량 최고속
+    bool IgnoresSpeedLimit(const shared_ptr<Road> &road) const;     // 직선길에서만 무시
     float ComputeIdmAcceleration(const std::vector<RoadSpeedSample> &samples, const IDM::Params &params,
                                  float distanceOffset, float elapsedTime,
                                  const VehicleCollision::Obstacle **outLeader = nullptr,
@@ -262,6 +275,8 @@ private:
     LaneNeighbors GatherLaneNeighbors(const shared_ptr<Road> &road, const Spline &refLine, float bandCenter,
                                       float bandHalfWidth, float egoS, float dirSign) const;
     float CurrentLaneCenter() const;
+    // 추격/도망은 역주행 차로도 포함
+    std::vector<const LaneBand *> GatherCandidateBands(const RoadRef &road) const;
 
     struct RouteLaneGoal
     {
@@ -300,11 +315,18 @@ private:
         Static,  // 멈춰 있는 장애물 -- 오프셋 회피
     };
 
+    void ApplySpecialPersonality(); // 사이렌/추격/도망 성격 전환
     void UpdateSensors();                                                            // 장애물 목록 수집
     bool HandleContactPending();                                                     // 충돌 뒷수습, 최우선
     bool UpdateSirenWait();                                                          // 사이렌차 감지→강제전환/해제, 처리시 true
     bool HasSirenCarBehind() const;                                                  // 반경 내 뒤쪽 사이렌차 존재?
     float ComputeSirenStopOffset() const;                                            // 가장 오른쪽 밴드 오른쪽 경계 d
+    bool UpdateChase();                                                              // 추격: 경로갱신+차단정차, 처리시 true
+    Car *FindFleeTarget() const;                                                     // 반경 내 최근접 도망차
+    bool BuildChasePath(Car *target);                                                // 도망차 도로까지 경로 재계산
+    bool IsAheadOfFleeTarget(const Car *target) const;                               // 같은 도로에서 앞질렀나
+    float ComputeChaseBlockOffset(const Car *target) const;                          // 도망차 차로중심 d
+    void ClearChase();                                                               // 추격상태 해제
     void DecideAvoidance();                                                          // 위협분류→서브모드
     void UpdateAvoid();                                                              // D_Avoid: 오프셋 회피 재계획/복귀/종료
     void UpdateLaneChange();                                                         // 차선변경 진행/취소/완료
@@ -339,7 +361,8 @@ private:
     float m_jerkUp = 4.0f;                            // 가속 저크 상한
     float m_jerkDown = 15.0f;                         // 제동 저크 상한
     CarPersonality m_personality;                     // IDM 파라미터에 반영
-    CarPersonality m_prevPersonality;                 // 사이렌 끄면 복원할 원래 성격
+    CarPersonality m_prevPersonality;                 // 특수상태 끝나면 복원할 원래 성격
+    bool m_specialPersonalityOn = false;              // 특수 성격 적용중
 
     float m_wheelbase = 0.0f;
     float m_mass = 1.0f;
@@ -360,6 +383,12 @@ private:
     bool m_mobilHighlighted = false; // MOBIL 앞/뒤차 표시
     bool m_sirenOn = false;          // 사이렌 on/off(디버그 토글)
     bool m_sirenPulledOver = false;  // 도로끝 도착후에만 정차
+    bool m_chaseOn = false;          // 추격 on/off(디버그 토글)
+    bool m_fleeOn = false;           // 도망 on/off(디버그 토글)
+    bool m_chaseSiren = false;       // 추격이 켠 사이렌인가
+    Car *m_chaseTarget = nullptr;    // 추격중인 도망차, 역참조전 생존확인
+    int m_chaseTargetRoadId = -1;    // 바뀌면 즉시 재계획
+    float m_lastChasePlanTime = -1000.0f;
     bool m_isControl = false;        // true면 수동조작
     int m_id = -1;
 
@@ -373,6 +402,7 @@ private:
     LaneDirection m_travelDir = LaneDirection::Forward; // d는 항상 참조선 기준
     float m_currentOffset = 0.0f;                       // 실측아닌 계획값
     const LaneBand *m_currentBand = nullptr;            // SetCurrentOffset이 갱신
+    mutable LaneBand m_virtualBands[2];                 // 현재도로 양끝 밖 가상차로(추격/도망)
     Spline m_currentSpline;                             // 오프셋 d 스플라인 캐시
 
     shared_ptr<RoadNode> m_parkSpot;        // 예약된 목표 주차칸

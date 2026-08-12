@@ -21,6 +21,10 @@ namespace
 
     constexpr float SIREN_DETECT_RADIUS = 40.0f; // 사이렌 감지반경
 
+    constexpr float CHASE_DETECT_RADIUS = 80.0f;  // 도망차 탐색반경
+    constexpr float CHASE_REPATH_INTERVAL = 1.0f; // 추격경로 갱신주기
+    constexpr float CHASE_BLOCK_RANGE = 20.0f;    // 이 안에서 앞서면 차단
+
     float NearestBandOffset(const RoadRef &road, float d)
     {
         const LaneBand *band = RoadDataManager::Get().FindNearestBand(road.road, d, road.direction);
@@ -1068,7 +1072,7 @@ void Car::UpdateDrive()
     }
 
     m_speedCap = -1.0f; // 매 프레임 해제, 핸들러가 다시 주장
-    if (!HandleContactPending() && !UpdateSirenWait())
+    if (!HandleContactPending() && !UpdateSirenWait() && !UpdateChase())
     {
         switch (m_subMode)
         {
@@ -1291,7 +1295,7 @@ std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistan
         float currentNodeT = m_currentSpline.GetSplinePosition(calPosition);
         Assert(currentNodeT >= 0.0f);
         float currentNodeDistance = m_currentSpline.GetLength() * (1.0f - currentNodeT);
-        float currentNodeSpeed = (m_currentRoad == m_destRoad) ? 0.0f : std::min(m_currentRoad->GetSpeedLimit(), m_maxSpeed);
+        float currentNodeSpeed = (m_currentRoad == m_destRoad) ? 0.0f : RoadTargetSpeed(m_currentRoad);
         samples.push_back({splineEnd(&m_currentSpline), currentNodeDistance, currentNodeSpeed, nullptr, "curRoadEnd"});
 
         if (m_lotCruise && m_currentRoad == m_destRoad)
@@ -1310,6 +1314,9 @@ std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistan
 
         if (m_subMode == SubMode::D_SirenWait && m_sirenPulledOver)
             samples.push_back({calPosition, -SAFE_GAP, 0.0f, nullptr, "sirenWait"});
+
+        if (m_subMode == SubMode::D_ChaseBlock)
+            samples.push_back({calPosition, -SAFE_GAP, 0.0f, nullptr, "chaseBlock"});
     }
     {
 
@@ -1366,7 +1373,7 @@ std::vector<Car::RoadSpeedSample> Car::ScanRoadSpeedConstraints(float lookDistan
                 break;
             }
 
-            float nextNodeSpeed = std::min(nextRoad.road->GetSpeedLimit(), m_maxSpeed);
+            float nextNodeSpeed = RoadTargetSpeed(nextRoad.road);
             segmentLine = RoadDataManager::Get().BuildOffsetSpline(nextRoad.road, 0.0f, nextRoad.direction);
             Vec3 nextStart = segmentLine.GetSplinePoints().empty() ? segmentStart : segmentLine.GetSplinePoints().front();
             samples.push_back({nextStart, traveledDistance, nextNodeSpeed, nullptr, "roadLimit"});
@@ -1390,7 +1397,7 @@ void Car::ComputeDrivableRange(const RoadRef &road, float &outMin, float &outMax
     outMin = -(RoadDataManager::ROAD_WIDTH - halfW);
     outMax = RoadDataManager::ROAD_WIDTH - halfW;
 
-    std::vector<const LaneBand *> bands = RoadDataManager::Get().GetDrivingBands(road.road, road.direction);
+    std::vector<const LaneBand *> bands = GatherCandidateBands(road);
     if (bands.empty())
         return;
 
@@ -1412,7 +1419,8 @@ IDM::Params Car::BuildIdmParams(const shared_ptr<Road> &road) const
     constexpr float IDM_TIME_HEADWAY = 1.5f;
 
     IDM::Params idm;
-    idm.v0 = std::min(road->GetSpeedLimit() * m_personality.speedFactor, m_maxSpeed);
+    idm.v0 = IgnoresSpeedLimit(road) ? m_maxSpeed
+                                     : std::min(road->GetSpeedLimit() * m_personality.speedFactor, m_maxSpeed);
     idm.T = IDM_TIME_HEADWAY * m_personality.headwayFactor;
     idm.s0 = SAFE_GAP * m_personality.headwayFactor;
     idm.a = m_maxAccel;
@@ -1420,6 +1428,18 @@ IDM::Params Car::BuildIdmParams(const shared_ptr<Road> &road) const
     idm.delta = 4.0f;
     idm.coolness = 1.0f;
     return idm;
+}
+
+bool Car::IgnoresSpeedLimit(const shared_ptr<Road> &road) const
+{
+    return IgnoresTrafficRules() && road != nullptr && road->GetReferenceLine().IsStraight();
+}
+
+float Car::RoadTargetSpeed(const shared_ptr<Road> &road) const
+{
+    if (road == nullptr)
+        return m_maxSpeed;
+    return IgnoresSpeedLimit(road) ? m_maxSpeed : std::min(road->GetSpeedLimit(), m_maxSpeed);
 }
 
 float Car::ComputeIdmAcceleration(const std::vector<RoadSpeedSample> &samples, const IDM::Params &params,
@@ -1568,10 +1588,11 @@ Car::LaneNeighbors Car::GatherLaneNeighbors(const shared_ptr<Road> &road, const 
                 // 투영 잔차 + 밴드 검사가 이미 "이 로드 이 차선인가"를 판정한다.
                 float otherT = scan.refLine->GetSplinePosition(other->GetPosition());
                 float dirDot = scan.refLine->GetDirectionAt(otherT).Dot(other->GetForwardAxis()) * scan.dirSign;
-                if (dirDot <= 0.0f) // 마주오는 차는 MOBIL 대상 아님
+                if (dirDot <= 0.0f && !IgnoresTrafficRules()) // 마주오는 차는 MOBIL 대상 아님
                     continue;
 
-                st.speed = std::max(0.0f, other->GetSpeed() * dirDot);
+                // 역주행 후보에선 마주오는 차를 음수속도 리더로(접근속도 반영)
+                st.speed = dirDot > 0.0f ? std::max(0.0f, other->GetSpeed() * dirDot) : other->GetSpeed() * dirDot;
                 st.accel = other->GetAcceleration() * dirDot;
                 st.position = TravelS(*scan.refLine, other->GetPosition(), scan.dirSign) + scan.sBias;
                 st.length = other->GetLength();
@@ -1696,6 +1717,8 @@ bool Car::ShouldHoldForJunction(const RoadRef &nextRoad) const
 {
     if (nextRoad.road == nullptr || m_currentRoad == nullptr || nextRoad.road->GetJunctionId() < 0 || m_SimState == nullptr)
         return false;
+    if (IgnoresTrafficRules())
+        return false;
     return !m_SimState->IsJunctionAvailable(nextRoad.road->GetJunctionId(), m_currentRoad->GetId(), this);
 }
 
@@ -1708,7 +1731,7 @@ bool Car::TryReserveJunction(const RoadRef &nextRoad)
     if (m_reservedJunctionId >= 0 && m_reservedJunctionId != junctionId)
         ReleaseJunctionReservation();
     if (!m_SimState->TryReserveJunction(junctionId, m_currentRoad->GetId(), this))
-        return false;
+        return IgnoresTrafficRules(); // 점유 실패해도 그냥 진입
 
     m_reservedJunctionId = junctionId;
     return true;
@@ -1740,7 +1763,8 @@ void Car::UpdateDrivePlan()
 
     float laneCenter = m_currentOffset;
     float targetOffset;
-    if (m_subMode == SubMode::D_Avoid || m_subMode == SubMode::D_LaneChange || m_subMode == SubMode::D_SirenWait)
+    if (m_subMode == SubMode::D_Avoid || m_subMode == SubMode::D_LaneChange ||
+        m_subMode == SubMode::D_SirenWait || m_subMode == SubMode::D_ChaseBlock)
     {
         targetOffset = AvoidTargetOffset();
     }
@@ -1769,6 +1793,37 @@ void Car::UpdateDrivePlan()
 float Car::CurrentLaneCenter() const
 {
     return m_currentBand != nullptr ? m_currentBand->centerOffset : m_currentOffset;
+}
+
+std::vector<const LaneBand *> Car::GatherCandidateBands(const RoadRef &road) const
+{
+    RoadDataManager &roadData = RoadDataManager::Get();
+    std::vector<const LaneBand *> bands = roadData.GetDrivingBands(road.road, road.direction);
+    if (!IgnoresTrafficRules())
+        return bands;
+
+    for (const LaneBand *band : roadData.GetDrivingBands(road.road, GetOppositeDirection(road.direction)))
+        bands.push_back(band);
+
+    // 인접 판정이 d 순서에 의존
+    std::sort(bands.begin(), bands.end(), [](const LaneBand *a, const LaneBand *b)
+              { return a->centerOffset < b->centerOffset; });
+
+    // 양끝 밖 가상차로. 포인터 수명 때문에 현재도로만
+    if (!bands.empty() && road.road == m_currentRoad)
+    {
+        const LaneBand *leftmost = bands.front();
+        m_virtualBands[0] = *leftmost;
+        m_virtualBands[0].centerOffset = leftmost->centerOffset - leftmost->width;
+
+        const LaneBand *rightmost = bands.back();
+        m_virtualBands[1] = *rightmost;
+        m_virtualBands[1].centerOffset = rightmost->centerOffset + rightmost->width;
+
+        bands.insert(bands.begin(), &m_virtualBands[0]);
+        bands.push_back(&m_virtualBands[1]);
+    }
+    return bands;
 }
 
 Car::RouteLaneGoal Car::ComputeRouteLaneGoal() const
@@ -1869,7 +1924,7 @@ float Car::ComputeLateralTarget(const IDM::Params &idm,
     // 급할수록 안전기준 완화
     RouteLaneGoal goal = ComputeRouteLaneGoal();
 
-    std::vector<const LaneBand *> bands = RoadDataManager::Get().GetDrivingBands(m_currentRoad, m_travelDir);
+    std::vector<const LaneBand *> bands = GatherCandidateBands(CurrentRoadRef());
     size_t curIdx = 0;
     for (size_t i = 0; i < bands.size(); ++i)
         if (bands[i] == m_currentBand)
@@ -2090,7 +2145,7 @@ Vec3 Car::GetBodyCenter() const
 
 float Car::AvoidTargetOffset() const
 {
-    if (m_subMode == SubMode::D_Avoid || m_subMode == SubMode::D_SirenWait)
+    if (m_subMode == SubMode::D_Avoid || m_subMode == SubMode::D_SirenWait || m_subMode == SubMode::D_ChaseBlock)
         return m_maneuver.avoidOffset;
     if (m_subMode == SubMode::D_LaneChange)
         return m_maneuver.laneChangeTarget;
@@ -2189,6 +2244,12 @@ Car::ThreatKind Car::ClassifyFrontThreat() const
     return m_currentLeader->isVehicle ? ThreatKind::Vehicle : ThreatKind::Static;
 }
 
+bool Car::IsChaseCarObstacle(const VehicleCollision::Obstacle &obstacle) const
+{
+    Car *car = obstacle.sourceCar;
+    return car != nullptr && m_SimState->IsCarAlive(car) && car->IsChasing();
+}
+
 bool Car::IsEmergencyRayBlocked() const
 {
     constexpr float MAX_RAY_TURN = 1.5708f; // 직선레이가 무의미해지는 각
@@ -2231,6 +2292,10 @@ bool Car::IsEmergencyRayBlocked() const
         if (hit == nullptr)
             return;
         if (m_currentLeader != nullptr && IsSameObstacle(*hit, *m_currentLeader))
+            return;
+        if (m_fleeOn && !IsChaseCarObstacle(*hit)) // 도망중엔 추격차만 급정지
+            return;
+        if (IsChasing()) // 추격중엔 급정지 안함
             return;
         blocked = true;
     };
@@ -2411,6 +2476,8 @@ bool Car::HasSirenCarBehind() const
 {
     if (m_currentRoad == nullptr)
         return false;
+    if (m_fleeOn) // 도망차는 양보 안함
+        return false;
 
     const Spline &ref = m_currentRoad->GetReferenceLine();
     float dirSign = TravelSign();
@@ -2492,6 +2559,131 @@ bool Car::UpdateSirenWait()
         SetSubMode(SubMode::D_Normal);
     }
     return false;
+}
+
+Car *Car::FindFleeTarget() const
+{
+    Car *best = nullptr;
+    float bestDistance = CHASE_DETECT_RADIUS;
+
+    for (Car *other : m_nearbyCars)
+    {
+        if (!other->m_fleeOn || !m_SimState->IsCarAlive(other))
+            continue;
+        if (other->m_currentRoad == nullptr)
+            continue;
+
+        float distance = (other->GetPosition() - GetPosition()).Length();
+        if (distance < bestDistance)
+        {
+            bestDistance = distance;
+            best = other;
+        }
+    }
+    return best;
+}
+
+bool Car::BuildChasePath(Car *target)
+{
+    // 목적지 주행중이면 경로를 뺏지 않는다
+    if (!m_roaming || m_currentRoad == nullptr)
+        return false;
+
+    std::vector<RoadRef> path = RoadDataManager::Get().FindPath(CurrentRoadRef(), target->m_currentRoad);
+    if (path.empty())
+        return false;
+
+    m_path = std::move(path);
+    m_pathIndex = 0;
+    return true;
+}
+
+bool Car::IsAheadOfFleeTarget(const Car *target) const
+{
+    if (m_currentRoad == nullptr || target->m_currentRoad != m_currentRoad || target->m_travelDir != m_travelDir)
+        return false;
+    if ((target->GetPosition() - GetPosition()).Length() > CHASE_BLOCK_RANGE)
+        return false;
+
+    const Spline &ref = m_currentRoad->GetReferenceLine();
+    float dirSign = TravelSign();
+    float lead = TravelS(ref, GetPosition(), dirSign) - TravelS(ref, target->GetPosition(), dirSign);
+    return lead > RearOverhang() + target->FrontOverhang() + MIN_SAFE_GAP;
+}
+
+float Car::ComputeChaseBlockOffset(const Car *target) const
+{
+    float minOffset = 0.0f;
+    float maxOffset = 0.0f;
+    ComputeDrivableRange(CurrentRoadRef(), minOffset, maxOffset);
+    return std::clamp(target->CurrentLaneCenter(), minOffset, maxOffset);
+}
+
+void Car::ClearChase()
+{
+    m_chaseTarget = nullptr;
+    m_chaseTargetRoadId = -1;
+    if (m_chaseSiren) // 내가 켠 것만 끈다
+    {
+        m_chaseSiren = false;
+        SetSirenOn(false);
+    }
+    if (m_subMode == SubMode::D_ChaseBlock)
+    {
+        m_maneuver = ManeuverState{};
+        SetSubMode(SubMode::D_Normal);
+    }
+}
+
+bool Car::UpdateChase()
+{
+    if (!m_chaseOn)
+    {
+        ClearChase();
+        return false;
+    }
+
+    Car *target = FindFleeTarget();
+    if (target == nullptr)
+    {
+        ClearChase();
+        return false;
+    }
+
+    if (!m_sirenOn) // 쫓는 차가 있으면 사이렌
+    {
+        m_chaseSiren = true;
+        SetSirenOn(true);
+    }
+
+    int targetRoadId = target->m_currentRoad->GetId();
+    if (target != m_chaseTarget || targetRoadId != m_chaseTargetRoadId ||
+        m_currentTime - m_lastChasePlanTime > CHASE_REPATH_INTERVAL)
+    {
+        BuildChasePath(target); // 실패해도 다음 주기까지 대기
+        m_chaseTarget = target;
+        m_chaseTargetRoadId = targetRoadId;
+        m_lastChasePlanTime = m_currentTime;
+    }
+
+    // 아직 못 앞질렀으면 평소 주행으로 따라붙는다
+    if (!IsAheadOfFleeTarget(target))
+    {
+        if (m_subMode == SubMode::D_ChaseBlock)
+        {
+            m_maneuver = ManeuverState{};
+            SetSubMode(SubMode::D_Normal);
+        }
+        return false;
+    }
+
+    if (m_subMode != SubMode::D_ChaseBlock)
+    {
+        m_maneuver = ManeuverState{};
+        SetSubMode(SubMode::D_ChaseBlock);
+    }
+    m_maneuver.avoidOffset = ComputeChaseBlockOffset(target);
+    return true;
 }
 
 void Car::DecideAvoidance()

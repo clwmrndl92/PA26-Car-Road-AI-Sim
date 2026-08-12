@@ -286,12 +286,26 @@ void Car::SetCurrentRoad(const shared_ptr<Road> &road, float offset, LaneDirecti
 void Car::SetCurrentOffset(float offset)
 {
     m_currentOffset = offset;
+
+    if (IgnoresTrafficRules()) // 역주행 차로에 있어도 그 밴드로 인정
+    {
+        const LaneBand *nearest = nullptr;
+        for (const LaneBand *band : GatherCandidateBands(CurrentRoadRef()))
+            if (nearest == nullptr ||
+                std::fabs(offset - band->centerOffset) < std::fabs(offset - nearest->centerOffset))
+                nearest = band;
+        if (nearest != nullptr)
+        {
+            m_currentBand = nearest;
+            return;
+        }
+    }
     m_currentBand = RoadDataManager::Get().FindNearestBand(m_currentRoad, m_currentOffset, m_travelDir);
 }
 
 bool Car::ShouldStopForSignal(const shared_ptr<Road> &road, LaneDirection direction, int nextRoadId) const
 {
-    if (!road)
+    if (!road || IgnoresTrafficRules())
         return false;
     shared_ptr<RoadNode> signalNode = RoadDataManager::Get().GetSignalNodeForRoad(road->GetId(), nextRoadId);
     if (!signalNode)
@@ -349,23 +363,59 @@ void Car::UpdateCar()
     m_steerAngle = std::clamp(m_steerAngle, -m_maxSteerAngle, m_maxSteerAngle);
 }
 
+// 사이렌/도망=Siren, 추격 대기중(타겟없음)=Cautious
+void Car::ApplySpecialPersonality()
+{
+    bool special = m_sirenOn || m_chaseOn || m_fleeOn;
+    if (!special)
+    {
+        if (m_specialPersonalityOn)
+        {
+            m_personality = m_prevPersonality;
+            m_specialPersonalityOn = false;
+        }
+    }
+    else
+    {
+        if (!m_specialPersonalityOn) // 원래 성격은 한번만 저장
+        {
+            m_prevPersonality = m_personality;
+            m_specialPersonalityOn = true;
+        }
+        bool urgent = m_sirenOn || m_fleeOn;
+        m_personality = GetCarPersonality(urgent ? CarPersonalityType::Siren : CarPersonalityType::Cautious);
+    }
+    m_jerkUp = m_personality.jerkUp;
+    m_jerkDown = m_personality.jerkDown;
+}
+
 void Car::SetSirenOn(bool on)
 {
     if (on == m_sirenOn)
         return;
 
-    if (on)
-    {
-        m_prevPersonality = m_personality;
-        m_personality = GetCarPersonality(CarPersonalityType::Siren);
-    }
-    else
-    {
-        m_personality = m_prevPersonality;
-    }
-    m_jerkUp = m_personality.jerkUp;
-    m_jerkDown = m_personality.jerkDown;
     m_sirenOn = on;
+    ApplySpecialPersonality();
+}
+
+void Car::SetChaseOn(bool on)
+{
+    if (on == m_chaseOn)
+        return;
+
+    m_chaseOn = on;
+    if (!on)
+        ClearChase();
+    ApplySpecialPersonality();
+}
+
+void Car::SetFleeOn(bool on)
+{
+    if (on == m_fleeOn)
+        return;
+
+    m_fleeOn = on;
+    ApplySpecialPersonality();
 }
 
 void Car::UpdateWithControl()
@@ -574,6 +624,22 @@ void Car::UpdateDebugWindow()
         bool sirenOn = m_sirenOn;
         if (ImGui::Checkbox("Siren", &sirenOn))
             SetSirenOn(sirenOn);
+        ImGui::SameLine();
+        bool chaseOn = m_chaseOn;
+        if (ImGui::Checkbox("Chase", &chaseOn))
+            SetChaseOn(chaseOn);
+        ImGui::SameLine();
+        bool fleeOn = m_fleeOn;
+        if (ImGui::Checkbox("Flee", &fleeOn))
+            SetFleeOn(fleeOn);
+        if (m_chaseOn)
+        {
+            if (m_chaseTarget != nullptr && m_SimState->IsCarAlive(m_chaseTarget))
+                ImGui::Text("Chasing: %s (dist %.1f m, road %d)", m_chaseTarget->GetName().c_str(),
+                            (m_chaseTarget->GetPosition() - GetPosition()).Length(), m_chaseTargetRoadId);
+            else
+                ImGui::Text("Chasing: no target in range");
+        }
 
         ImGui::Text("Plan accel(IDM): %.2f m/s^2", m_planAccelDebug);
         ImGui::Text("Limit cause: %s (target %.1f km/h, gap %.1f m)", m_limitDebug.label.c_str(),
@@ -591,6 +657,8 @@ void Car::UpdateDebugWindow()
         else if (m_subMode == SubMode::D_SirenWait)
             ImGui::Text("SirenWait: d %.2f (%s)", m_maneuver.avoidOffset,
                         m_sirenPulledOver ? "stopped" : "pulling over");
+        else if (m_subMode == SubMode::D_ChaseBlock)
+            ImGui::Text("ChaseBlock: d %.2f", m_maneuver.avoidOffset);
         else if (m_stuck)
             ImGui::Text("Avoid: stuck (no gap)");
 
