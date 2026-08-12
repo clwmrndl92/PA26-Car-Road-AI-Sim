@@ -204,6 +204,48 @@ namespace
         }
         return current;
     }
+
+    Vec3 LookaheadOnPolyline(const std::vector<Vec3> &points, const Vec3 &from, float lookahead,
+                             bool reversed, size_t &cursor)
+    {
+        const size_t n = points.size();
+        if (n == 0)
+            return from;
+
+        constexpr size_t SEARCH_WINDOW = 8;
+        size_t begin = 0;
+        size_t end = n;
+        if (cursor < n)
+        {
+            begin = cursor > SEARCH_WINDOW ? cursor - SEARCH_WINDOW : 0;
+            end = std::min(n, cursor + SEARCH_WINDOW + 1);
+        }
+
+        float bestDistance = std::numeric_limits<float>::max();
+        size_t closest = begin;
+        for (size_t i = begin; i < end; ++i)
+        {
+            float distance = (points[i] - from).LengthSq(); // 최소값 위치만 쓰므로 sqrt 불필요
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                closest = i;
+            }
+        }
+        cursor = closest;
+
+        float accumulated = 0.0f;
+        size_t index = closest;
+        while (accumulated < lookahead)
+        {
+            if (reversed ? index == 0 : index + 1 >= n)
+                break;
+            size_t nextIndex = reversed ? index - 1 : index + 1;
+            accumulated += (points[nextIndex] - points[index]).Length();
+            index = nextIndex;
+        }
+        return points[index];
+    }
 }
 
 #pragma region Common
@@ -1836,7 +1878,7 @@ void Car::AppendSensorConstraintSample(std::vector<RoadSpeedSample> &samples) co
     constexpr float SWEEP_MAX = 100.0f;
 
     float maxDistance = std::clamp(m_speed * m_speed / (2.0f * m_maxBrake) + SAFE_GAP, SWEEP_MIN, SWEEP_MAX);
-    float stepDistance = GetLength() - MIN_SAFE_GAP;
+    float stepDistance = (GetLength() - MIN_SAFE_GAP) * 0.5f;
     int sweepSteps = std::max(static_cast<int>(maxDistance / stepDistance), 8);
 
     VehicleCollision::VehicleShape shape = BuildVehicleShape();
@@ -1865,6 +1907,17 @@ void Car::AppendSensorConstraintSample(std::vector<RoadSpeedSample> &samples) co
     bool reversed = m_travelDir == LaneDirection::Backward;
     float targetOffset = AvoidTargetOffset();
     float maxSteerAngle = CalcMaxSteerAngle(m_speed);
+
+    // 오프셋 점은 substep마다 같은 값이라 한 번만 만든다
+    std::vector<Vec3> aimPoints;
+    {
+        const std::vector<Vec3> &refSamples = m_currentRoad->GetReferenceLine().GetSplinePoints();
+        aimPoints.reserve(refSamples.size());
+        for (size_t i = 0; i < refSamples.size(); ++i)
+            aimPoints.push_back(OffsetSampleAt(refSamples, i, targetOffset));
+    }
+    size_t aimCursor = std::numeric_limits<size_t>::max();
+    size_t nextCursor = std::numeric_limits<size_t>::max();
 
     int substeps = std::max(1, static_cast<int>(std::ceil(stepDistance / BIKE_SUBSTEP)));
     float substepDistance = stepDistance / static_cast<float>(substeps);
@@ -1921,8 +1974,8 @@ void Car::AppendSensorConstraintSample(std::vector<RoadSpeedSample> &samples) co
         {
             bool onNextRoad = nextSpline != nullptr && traveled > currentRemain;
             Vec3 aim = onNextRoad
-                           ? nextSpline->GetLookaheadPoint(bikePos, STEER_LOOKAHEAD)
-                           : OffsetLookaheadPoint(m_currentRoad->GetReferenceLine(), bikePos, STEER_LOOKAHEAD, targetOffset, reversed);
+                           ? LookaheadOnPolyline(nextSpline->GetSplinePoints(), bikePos, STEER_LOOKAHEAD, false, nextCursor)
+                           : LookaheadOnPolyline(aimPoints, bikePos, STEER_LOOKAHEAD, reversed, aimCursor);
             float steerAngle = std::clamp(PurePursuitSteerAt(bikePos, bikeHeadingRad, aim, m_wheelbase),
                                           -maxSteerAngle, maxSteerAngle);
             bikeHeadingRad -= substepDistance * tanf(steerAngle) / m_wheelbase;
