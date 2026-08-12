@@ -32,6 +32,15 @@ namespace
         return referenceLine.GetSplinePosition(position) * referenceLine.GetLength() * dirSign;
     }
 
+    // OBB를 axis에 투영한 반폭
+    float ObstacleHalfExtentAlong(const VehicleCollision::Obstacle &obstacle, const Vec3 &axis)
+    {
+        Vec3 forward(cosf(obstacle.headingRad), 0.0f, sinf(obstacle.headingRad));
+        Vec3 right(forward.GetZ(), 0.0f, -forward.GetX());
+        return std::fabs(axis.Dot(forward)) * obstacle.halfLength +
+               std::fabs(axis.Dot(right)) * obstacle.halfWidth;
+    }
+
     bool ProjectObstacle(const Spline &referenceLine, const VehicleCollision::Obstacle &obstacle,
                          float &outOffset, float &outHalfExtent)
     {
@@ -41,10 +50,7 @@ namespace
         Vec3 rightN(dir.GetZ(), 0.0f, -dir.GetX());
         outOffset = (obstacle.center - onRef).Dot(rightN);
 
-        Vec3 forward(cosf(obstacle.headingRad), 0.0f, sinf(obstacle.headingRad));
-        Vec3 right(forward.GetZ(), 0.0f, -forward.GetX());
-        outHalfExtent = std::fabs(rightN.Dot(right)) * obstacle.halfWidth +
-                        std::fabs(rightN.Dot(forward)) * obstacle.halfLength;
+        outHalfExtent = ObstacleHalfExtentAlong(obstacle, rightN);
 
         const std::vector<Vec3> &samples = referenceLine.GetSplinePoints();
         float sampleSpacing = samples.size() > 1 ? referenceLine.GetLength() / (samples.size() - 1.0f) : 0.0f;
@@ -2125,13 +2131,26 @@ float Car::SweepBodyPath(float targetOffset, const std::vector<VehicleCollision:
     return -1.0f;
 }
 
-bool Car::SimulateAvoidPath(float targetOffset, const std::vector<VehicleCollision::Obstacle> &obstacles) const
+float Car::DistanceToClearObstacle(const VehicleCollision::Obstacle &obstacle) const
 {
-    float speed = std::max(m_speed, AVOID_SIM_MIN_SPEED);
-    return SweepBodyPath(targetOffset, obstacles, speed, speed * AVOID_SIM_TIME) < 0.0f;
+    Vec3 forward = GetForwardAxis();
+    Vec3 rearBumper = GetPosition() - forward * RearOverhang();
+    float along = (obstacle.center - rearBumper).Dot(forward) + ObstacleHalfExtentAlong(obstacle, forward);
+    return std::max(along + SAFE_GAP, 0.0f);
 }
 
-bool Car::FindAvoidOffset(float laneCenter, float &outOffset) const
+bool Car::SimulateAvoidPath(float targetOffset, const VehicleCollision::Obstacle &target,
+                            const std::vector<VehicleCollision::Obstacle> &obstacles) const
+{
+    float distance = DistanceToClearObstacle(target);
+    if (distance <= 0.0f)
+        return true; // 이미 지나침
+
+    float speed = std::max(m_speed, AVOID_SIM_MIN_SPEED);
+    return SweepBodyPath(targetOffset, obstacles, speed, distance) < 0.0f;
+}
+
+bool Car::FindAvoidOffset(float laneCenter, const VehicleCollision::Obstacle &target, float &outOffset) const
 {
     float laneWidth = RoadDataManager::ROAD_WIDTH;
     if (const LaneBand *band = RoadDataManager::Get().FindNearestBand(m_currentRoad, laneCenter, m_travelDir))
@@ -2153,7 +2172,7 @@ bool Car::FindAvoidOffset(float laneCenter, float &outOffset) const
                 continue;
             if (!IsSafeLaneEntry(CurrentRoadRef(), candidate))
                 continue;
-            if (!SimulateAvoidPath(candidate, m_obstacles))
+            if (!SimulateAvoidPath(candidate, target, m_obstacles))
                 continue;
             outOffset = candidate;
             return true;
@@ -2313,19 +2332,24 @@ void Car::UpdateAvoid()
 {
     constexpr float AVOID_REPLAN_INTERVAL = 0.5f;
 
-    m_speedCap = AVOID_LOW_SPEED;
+    m_speedCap = LOW_SPEED; // 매 프레임 재주장 -- 옆으로 붙을 시간 확보
 
     if (m_currentTime - m_maneuver.lastPlanTime >= AVOID_REPLAN_INTERVAL)
     {
+        m_maneuver.lastPlanTime = m_currentTime;
         bool stillSafe = IsSafeLaneEntry(CurrentRoadRef(), m_maneuver.avoidOffset) &&
-                         SimulateAvoidPath(m_maneuver.avoidOffset, m_obstacles);
-        if (!stillSafe)
+                         SimulateAvoidPath(m_maneuver.avoidOffset, m_maneuver.target, m_obstacles);
+        if (stillSafe)
         {
-            m_maneuver.lastPlanTime = m_currentTime;
+            m_stuck = false;
+        }
+        else
+        {
             float replanOffset = 0.0f;
-            if (FindAvoidOffset(m_maneuver.laneOffset, replanOffset))
+            if (FindAvoidOffset(m_maneuver.laneOffset, m_maneuver.target, replanOffset))
             {
                 m_maneuver.avoidOffset = replanOffset;
+                m_stuck = false;
             }
             else
             {
@@ -2334,8 +2358,7 @@ void Car::UpdateAvoid()
         }
     }
 
-    bool clear = IsSafeLaneEntry(CurrentRoadRef(), m_maneuver.laneOffset) &&
-                 SimulateAvoidPath(m_maneuver.laneOffset, m_obstacles);
+    bool clear = HasPassedAvoidTarget() && IsSafeLaneEntry(CurrentRoadRef(), m_maneuver.laneOffset);
     m_maneuver.clearTimer = clear ? m_maneuver.clearTimer + m_deltaTime : 0.0f;
 
     if (m_maneuver.clearTimer >= AVOID_CLEAR_DELAY)
@@ -2458,7 +2481,7 @@ bool Car::UpdateSirenWait()
             m_sirenPulledOver = true;
 
         if (!m_sirenPulledOver)
-            m_speedCap = AVOID_LOW_SPEED; // 붙는 동안 서행
+            m_speedCap = LOW_SPEED; // 붙는 동안 서행
         return true;
     }
 
@@ -2493,12 +2516,15 @@ void Car::DecideAvoidance()
 
     float laneCenter = CurrentLaneCenter();
     float avoidOffset = 0.0f;
-    if (FindAvoidOffset(laneCenter, avoidOffset))
+    if (FindAvoidOffset(laneCenter, *m_currentLeader, avoidOffset))
     {
         m_maneuver.laneOffset = laneCenter;
         m_maneuver.avoidOffset = avoidOffset;
         m_maneuver.lastPlanTime = m_currentTime;
-        m_speedCap = AVOID_LOW_SPEED;
+        m_maneuver.target = *m_currentLeader; // 샘플 버퍼는 매틱 재생성, 값복사
+        m_maneuver.hasTarget = true;
+        m_stuck = false;
+        m_speedCap = LOW_SPEED;
         SetSubMode(SubMode::D_Avoid);
         return;
     }
@@ -2509,7 +2535,21 @@ void Car::DecideAvoidance()
 void Car::HandleAvoidStuck()
 {
     m_stuck = true;
-    m_speedCap = 0.0f;
+}
+
+bool Car::HasPassedAvoidTarget() const
+{
+    if (!m_maneuver.hasTarget)
+        return true;
+
+    // 치워졌으면 지나친 것으로
+    bool stillThere = std::any_of(m_obstacles.begin(), m_obstacles.end(),
+                                  [this](const VehicleCollision::Obstacle &obstacle)
+                                  { return IsSameObstacle(obstacle, m_maneuver.target); });
+    if (!stillThere)
+        return true;
+
+    return DistanceToClearObstacle(m_maneuver.target) <= 0.0f;
 }
 
 #pragma endregion

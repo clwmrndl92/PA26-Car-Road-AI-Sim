@@ -287,6 +287,9 @@ private:
         float laneChangeTarget = 0.0f; // 차선변경 목표 d
         float clearTimer = 0.0f;       // 회피종료 디바운스
         float lastPlanTime = -1000.0f; // 재계획 디더링 방지
+        // 회피 유발 장애물, 지나칠 때까지 유지
+        VehicleCollision::Obstacle target;
+        bool hasTarget = false;
     };
 
     // 위협 종류 한번만 분기
@@ -297,28 +300,28 @@ private:
         Static,  // 멈춰 있는 장애물 -- 오프셋 회피
     };
 
-    void UpdateSensors();                   // 장애물 목록 수집
-    bool HandleContactPending();            // 충돌 뒷수습, 최우선
-    bool UpdateSirenWait();                 // 사이렌차 감지→강제전환/해제, 처리시 true
-    bool HasSirenCarBehind() const;         // 반경 내 뒤쪽 사이렌차 존재?
-    float ComputeSirenStopOffset() const;   // 가장 오른쪽 밴드 오른쪽 경계 d
-    void DecideAvoidance();                 // 위협분류→서브모드
-    void UpdateAvoid();                     // D_Avoid: 오프셋 회피 재계획/복귀/종료
-    void UpdateLaneChange();                // 차선변경 진행/취소/완료
-    void HandleAvoidStuck();                // 회피 불가: 그 자리에 정지 유지
-    ThreatKind ClassifyFrontThreat() const; // 전방 최근접 히트를 차/정적으로 분류
-    bool IsOnLane(float offset) const;      // 지금 밴드 폭 안에 있나
+    void UpdateSensors();                                                            // 장애물 목록 수집
+    bool HandleContactPending();                                                     // 충돌 뒷수습, 최우선
+    bool UpdateSirenWait();                                                          // 사이렌차 감지→강제전환/해제, 처리시 true
+    bool HasSirenCarBehind() const;                                                  // 반경 내 뒤쪽 사이렌차 존재?
+    float ComputeSirenStopOffset() const;                                            // 가장 오른쪽 밴드 오른쪽 경계 d
+    void DecideAvoidance();                                                          // 위협분류→서브모드
+    void UpdateAvoid();                                                              // D_Avoid: 오프셋 회피 재계획/복귀/종료
+    void UpdateLaneChange();                                                         // 차선변경 진행/취소/완료
+    void HandleAvoidStuck();                                                         // 회피 불가: 그 자리에 정지 유지
+    bool HasPassedAvoidTarget() const;                                               // 유발 장애물을 뒤로 보냈나
+    float DistanceToClearObstacle(const VehicleCollision::Obstacle &obstacle) const; // 뒷범퍼가 완전히 지나칠 거리
+    ThreatKind ClassifyFrontThreat() const;                                          // 전방 최근접 히트를 차/정적으로 분류
+    bool IsOnLane(float offset) const;                                               // 지금 밴드 폭 안에 있나
     // 현재 목표 횡오프셋
     float AvoidTargetOffset() const;
     Vec3 GetBodyCenter() const;                             // OBB 판정 기준점
     VehicleCollision::Obstacle MakeVehicleObstacle() const; // 이 차의 차체 OBB를 장애물 하나로
-    // 무충돌 후보 오프셋 탐색
-    bool FindAvoidOffset(float laneCenter, float &outOffset) const;
-    // 첫 충돌까지 거리(스윕)
+    bool FindAvoidOffset(float laneCenter, const VehicleCollision::Obstacle &target, float &outOffset) const;
     float SweepBodyPath(float targetOffset, const std::vector<VehicleCollision::Obstacle> &obstacles,
                         float speed, float maxDistance) const;
-    // 예측시간 내 무충돌?
-    bool SimulateAvoidPath(float targetOffset, const std::vector<VehicleCollision::Obstacle> &obstacles) const;
+    bool SimulateAvoidPath(float targetOffset, const VehicleCollision::Obstacle &target,
+                           const std::vector<VehicleCollision::Obstacle> &obstacles) const;
     void RebuildSensorRender();
     void RebuildEmergRayRender();
 #pragma endregion
@@ -427,11 +430,10 @@ private:
     mutable bool m_emergRayDebugBlocked = false;
 
     // 매프레임 스윕 갱신
-    static constexpr float AVOID_LOW_SPEED = 18.26f / 3.6f;
+    static constexpr float LOW_SPEED = 18.26f / 3.6f;
     static constexpr float AVOID_CLEAR_DELAY = 0.5f;      // 복귀 디바운스(s)
     static constexpr float AVOID_RETURN_TOLERANCE = 0.3f; // 회피종료 판정거리
     static constexpr float AVOID_MIN_SHIFT = 0.5f;        // 최소 유효 횡이동
-    static constexpr float AVOID_SIM_TIME = 3.0f;         // 스윕 예측시간(s)
     static constexpr float AVOID_SIM_MIN_SPEED = 3.0f;    // 스윕 최소속도(m/s)
 
     // 물리/판단 틱 다름
