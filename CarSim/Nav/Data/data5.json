@@ -19,7 +19,9 @@
     { "id": 17, "position": [20.0, 0.0, -25.0], "direction": [-1.0, 0.0, -1.0], "type": "unknown" },
     { "id": 18, "position": [61.0, 0.0, -38.0], "direction": [0.0, 0.0, 1.0], "type": "unknown" },
     { "id": 19, "position": [40.0, 0.0, -34.0], "direction": [-1.0, 0.0, -1.0], "type": "unknown" },
-    { "id": 20, "position": [49.0, 0.0, -24.0], "direction": [-1.0, 0.0, 0.0], "type": "unknown" }
+    { "id": 20, "position": [49.0, 0.0, -24.0], "direction": [-1.0, 0.0, 0.0], "type": "unknown" },
+    { "id": 21, "position": [92.0, 0.0, -38.0], "direction": [0.0, 0.0, 1.0], "type": "unknown" },
+    { "id": 22, "position": [103.0, 0.0, -23.0], "direction": [-1.0, 0.0, 0.0], "type": "unknown" }
   ],
   "obstacles": [
     { "position": [36.0, 0.0, -0.0], "size": [100.0, 2.0], "height": 1.5, "rotation": 0.0 },
@@ -32,7 +34,9 @@
     { "position": [41.0, 0.0, 14.0], "size": [4.0, 2.0], "height": 1.5, "rotation": 0.0 },
     { "position": [61.0, 0.0, 16.0], "size": [4.0, 2.0], "height": 1.5, "rotation": 0.0 },
     { "position": [71.0, 0.0, 16.0], "size": [4.0, 2.0], "height": 1.5, "rotation": 0.0 },
-    { "position": [17.0, 0.0, -30.0], "size": [4.0, 2.0], "height": 1.5, "rotation": 0.0 }
+    { "position": [17.0, 0.0, -30.0], "size": [4.0, 2.0], "height": 1.5, "rotation": 0.0 },
+    { "position": [81.0, 0.0, -15.0], "size": [2.0, 100.0], "height": 1.5, "rotation": 0.0 },
+    { "position": [44.0, 0.0, -48.0], "size": [100.0, 2.0], "height": 1.5, "rotation": 0.0 }
   ],
   "dynamic_obstacles": [],
   "roads": [
@@ -179,6 +183,30 @@
             { "center_offset": -2.0, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "broken", "color": "white", "width": 0.15 } },
             { "center_offset": -6.0, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "broken", "color": "white", "width": 0.15 } },
             { "center_offset": -10.0, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "name": "road",
+      "speed_limit": 40,
+      "reference_line": [
+        [90.0, 0.0, -45.0],
+        [90.0, 0.0, -40.0],
+        [91.0, 0.0, -34.0],
+        [93.5, 0.0, -29.4],
+        [98.0, 0.0, -26.0],
+        [105.0, 0.0, -25.0],
+        [110.0, 0.0, -25.0]
+      ],
+      "center_mark": { "type": "solid", "color": "yellow", "width": 0.15 },
+      "lane_sections": [
+        {
+          "s_start": 0.0,
+          "bands": [
+            { "center_offset": -2.0, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } },
+            { "center_offset": 2.0, "width": 3.5, "type": "driving", "speed_limit": 40, "boundary_mark": { "type": "none", "color": "white", "width": 0.15 } }
           ]
         }
       ]

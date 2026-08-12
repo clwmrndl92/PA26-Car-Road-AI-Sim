@@ -137,7 +137,8 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
     }
 
     if ((m_rearTrailRender.GetModel() || m_frontTrailRender.GetModel() || m_splineRender.GetModel() ||
-         m_sensorRender.GetModel() || m_parkPathRender.GetModel() || m_parkTargetLine.GetModel()))
+         m_sensorRender.GetModel() || m_emergRayRender.GetModel() || m_parkPathRender.GetModel() ||
+         m_parkTargetLine.GetModel()))
     {
         if (auto *pBasic = dynamic_cast<BasicEffect *>(&effect))
         {
@@ -150,6 +151,8 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
                 m_splineRender.Draw(context, effect);
             if (m_sensorRender.GetModel())
                 m_sensorRender.Draw(context, effect);
+            if (m_emergRayRender.GetModel())
+                m_emergRayRender.Draw(context, effect);
             if (m_parkPathRender.GetModel())
                 m_parkPathRender.Draw(context, effect);
             if (m_parkTargetLine.GetModel())
@@ -557,9 +560,9 @@ void Car::UpdateDebugWindow()
         ImGui::Text("Cur offset d: %.2f m", m_currentOffset);
 
         ThreatKind frontThreat = ClassifyFrontThreat();
-        const char *frontThreatStr = frontThreat == ThreatKind::Vehicle ? "vehicle"
+        const char *frontThreatStr = frontThreat == ThreatKind::Vehicle  ? "vehicle"
                                      : frontThreat == ThreatKind::Static ? "static"
-                                                                          : "none";
+                                                                         : "none";
         float leaderDist = m_currentLeader != nullptr ? (m_currentLeader->center - GetPosition()).Length() : -1.0f;
         ImGui::Text("Front leader: %s (dist %.1f m)", frontThreatStr, leaderDist);
         if (m_subMode == SubMode::D_Avoid)
@@ -704,6 +707,45 @@ void Car::RebuildSensorRender()
     pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f));
     pModel->materials[0].Set<float>("$Opacity", 1.0f);
     m_sensorRender.SetModel(pModel);
+}
+
+void Car::RebuildEmergRayRender()
+{
+    if (m_emergRayDebugLines.empty())
+    {
+        m_emergRayRender.SetModel(nullptr);
+        return;
+    }
+
+    constexpr float DEBUG_LINE_HEIGHT = 0.2f; // 스윕박스보다 살짝 위(겹침 방지)
+
+    GeometryData geoData;
+    geoData.vertices.reserve(m_emergRayDebugLines.size());
+    for (const Vec3 &point : m_emergRayDebugLines)
+    {
+        DirectX::XMFLOAT3 p = ToXMFLOAT3(point);
+        p.y += DEBUG_LINE_HEIGHT;
+        geoData.vertices.push_back(p);
+    }
+    geoData.normals.assign(geoData.vertices.size(), DirectX::XMFLOAT3(0.0f, 1.0f, 0.0f));
+    geoData.texcoords.assign(geoData.vertices.size(), DirectX::XMFLOAT2(0.0f, 0.0f));
+
+    std::vector<uint32_t> indices;
+    size_t rayCount = m_emergRayDebugLines.size() / 2;
+    indices.reserve(rayCount * 2);
+    for (size_t ray = 0; ray < rayCount; ++ray)
+    {
+        indices.push_back(static_cast<uint32_t>(ray * 2));
+        indices.push_back(static_cast<uint32_t>(ray * 2 + 1));
+    }
+    geoData.indices16.assign(indices.begin(), indices.end());
+
+    Model *pModel = ModelManager::Get().CreateFromGeometry("__emerg_ray__:" + GetName(), geoData);
+    DirectX::XMFLOAT4 color = m_emergRayDebugBlocked ? DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f)
+                                                     : DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f);
+    pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", color);
+    pModel->materials[0].Set<float>("$Opacity", 1.0f);
+    m_emergRayRender.SetModel(pModel);
 }
 
 void Car::RebuildRSDebugRender(const ReedsShepp::Path &path, const Vec3 &startPos, float startAngleRad,

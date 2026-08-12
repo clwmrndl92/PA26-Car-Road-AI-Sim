@@ -200,6 +200,7 @@ private:
     void UpdateHorn(float dt);
     bool IsHornSituation() const;
     bool KnowsRedSignalAhead() const;
+    bool IsEmergencyRayBlocked() const;
 
 #pragma endregion
 
@@ -311,6 +312,7 @@ private:
     // 예측시간 내 무충돌?
     bool SimulateAvoidPath(float targetOffset, const std::vector<VehicleCollision::Obstacle> &obstacles) const;
     void RebuildSensorRender();
+    void RebuildEmergRayRender();
 #pragma endregion
 
 public:
@@ -399,18 +401,19 @@ private:
     static constexpr float MOBIL_LEADER_ALIGN_GAP = 5.0f;
     static constexpr float MOBIL_LANE_CHANGE_COOLDOWN = 10.0f; // 변경후 재평가 금지
 
-    float m_lastBehaviorPlanTime = -1000.0f; // 첫 판단 즉시 실행되게
-    float m_lastLaneChangeTime = -1000.0f;   // 쿨다운 게이팅용
-    float m_planAccelDebug = 0.0f;           // 매프레임 IDM 가속도
-    SpeedLimitDebug m_limitDebug;            // 가속도 결정 근거
+    float m_lastBehaviorPlanTime = -1000.0f;                     // 첫 판단 즉시 실행되게
+    float m_lastLaneChangeTime = -1000.0f;                       // 쿨다운 게이팅용
+    float m_planAccelDebug = 0.0f;                               // 매프레임 IDM 가속도
+    SpeedLimitDebug m_limitDebug;                                // 가속도 결정 근거
     const VehicleCollision::Obstacle *m_currentLeader = nullptr; // IDM이 고른 앞 장애물
     std::vector<VehicleCollision::Obstacle> m_obstacles;
     std::vector<Car *> m_nearbyCars;                // 재수집 비용 회피 캐시
     std::vector<RoadSpeedSample> m_lastRoadSamples; // 매프레임 IDM 재계산용
     IDM::Params m_lastIdmParams;                    // 스캔시점 IDM 캐시
     Vec3 m_planScanPosition = Vec3::sZero();        // gap 보정 기준위치
-    // 스윕박스 시각화 캐시
     mutable std::vector<Vec3> m_sweepDebugCorners;
+    mutable std::vector<Vec3> m_emergRayDebugLines;
+    mutable bool m_emergRayDebugBlocked = false;
 
     // 매프레임 스윕 갱신
     static constexpr float AVOID_LOW_SPEED = 18.26f / 3.6f;
@@ -441,6 +444,7 @@ private:
     RenderObject m_targetMarker;
     RenderObject m_splineRender;
     RenderObject m_sensorRender;     // 스윕박스 윤곽선(디버그)
+    RenderObject m_emergRayRender;   // 긴급제동 레이(디버그)
     RenderObject m_parkPathRender;   // Park 계획(RS 경로) 폴리라인
     RenderObject m_parkTargetMarker; // Park 목표 위치
     RenderObject m_parkTargetLine;   // Park 목표 방향

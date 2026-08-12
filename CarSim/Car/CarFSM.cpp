@@ -135,6 +135,13 @@ namespace
         return atan2f(direction.GetZ(), direction.GetX());
     }
 
+    bool IsSameObstacle(const VehicleCollision::Obstacle &a, const VehicleCollision::Obstacle &b)
+    {
+        if (a.sourceCar != nullptr || b.sourceCar != nullptr)
+            return a.sourceCar == b.sourceCar;
+        return (a.center - b.center).LengthSq() < 0.01f; // 정적은 위치 고정
+    }
+
     float PurePursuitSteerAt(const Vec3 &rearAxle, float headingRad, const Vec3 &target, float wheelbase)
     {
         Vec3 forward(cosf(headingRad), 0.0f, sinf(headingRad));
@@ -1248,7 +1255,17 @@ void Car::DriveControl()
         m_limitDebug = SpeedLimitDebug{"steerCap", steerSpeedCap, 0.0f};
     }
 
-    Accelerate(accelIDM);
+    bool emergBlocked = IsEmergencyRayBlocked();
+    RebuildEmergRayRender();
+    if (emergBlocked)
+    {
+        EmergBrake();
+        m_limitDebug = SpeedLimitDebug{"emergRay", 0.0f, 0.0f};
+    }
+    else
+    {
+        Accelerate(accelIDM);
+    }
 
     DirectX::XMFLOAT3 targetMarkerPos = ToXMFLOAT3(target);
     targetMarkerPos.y = GetPosition().GetY() + 0.2f;
@@ -1927,6 +1944,25 @@ void Car::AppendSensorConstraintSample(std::vector<RoadSpeedSample> &samples) co
     float bikeHeadingRad = DirectionToAngleRad(forward);
     float traveled = 0.0f;
 
+    auto advance = [&](float distance)
+    {
+        bool onNextRoad = nextSpline != nullptr && traveled > currentRemain;
+        Vec3 aim = onNextRoad
+                       ? LookaheadOnPolyline(nextSpline->GetSplinePoints(), bikePos, STEER_LOOKAHEAD, false, nextCursor)
+                       : LookaheadOnPolyline(aimPoints, bikePos, STEER_LOOKAHEAD, reversed, aimCursor);
+        float steerAngle = std::clamp(PurePursuitSteerAt(bikePos, bikeHeadingRad, aim, m_wheelbase),
+                                      -maxSteerAngle, maxSteerAngle);
+        bikeHeadingRad -= distance * tanf(steerAngle) / m_wheelbase;
+        bikePos += Vec3(cosf(bikeHeadingRad), 0.0f, sinf(bikeHeadingRad)) * distance;
+        traveled += distance;
+    };
+
+    // 첫 박스가 내 차체와 안 겹치게 halfLength 먼저 진행
+    int leadSubsteps = std::max(1, static_cast<int>(std::ceil(shape.halfLength / BIKE_SUBSTEP)));
+    float leadDistance = shape.halfLength / static_cast<float>(leadSubsteps);
+    for (int s = 0; s < leadSubsteps; ++s)
+        advance(leadDistance);
+
     m_sweepDebugCorners.reserve((sweepSteps + 1) * 4);
 
     for (int i = 0; i <= sweepSteps; ++i)
@@ -1971,17 +2007,7 @@ void Car::AppendSensorConstraintSample(std::vector<RoadSpeedSample> &samples) co
 
         // 다음 박스 pose까지 잘게 적분
         for (int s = 0; s < substeps; ++s)
-        {
-            bool onNextRoad = nextSpline != nullptr && traveled > currentRemain;
-            Vec3 aim = onNextRoad
-                           ? LookaheadOnPolyline(nextSpline->GetSplinePoints(), bikePos, STEER_LOOKAHEAD, false, nextCursor)
-                           : LookaheadOnPolyline(aimPoints, bikePos, STEER_LOOKAHEAD, reversed, aimCursor);
-            float steerAngle = std::clamp(PurePursuitSteerAt(bikePos, bikeHeadingRad, aim, m_wheelbase),
-                                          -maxSteerAngle, maxSteerAngle);
-            bikeHeadingRad -= substepDistance * tanf(steerAngle) / m_wheelbase;
-            bikePos += Vec3(cosf(bikeHeadingRad), 0.0f, sinf(bikeHeadingRad)) * substepDistance;
-            traveled += substepDistance;
-        }
+            advance(substepDistance);
     }
 }
 
@@ -2097,6 +2123,85 @@ Car::ThreatKind Car::ClassifyFrontThreat() const
         return ThreatKind::None;
 
     return m_currentLeader->isVehicle ? ThreatKind::Vehicle : ThreatKind::Static;
+}
+
+bool Car::IsEmergencyRayBlocked() const
+{
+    constexpr float MAX_RAY_TURN = 1.5708f; // 직선레이가 무의미해지는 각
+
+    float rayDistance = m_speed * m_speed / (2.0f * m_maxBrake) + SAFE_GAP;
+
+    Vec3 forward = GetForwardAxis();
+    Vec3 right(forward.GetZ(), 0.0f, -forward.GetX());
+    Vec3 frontCenter = GetBodyCenter() + forward * m_halfExtents.GetZ();
+    float halfWidth = m_halfExtents.GetX();
+
+    const Vec3 origins[3] = {
+        frontCenter - right * halfWidth,
+        frontCenter,
+        frontCenter + right * halfWidth,
+    };
+
+    float curvature = tanf(m_steerAngle) / m_wheelbase; // = 각속도 / 속도
+    float dTheta = std::clamp(rayDistance * curvature, -MAX_RAY_TURN, MAX_RAY_TURN);
+    bool turning = std::fabs(dTheta) > 1e-4f;
+    Vec3 icr = turning ? GetRigidbodyPosition() + right * (1.0f / curvature) : Vec3::sZero();
+    float cosT = cosf(dTheta);
+    float sinT = sinf(dTheta);
+
+    m_emergRayDebugLines.clear();
+    m_emergRayDebugBlocked = false;
+    bool blocked = false;
+
+    auto castRay = [&](const Vec3 &origin, const Vec3 &direction, float length)
+    {
+        if (length <= 0.001f)
+            return;
+
+        const VehicleCollision::Obstacle *hit = VehicleCollision::RaycastObstaclesHit(
+            origin, DirectionToAngleRad(direction), length, m_obstacles, nullptr);
+
+        m_emergRayDebugLines.push_back(origin);
+        m_emergRayDebugLines.push_back(origin + direction * length);
+
+        if (hit == nullptr)
+            return;
+        if (m_currentLeader != nullptr && IsSameObstacle(*hit, *m_currentLeader))
+            return;
+        blocked = true;
+    };
+
+    for (int i = 0; i < 3; ++i)
+    {
+        const Vec3 &origin = origins[i];
+        Vec3 direction = forward;
+        if (turning)
+        {
+            Vec3 rel = origin - icr;
+            // +Y 각속도가 헤딩을 줄이는 방향(=시계) 회전
+            Vec3 turned(rel.GetX() * cosT + rel.GetZ() * sinT, 0.0f,
+                        rel.GetZ() * cosT - rel.GetX() * sinT);
+            Vec3 chord = (icr + turned) - origin;
+            if (chord.LengthSq() > 1e-6f)
+                direction = chord.Normalized();
+        }
+
+        castRay(origin, direction, rayDistance);
+
+        // 조향쪽 꼭짓점만 옆으로
+        bool isTurnCorner = (i == 0 && curvature < 0.0f) || (i == 2 && curvature > 0.0f);
+        if (isTurnCorner)
+        {
+            Vec3 lateralDir = (i == 0) ? -right : right;
+            float lateralLen = std::fabs(direction.Dot(right)) * rayDistance;
+            castRay(origin, lateralDir, lateralLen);
+        }
+    }
+
+    m_emergRayDebugBlocked = blocked;
+    if (blocked)
+        return true;
+    return false;
 }
 
 bool Car::IsOnLane(float offset) const
