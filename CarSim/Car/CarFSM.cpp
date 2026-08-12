@@ -1154,6 +1154,12 @@ bool Car::CheckPath()
     }
 
     constexpr float LANE_TRANSITION_THRESHOLD = 2.0f;
+    constexpr float LOOSE_TRANSITION_TIME = 1.0f; // 추격/도망 여유시간
+
+    // 역주행/도로밖은 투영이 어긋나 좁은 창을 넘겨버린다
+    float transitionThreshold = LANE_TRANSITION_THRESHOLD;
+    if (IgnoresTrafficRules())
+        transitionThreshold += m_speed * LOOSE_TRANSITION_TIME;
 
     Vec3 position = GetPosition();
     auto roadEnd = [&]() -> Vec3
@@ -1164,7 +1170,7 @@ bool Car::CheckPath()
 
     Vec3 projectedPosition = m_currentSpline.GetLookaheadPoint(position, 0.0f);
     float roadEndDistance = (roadEnd() - projectedPosition).Length();
-    while (roadEndDistance < LANE_TRANSITION_THRESHOLD)
+    while (roadEndDistance < transitionThreshold)
     {
 
         int nextRoadId = (m_pathIndex + 1 < m_path.size()) ? m_path[m_pathIndex + 1].road->GetId() : -1;
@@ -1240,7 +1246,8 @@ void Car::DriveControl()
     }
 
     float steerSpeedCap = CalcMaxSpeed(targetSteer);
-    if (m_speed > steerSpeedCap && -m_maxBrake < accelIDM)
+    bool fastAvoid = (m_fleeOn || IsChasing()) && m_subMode == SubMode::D_Avoid;
+    if (!fastAvoid && m_speed > steerSpeedCap && -m_maxBrake < accelIDM)
     {
         accelIDM = -m_maxBrake;
         m_limitDebug = SpeedLimitDebug{"steerCap", steerSpeedCap, 0.0f};
@@ -1450,6 +1457,9 @@ float Car::ComputeIdmAcceleration(const std::vector<RoadSpeedSample> &samples, c
 
     float speedRatio = std::min(1.0f, m_speed / std::max(0.1f, params.v0));
     float bestAccel = params.a * (1.0f - std::pow(speedRatio, params.delta));
+    const bool fastOvertake = m_fleeOn || IsChasing();
+    const VehicleCollision::Obstacle *overtakeTarget = nullptr;
+    float overtakeTargetDistance = std::numeric_limits<float>::max();
     if (outLeader != nullptr)
         *outLeader = nullptr;
     if (outDebug != nullptr)
@@ -1459,6 +1469,24 @@ float Car::ComputeIdmAcceleration(const std::vector<RoadSpeedSample> &samples, c
     {
         if (sample.leader != nullptr && !m_SimState->IsCarAlive(sample.leader))
             continue;
+
+        // Flee/chase cars use vehicle hits as lateral avoidance targets instead of IDM leaders.
+        // Keep the nearest hit for DecideAvoidance, but do not slow down behind it.
+        if (fastOvertake && sample.hasObstacle && sample.obstacle.isVehicle)
+        {
+            float targetDistance = sample.distance - distanceOffset;
+            if (sample.leader != nullptr)
+            {
+                targetDistance += (sample.leader->GetPosition() - sample.leaderScanPosition)
+                                      .Dot(GetForwardAxis());
+            }
+            if (targetDistance > 0.0f && targetDistance < overtakeTargetDistance)
+            {
+                overtakeTargetDistance = targetDistance;
+                overtakeTarget = &sample.obstacle;
+            }
+            continue;
+        }
 
         // 서로를 리더로 잡고 둘 다 서는 교착
         if (sample.leader != nullptr && sample.leader->GetIdmLeader() == this)
@@ -1501,6 +1529,8 @@ float Car::ComputeIdmAcceleration(const std::vector<RoadSpeedSample> &samples, c
                 *outDebug = SpeedLimitDebug{sample.leader != nullptr ? "car:" + sample.leader->GetName() : sample.debugStr, leaderSpeed, gap};
         }
     }
+    if (overtakeTarget != nullptr && outLeader != nullptr)
+        *outLeader = overtakeTarget;
     return bestAccel;
 }
 
@@ -1704,7 +1734,7 @@ bool Car::IsSafeLaneEntry(const RoadRef &road, float targetOffset, bool checkLea
 
 bool Car::ShouldHoldForMerge(const RoadRef &nextRoad) const
 {
-    if (nextRoad.road == nullptr)
+    if (m_fleeOn || IsChasing() || nextRoad.road == nullptr)
         return false;
     bool hasLaneMapping = false;
     float targetOffset = RoadDataManager::Get().ResolveConnectingOffset(CurrentRoadRef(), nextRoad, m_currentOffset, &hasLaneMapping);
@@ -2207,13 +2237,45 @@ bool Car::SimulateAvoidPath(float targetOffset, const VehicleCollision::Obstacle
 
 bool Car::FindAvoidOffset(float laneCenter, const VehicleCollision::Obstacle &target, float &outOffset) const
 {
-    float laneWidth = RoadDataManager::ROAD_WIDTH;
-    if (const LaneBand *band = RoadDataManager::Get().FindNearestBand(m_currentRoad, laneCenter, m_travelDir))
-        laneWidth = band->width;
-
     float minOffset = 0.0f;
     float maxOffset = 0.0f;
     ComputeDrivableRange(CurrentRoadRef(), minOffset, maxOffset);
+
+    // Fast flee/chase vehicles clear only the obstacle width instead of shifting by lane-width steps.
+    // ProjectObstacle accounts for obstacles rotated relative to the road.
+    if (m_fleeOn || IsChasing())
+    {
+        float obstacleOffset = 0.0f;
+        float obstacleHalfExtent = 0.0f;
+        if (ProjectObstacle(m_currentRoad->GetReferenceLine(), target, obstacleOffset, obstacleHalfExtent))
+        {
+            float clearance = obstacleHalfExtent + GetHalfWidth() + MIN_SAFE_GAP;
+            float candidates[] = {
+                obstacleOffset - clearance,
+                obstacleOffset + clearance,
+            };
+
+            // Try the side requiring the smaller lateral shift first.
+            if (std::fabs(candidates[1] - m_currentOffset) < std::fabs(candidates[0] - m_currentOffset))
+                std::swap(candidates[0], candidates[1]);
+
+            for (float candidate : candidates)
+            {
+                candidate = std::clamp(candidate, minOffset, maxOffset);
+                if (std::fabs(candidate - laneCenter) < AVOID_MIN_SHIFT)
+                    continue;
+                if (!SimulateAvoidPath(candidate, target, m_obstacles))
+                    continue;
+                outOffset = candidate;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    float laneWidth = RoadDataManager::ROAD_WIDTH;
+    if (const LaneBand *band = RoadDataManager::Get().FindNearestBand(m_currentRoad, laneCenter, m_travelDir))
+        laneWidth = band->width;
 
     const float magnitudes[] = {laneWidth * 0.25f, laneWidth * 0.5f, laneWidth * 1.0f, laneWidth * 1.5f};
 
@@ -2396,13 +2458,36 @@ bool Car::HandleContactPending()
 void Car::UpdateAvoid()
 {
     constexpr float AVOID_REPLAN_INTERVAL = 0.5f;
+    bool fastAvoid = m_fleeOn || IsChasing();
 
-    m_speedCap = LOW_SPEED; // 매 프레임 재주장 -- 옆으로 붙을 시간 확보
+    if (!fastAvoid)
+        m_speedCap = LOW_SPEED; // Only ordinary cars slow down while shifting sideways.
+
+    // Chain overtakes without returning to a lane between consecutive vehicles.
+    if (fastAvoid && m_currentLeader != nullptr && m_currentLeader->isVehicle &&
+        !IsSameObstacle(*m_currentLeader, m_maneuver.target))
+    {
+        float nextOffset = 0.0f;
+        if (FindAvoidOffset(m_currentOffset, *m_currentLeader, nextOffset))
+        {
+            m_maneuver.avoidOffset = nextOffset;
+            m_maneuver.target = *m_currentLeader;
+            m_maneuver.hasTarget = true;
+            m_maneuver.clearTimer = 0.0f;
+            m_maneuver.lastPlanTime = m_currentTime;
+        }
+    }
+
+    // A vehicle target moves, so keep the copied OBB current while overtaking it.
+    Car *movingTarget = m_maneuver.target.sourceCar;
+    if (movingTarget != nullptr && m_SimState->IsCarAlive(movingTarget))
+        m_maneuver.target = movingTarget->MakeVehicleObstacle();
 
     if (m_currentTime - m_maneuver.lastPlanTime >= AVOID_REPLAN_INTERVAL)
     {
         m_maneuver.lastPlanTime = m_currentTime;
-        bool stillSafe = IsSafeLaneEntry(CurrentRoadRef(), m_maneuver.avoidOffset) &&
+        bool laneEntrySafe = fastAvoid || IsSafeLaneEntry(CurrentRoadRef(), m_maneuver.avoidOffset);
+        bool stillSafe = laneEntrySafe &&
                          SimulateAvoidPath(m_maneuver.avoidOffset, m_maneuver.target, m_obstacles);
         if (stillSafe)
         {
@@ -2423,7 +2508,8 @@ void Car::UpdateAvoid()
         }
     }
 
-    bool clear = HasPassedAvoidTarget() && IsSafeLaneEntry(CurrentRoadRef(), m_maneuver.laneOffset);
+    bool returnSafe = fastAvoid || IsSafeLaneEntry(CurrentRoadRef(), m_maneuver.laneOffset);
+    bool clear = HasPassedAvoidTarget() && returnSafe;
     m_maneuver.clearTimer = clear ? m_maneuver.clearTimer + m_deltaTime : 0.0f;
 
     if (m_maneuver.clearTimer >= AVOID_CLEAR_DELAY)
@@ -2691,8 +2777,11 @@ void Car::DecideAvoidance()
     constexpr float AVOID_TRIGGER_DELAY = 0.6f;
 
     ThreatKind threat = ClassifyFrontThreat();
+    bool fastOvertake = m_fleeOn || IsChasing();
+    bool canOffsetAvoid = threat == ThreatKind::Static ||
+                          (fastOvertake && threat == ThreatKind::Vehicle);
 
-    if (threat != ThreatKind::Static)
+    if (!canOffsetAvoid)
     {
         m_staticBlockTimer = 0.0f;
         m_stuck = false;
@@ -2700,7 +2789,8 @@ void Car::DecideAvoidance()
     }
 
     m_staticBlockTimer += m_deltaTime;
-    if (m_staticBlockTimer < AVOID_TRIGGER_DELAY)
+    float triggerDelay = (fastOvertake && threat == ThreatKind::Vehicle) ? 0.0f : AVOID_TRIGGER_DELAY;
+    if (m_staticBlockTimer < triggerDelay)
     {
         m_stuck = false;
         return;
@@ -2716,7 +2806,8 @@ void Car::DecideAvoidance()
         m_maneuver.target = *m_currentLeader; // 샘플 버퍼는 매틱 재생성, 값복사
         m_maneuver.hasTarget = true;
         m_stuck = false;
-        m_speedCap = LOW_SPEED;
+        if (!m_fleeOn && !IsChasing())
+            m_speedCap = LOW_SPEED;
         SetSubMode(SubMode::D_Avoid);
         return;
     }
