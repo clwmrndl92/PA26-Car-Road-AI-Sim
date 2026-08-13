@@ -21,7 +21,7 @@ namespace
 
     constexpr float SIREN_DETECT_RADIUS = 40.0f; // 사이렌 감지반경
 
-    constexpr float CHASE_DETECT_RADIUS = 80.0f;  // 도망차 탐색반경
+    constexpr float CHASE_DETECT_RADIUS = 200.0f; // 도망차 탐색반경
     constexpr float CHASE_REPATH_INTERVAL = 1.0f; // 추격경로 갱신주기
     constexpr float CHASE_BLOCK_RANGE = 20.0f;    // 이 안에서 앞서면 차단
 
@@ -1830,7 +1830,10 @@ void Car::UpdateDrivePlan()
     float lookDistance = std::max(MIN_LOOK_DISTANCE, interactGap + m_speed * BEHAVIOR_PLAN_INTERVAL);
 
     m_lastRoadSamples = ScanRoadSpeedConstraints(lookDistance);
-    AppendSensorConstraintSample(m_lastRoadSamples);
+    if (UsesReactiveSteer())
+        m_sweepDebugCorners.clear(); // 스윕이 실제 조향과 어긋남
+    else
+        AppendSensorConstraintSample(m_lastRoadSamples);
     RebuildSensorRender();
     m_planScanPosition = GetPosition();
 
@@ -2493,11 +2496,10 @@ float Car::ComputeContextSteer(const Vec3 &pursuitTarget, float pursuitSteer) co
                       -m_maxSteerAngle, m_maxSteerAngle);
 }
 
-// 정적장애물은 Static 바디라 접촉 콜백이 없고, IDM이 닿기 전에 세운다.
-// 그래서 "앞이 정적물이고 사실상 멈춰 있는 시간"으로 막힘을 판정한다.
+// 스윕을 안 쓰니 앞범퍼 근접으로 직접 판정한다.
 void Car::TryStartStaticReverseEscape()
 {
-    if (m_currentLeader == nullptr || m_currentLeader->isVehicle || m_speed > STATIC_BLOCK_SPEED)
+    if (m_speed > STATIC_BLOCK_SPEED)
     {
         m_staticBlockTimer = 0.0f;
         return;
@@ -2505,12 +2507,26 @@ void Car::TryStartStaticReverseEscape()
 
     Vec3 forward = GetForwardAxis();
     Vec3 frontBumper = GetBodyCenter() + forward * m_halfExtents.GetZ();
-    Vec3 toBlocker = VehicleCollision::ClosestPointOnObstacle(frontBumper, *m_currentLeader) - frontBumper;
-    float gap = toBlocker.Length();
 
-    bool blocked = gap <= STATIC_BLOCK_RANGE &&
-                   (gap < 0.01f || forward.Dot(toBlocker * (1.0f / gap)) >= HEADON_FRONT_COS);
-    if (!blocked)
+    const VehicleCollision::Obstacle *blocker = nullptr;
+    float nearestGap = STATIC_BLOCK_RANGE;
+    for (const VehicleCollision::Obstacle &obstacle : m_obstacles)
+    {
+        if (obstacle.isVehicle)
+            continue;
+
+        Vec3 toBlocker = VehicleCollision::ClosestPointOnObstacle(frontBumper, obstacle) - frontBumper;
+        float gap = toBlocker.Length();
+        if (gap > nearestGap)
+            continue;
+        if (gap >= 0.01f && forward.Dot(toBlocker * (1.0f / gap)) < HEADON_FRONT_COS)
+            continue;
+
+        nearestGap = gap;
+        blocker = &obstacle;
+    }
+
+    if (blocker == nullptr)
     {
         m_staticBlockTimer = 0.0f;
         return;
@@ -2524,7 +2540,7 @@ void Car::TryStartStaticReverseEscape()
     m_acceleration = 0.0f;
     m_speed = 0.0f;
     m_isReverse = true;
-    m_reverseEscapeSteer = ComputeReverseEscapeSteer(m_currentLeader->center);
+    m_reverseEscapeSteer = ComputeReverseEscapeSteer(blocker->center);
     m_reverseEscapeTimer = REVERSE_ESCAPE_TIME;
     DebugConsole::Log(GetName() + ": static block, reversing");
 }
