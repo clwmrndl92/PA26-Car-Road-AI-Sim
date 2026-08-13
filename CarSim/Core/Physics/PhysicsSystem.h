@@ -11,7 +11,7 @@
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
 #include <mutex>
-#include <unordered_set>
+#include <unordered_map>
 #include "PhysicsLayers.h"
 
 class CarContactListener final : public JPH::ContactListener
@@ -22,10 +22,11 @@ public:
 
     void Clear();
     bool HasNewContact(JPH::BodyID id) const;
+    bool GetNewContact(JPH::BodyID id, JPH::BodyID &outOther) const; // 부딪힌 상대
 
 private:
     mutable std::mutex m_mutex;
-    std::unordered_set<JPH::BodyID> m_newContacts;
+    std::unordered_map<JPH::BodyID, JPH::BodyID> m_newContacts; // 나 -> 상대
 };
 
 class BPLayerInterfaceImpl final : public JPH::BroadPhaseLayerInterface
@@ -84,6 +85,7 @@ public:
     JPH::BodyInterface &GetBodyInterface();
 
     bool HasNewContact(JPH::BodyID id) const { return m_contactListener.HasNewContact(id); }
+    bool GetNewContact(JPH::BodyID id, JPH::BodyID &outOther) const { return m_contactListener.GetNewContact(id, outOther); }
 
 private:
     struct JoltInitializer

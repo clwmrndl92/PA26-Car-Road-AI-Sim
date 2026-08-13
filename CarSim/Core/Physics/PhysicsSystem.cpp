@@ -18,8 +18,8 @@ void CarContactListener::OnContactAdded(const JPH::Body &inBody1, const JPH::Bod
         return;
 
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_newContacts.insert(inBody1.GetID());
-    m_newContacts.insert(inBody2.GetID());
+    m_newContacts[inBody1.GetID()] = inBody2.GetID();
+    m_newContacts[inBody2.GetID()] = inBody1.GetID();
 }
 
 void CarContactListener::Clear()
@@ -32,6 +32,16 @@ bool CarContactListener::HasNewContact(JPH::BodyID id) const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     return m_newContacts.find(id) != m_newContacts.end();
+}
+
+bool CarContactListener::GetNewContact(JPH::BodyID id, JPH::BodyID &outOther) const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = m_newContacts.find(id);
+    if (it == m_newContacts.end())
+        return false;
+    outOther = it->second;
+    return true;
 }
 
 PhysicsSystem::PhysicsSystem()

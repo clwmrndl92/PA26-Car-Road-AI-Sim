@@ -138,7 +138,7 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
 
     if ((m_rearTrailRender.GetModel() || m_frontTrailRender.GetModel() || m_splineRender.GetModel() ||
          m_sensorRender.GetModel() || m_emergRayRender.GetModel() || m_parkPathRender.GetModel() ||
-         m_parkTargetLine.GetModel()))
+         m_parkTargetLine.GetModel() || m_ctxSteerOpenRender.GetModel() || m_ctxSteerBlockedRender.GetModel()))
     {
         if (auto *pBasic = dynamic_cast<BasicEffect *>(&effect))
         {
@@ -157,6 +157,10 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
                 m_parkPathRender.Draw(context, effect);
             if (m_parkTargetLine.GetModel())
                 m_parkTargetLine.Draw(context, effect);
+            if (m_ctxSteerOpenRender.GetModel())
+                m_ctxSteerOpenRender.Draw(context, effect);
+            if (m_ctxSteerBlockedRender.GetModel())
+                m_ctxSteerBlockedRender.Draw(context, effect);
             pBasic->SetRenderDefault();
         }
     }
@@ -347,6 +351,14 @@ bool Car::ShouldStopForSignal(const shared_ptr<Road> &road, LaneDirection direct
 void Car::UpdateCar()
 {
     constexpr float FRICT_DECEL_RATE = 0.1f;
+
+    if (m_reverseEscapeTimer > 0.0f)
+    {
+        m_reverseEscapeTimer -= m_deltaTime;
+        if (m_reverseEscapeTimer <= 0.0f)
+            m_isReverse = false; // 전진 복귀, 조향은 반응형이 다시 잡는다
+    }
+
     if (m_acceleration == 0.0f)
     {
         m_speed -= m_speed * FRICT_DECEL_RATE * m_deltaTime;
@@ -459,21 +471,82 @@ void Car::UpdateWithControl()
 
 void Car::ApplyMotion()
 {
-    if (PhysicsSystem::Get().HasNewContact(m_rigidbody.GetBodyID()))
+    JPH::BodyID otherId;
+    if (PhysicsSystem::Get().GetNewContact(m_rigidbody.GetBodyID(), otherId))
     {
-        float vy = m_rigidbody.GetLinearVelocity().GetY();
-        m_rigidbody.SetLinearVelocity(JPH::Vec3(0.0f, vy, 0.0f));
-        m_rigidbody.SetAngularVelocity(JPH::Vec3::sZero());
-        m_acceleration = 0.0f;
-        m_speed = 0.0f;
-        m_contactPending = true;
-        DebugConsole::Log(GetName() + ": CRASH!!");
-        return;
+        // 추격/도망차가 정면으로 박았으면 후진해서 다시 각을 잡는다. 옆 추돌은 기존대로 멈추고 민다.
+        Car *other = IgnoresTrafficRules() ? FindContactCar(otherId) : nullptr;
+        if (other != nullptr && IsHeadOnContact(other))
+        {
+            if (m_reverseEscapeTimer <= 0.0f) // 첫 프레임에만 방향 결정
+            {
+                m_acceleration = 0.0f;
+                m_speed = 0.0f;
+                m_isReverse = true;
+                m_reverseEscapeSteer = ComputeReverseEscapeSteer(other->GetBodyCenter());
+                DebugConsole::Log(GetName() + ": HEAD-ON, reversing");
+            }
+            m_reverseEscapeTimer = REVERSE_ESCAPE_TIME; // 붙어있는 동안 계속 갱신
+        }
+        else
+        {
+            if (m_reverseEscapeTimer > 0.0f) // 뒤에 뭔가 있으면 후진 중단
+            {
+                m_reverseEscapeTimer = 0.0f;
+                m_isReverse = false;
+            }
+            float vy = m_rigidbody.GetLinearVelocity().GetY();
+            m_rigidbody.SetLinearVelocity(JPH::Vec3(0.0f, vy, 0.0f));
+            m_rigidbody.SetAngularVelocity(JPH::Vec3::sZero());
+            m_acceleration = 0.0f;
+            m_speed = 0.0f;
+            m_contactPending = true;
+            DebugConsole::Log(GetName() + ": CRASH!!");
+            return;
+        }
     }
 
     float angularVelocity = GetSignedSpeed() * tan(m_steerAngle) / m_wheelbase;
     m_rigidbody.SetAngularVelocity(JPH::Vec3(0.0f, angularVelocity, 0.0f));
     m_rigidbody.SetLinearVelocity(ComputeDesiredVelocity());
+}
+
+Car *Car::FindContactCar(JPH::BodyID otherId) const
+{
+    for (Car *other : m_nearbyCars)
+    {
+        if (other == nullptr || !m_SimState->IsCarAlive(other))
+            continue;
+        if (other->m_rigidbody.GetBodyID() == otherId)
+            return other;
+    }
+    return nullptr;
+}
+
+bool Car::IsHeadOnContact(const Car *other) const
+{
+    Vec3 forward = GetForwardAxis();
+    Vec3 toOther = other->GetBodyCenter() - GetBodyCenter();
+    float distance = toOther.Length();
+    if (distance < 0.01f)
+        return true;
+
+    // 앞쪽에서 부딪혔고 두 헤딩이 거의 평행해야 정면. 옆구리를 긁은 건 제외
+    if (forward.Dot(toOther * (1.0f / distance)) < HEADON_FRONT_COS)
+        return false;
+    return std::fabs(forward.Dot(other->GetForwardAxis())) > HEADON_PARALLEL_COS;
+}
+
+float Car::ComputeReverseEscapeSteer(const Vec3 &blockerCenter) const
+{
+    Vec3 forward = GetForwardAxis();
+    Vec3 right(forward.GetZ(), 0.0f, -forward.GetX());
+    float lateral = right.Dot(blockerCenter - GetBodyCenter());
+
+    // 후진중엔 조향 부호가 전진과 반대로 돈다(+면 코가 왼쪽). 상대 반대쪽으로 코를 뺀다.
+    if (std::fabs(lateral) < 0.3f)
+        return -REVERSE_ESCAPE_STEER; // 정확히 정면이면 우측 관례
+    return lateral > 0.0f ? REVERSE_ESCAPE_STEER : -REVERSE_ESCAPE_STEER;
 }
 
 JPH::Vec3 Car::ComputeDesiredVelocity() const
@@ -615,8 +688,13 @@ void Car::UpdateDebugWindow()
         ImGui::Text("Speed: %.1f km/h", m_speed * 3.6f);
         ImGui::Text("Accel: %.1f km/h/s", m_acceleration * 3.6f);
         ImGui::Text("Steer: %.2f / %.2f", m_steerAngle, m_maxSteerAngle);
-        ImGui::Text("ActualVel: %.2f", m_rigidbody.GetLinearVelocity().Length());
-        ImGui::Text("DesiredVel: %.2f", ComputeDesiredVelocity().Length());
+        ImGui::Text("Current Road: %d", m_currentRoad != nullptr ? m_currentRoad->GetId() : -1);
+        RoadRef nextRoad = (m_pathIndex + 1 < m_path.size()) ? m_path[m_pathIndex + 1] : RoadRef{};
+        ImGui::Text("Next Road: %d", nextRoad.road != nullptr ? nextRoad.road->GetId() : -1);
+        if (m_roaming)
+            ImGui::Text("Dest Road: roaming");
+        else
+            ImGui::Text("Dest Road: %d", m_destRoad != nullptr ? m_destRoad->GetId() : -1);
         if (m_mode == Mode::Drive)
             ImGui::Text("Mode: %s / %s", StateToString(m_mode), SubStateToString(m_subMode));
         else
@@ -661,6 +739,12 @@ void Car::UpdateDebugWindow()
             ImGui::Text("ChaseBlock: d %.2f", m_maneuver.avoidOffset);
         else if (m_stuck)
             ImGui::Text("Avoid: stuck (no gap)");
+        if (m_reverseEscapeTimer > 0.0f)
+            ImGui::Text("HeadOn reverse: %.1fs, steer %.0f deg", m_reverseEscapeTimer,
+                        ToDegrees(m_reverseEscapeSteer));
+        else if (UsesReactiveSteer())
+            ImGui::Text("ReactiveSteer: slot %.0f deg, danger %.2f", ToDegrees(m_ctxSteerDebugRad),
+                        m_ctxSteerDebugDanger);
 
         ImGui::Separator();
         ImGui::Text("Personality (notes/accel.txt A~D)");
@@ -838,6 +922,54 @@ void Car::RebuildEmergRayRender()
     pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", color);
     pModel->materials[0].Set<float>("$Opacity", 1.0f);
     m_emergRayRender.SetModel(pModel);
+}
+
+namespace
+{
+    void BuildLineListModel(RenderObject &render, const std::vector<Vec3> &points, const std::string &modelKey,
+                            DirectX::XMFLOAT4 color, float debugLineHeight)
+    {
+        if (points.empty())
+        {
+            render.SetModel(nullptr);
+            return;
+        }
+
+        GeometryData geoData;
+        geoData.vertices.reserve(points.size());
+        for (const Vec3 &point : points)
+        {
+            DirectX::XMFLOAT3 p = ToXMFLOAT3(point);
+            p.y += debugLineHeight;
+            geoData.vertices.push_back(p);
+        }
+        geoData.normals.assign(geoData.vertices.size(), DirectX::XMFLOAT3(0.0f, 1.0f, 0.0f));
+        geoData.texcoords.assign(geoData.vertices.size(), DirectX::XMFLOAT2(0.0f, 0.0f));
+
+        std::vector<uint32_t> indices;
+        size_t lineCount = points.size() / 2;
+        indices.reserve(lineCount * 2);
+        for (size_t line = 0; line < lineCount; ++line)
+        {
+            indices.push_back(static_cast<uint32_t>(line * 2));
+            indices.push_back(static_cast<uint32_t>(line * 2 + 1));
+        }
+        geoData.indices16.assign(indices.begin(), indices.end());
+
+        Model *pModel = ModelManager::Get().CreateFromGeometry(modelKey, geoData);
+        pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", color);
+        pModel->materials[0].Set<float>("$Opacity", 1.0f);
+        render.SetModel(pModel);
+    }
+}
+
+void Car::RebuildCtxSteerRender()
+{
+    constexpr float DEBUG_LINE_HEIGHT = 0.25f; // 다른 디버그 레이보다 살짝 위(겹침 방지)
+    BuildLineListModel(m_ctxSteerOpenRender, m_ctxSteerOpenLines, "__ctxsteer_open__:" + GetName(),
+                       DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f), DEBUG_LINE_HEIGHT);
+    BuildLineListModel(m_ctxSteerBlockedRender, m_ctxSteerBlockedLines, "__ctxsteer_blocked__:" + GetName(),
+                       DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f), DEBUG_LINE_HEIGHT);
 }
 
 void Car::RebuildRSDebugRender(const ReedsShepp::Path &path, const Vec3 &startPos, float startAngleRad,

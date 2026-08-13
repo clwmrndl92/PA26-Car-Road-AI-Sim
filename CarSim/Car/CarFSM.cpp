@@ -146,6 +146,16 @@ namespace
         return atan2f(direction.GetZ(), direction.GetX());
     }
 
+    // [-pi, pi]
+    float WrapAngleRad(float radian)
+    {
+        constexpr float TWO_PI = 6.28318530718f;
+        radian = fmodf(radian + 3.14159265359f, TWO_PI);
+        if (radian < 0.0f)
+            radian += TWO_PI;
+        return radian - 3.14159265359f;
+    }
+
     bool IsSameObstacle(const VehicleCollision::Obstacle &a, const VehicleCollision::Obstacle &b)
     {
         if (a.sourceCar != nullptr || b.sourceCar != nullptr)
@@ -1074,17 +1084,31 @@ void Car::UpdateDrive()
     m_speedCap = -1.0f; // 매 프레임 해제, 핸들러가 다시 주장
     if (!HandleContactPending() && !UpdateSirenWait() && !UpdateChase())
     {
-        switch (m_subMode)
+        if (IgnoresTrafficRules()) // 횡방향은 반응형 조향이 맡는다
         {
-        case SubMode::D_Avoid:
-            UpdateAvoid();
-            break;
-        case SubMode::D_LaneChange:
-            UpdateLaneChange();
-            break;
-        default:
-            DecideAvoidance();
-            break;
+            if (m_subMode != SubMode::D_Normal)
+            {
+                m_maneuver = ManeuverState{};
+                m_staticBlockTimer = 0.0f;
+                m_stuck = false;
+                SetSubMode(SubMode::D_Normal);
+            }
+            TryStartStaticReverseEscape();
+        }
+        else
+        {
+            switch (m_subMode)
+            {
+            case SubMode::D_Avoid:
+                UpdateAvoid();
+                break;
+            case SubMode::D_LaneChange:
+                UpdateLaneChange();
+                break;
+            default:
+                DecideAvoidance();
+                break;
+            }
         }
     }
 
@@ -1100,6 +1124,9 @@ void Car::UpdateDrive()
 
 bool Car::CanEnterFromCurrentBand(const RoadRef &next) const
 {
+    if (IgnoresTrafficRules()) // 역주행/도로밖 밴드는 진입차로 판정 불가
+        return true;
+
     std::vector<const LaneBand *> entry = RoadDataManager::Get().GetEntryBands(CurrentRoadRef(), next);
     if (entry.empty())
         return true;
@@ -1154,7 +1181,7 @@ bool Car::CheckPath()
     }
 
     constexpr float LANE_TRANSITION_THRESHOLD = 2.0f;
-    constexpr float LOOSE_TRANSITION_TIME = 1.0f; // 추격/도망 여유시간
+    constexpr float LOOSE_TRANSITION_TIME = 0.3f; // 추격/도망 여유시간
 
     // 역주행/도로밖은 투영이 어긋나 좁은 창을 넘겨버린다
     float transitionThreshold = LANE_TRANSITION_THRESHOLD;
@@ -1221,12 +1248,29 @@ bool Car::CheckPath()
 
 void Car::DriveControl()
 {
+    if (m_reverseEscapeTimer > 0.0f) // 정면충돌 후진탈출
+    {
+        Steer(m_reverseEscapeSteer, REVERSE_STEER_RAMP);
+        AccelerateVel(REVERSE_ESCAPE_SPEED);
+        return;
+    }
+
     const Spline &spline = m_currentSpline;
 
     constexpr float LOOKAHEAD_TIME = 1.5f;
     float lookaheadDistance = 5.0f;
     Vec3 target = spline.GetLookaheadPoint(GetRigidbodyPosition(), lookaheadDistance);
     float targetSteer = PurePursuit(target);
+    if (UsesReactiveSteer())
+    {
+        targetSteer = ComputeContextSteer(target, targetSteer);
+    }
+    else if (!m_ctxSteerOpenLines.empty() || !m_ctxSteerBlockedLines.empty())
+    {
+        m_ctxSteerOpenLines.clear();
+        m_ctxSteerBlockedLines.clear();
+    }
+    RebuildCtxSteerRender();
 
     Steer(targetSteer);
 
@@ -1246,8 +1290,7 @@ void Car::DriveControl()
     }
 
     float steerSpeedCap = CalcMaxSpeed(targetSteer);
-    bool fastAvoid = (m_fleeOn || IsChasing()) && m_subMode == SubMode::D_Avoid;
-    if (!fastAvoid && m_speed > steerSpeedCap && -m_maxBrake < accelIDM)
+    if (!UsesReactiveSteer() && m_speed > steerSpeedCap && -m_maxBrake < accelIDM)
     {
         accelIDM = -m_maxBrake;
         m_limitDebug = SpeedLimitDebug{"steerCap", steerSpeedCap, 0.0f};
@@ -1791,6 +1834,19 @@ void Car::UpdateDrivePlan()
     RebuildSensorRender();
     m_planScanPosition = GetPosition();
 
+    // 조향이 실제 위치를 만든다. 계획 오프셋은 따라가기만 하되 도로 밖으론 안 나가게 클램프
+    if (UsesReactiveSteer())
+    {
+        float minOffset = 0.0f;
+        float maxOffset = 0.0f;
+        ComputeDrivableRange(CurrentRoadRef(), minOffset, maxOffset);
+        float realOffset = ComputeReferenceOffset(m_currentRoad->GetReferenceLine(), GetPosition());
+        SetCurrentOffset(std::clamp(realOffset, minOffset, maxOffset));
+        m_currentSpline = RoadDataManager::Get().BuildOffsetSpline(m_currentRoad, m_currentOffset, m_travelDir);
+        RebuildSplineRender();
+        return;
+    }
+
     float laneCenter = m_currentOffset;
     float targetOffset;
     if (m_subMode == SubMode::D_Avoid || m_subMode == SubMode::D_LaneChange ||
@@ -2093,9 +2149,10 @@ void Car::AppendSensorConstraintSample(std::vector<RoadSpeedSample> &samples) co
         traveled += distance;
     };
 
-    // 첫 박스가 내 차체와 안 겹치게 halfLength 먼저 진행
-    int leadSubsteps = std::max(1, static_cast<int>(std::ceil(shape.halfLength / BIKE_SUBSTEP)));
-    float leadDistance = shape.halfLength / static_cast<float>(leadSubsteps);
+    // 첫 박스가 내 차체와 안 겹치게 length(2*halfLength) 먼저 진행
+    float leadLength = shape.halfLength * 2.0f;
+    int leadSubsteps = std::max(1, static_cast<int>(std::ceil(leadLength / BIKE_SUBSTEP)));
+    float leadDistance = leadLength / static_cast<float>(leadSubsteps);
     for (int s = 0; s < leadSubsteps; ++s)
         advance(leadDistance);
 
@@ -2298,6 +2355,172 @@ bool Car::FindAvoidOffset(float laneCenter, const VehicleCollision::Obstacle &ta
     return false;
 }
 
+// 헤딩 기준 부채꼴을 슬롯으로 쪼개, 가고 싶은 방향(interest)에서 위험한 슬롯(danger)을 빼고 고른다.
+// 매 프레임 돌며 연속적인 조향을 만든다 -- 이산 offset 후보를 고르는 D_Avoid와 달리 "막힘"이 없다.
+float Car::ComputeContextSteer(const Vec3 &pursuitTarget, float pursuitSteer) const
+{
+    constexpr int SLOT_COUNT = 11;
+    constexpr float FAN_HALF = ToRadians(60.0f);
+    constexpr float TTC_HORIZON = 3.0f;      // 이 시간 밖 위협은 무시
+    constexpr float PROXIMITY_RANGE = 6.0f;  // 접근속도 0이어도 위험한 거리
+    constexpr float DANGER_CUTOFF = 0.35f;   // 이 위 슬롯은 봉쇄로 본다
+    constexpr float RIGHT_BIAS = 0.06f;      // 마주보기 교착 깨기
+    constexpr float EDGE_FALLOFF = ToRadians(25.0f);
+    constexpr float STEER_LOOKAHEAD = 6.0f;
+    constexpr float MIN_CLOSING = 0.1f;
+
+    Vec3 position = GetRigidbodyPosition();
+    Vec3 forward = GetForwardAxis();
+    float headingRad = DirectionToAngleRad(forward);
+    Vec3 myCenter = GetBodyCenter();
+    Vec3 myVelocity = forward * m_speed;
+    float slotStep = (2.0f * FAN_HALF) / (SLOT_COUNT - 1);
+
+    float danger[SLOT_COUNT] = {};
+    float totalDanger = 0.0f;
+
+    auto accumulate = [&](const VehicleCollision::Obstacle &threat)
+    {
+        Vec3 rel = threat.center - myCenter;
+        float distance = rel.Length();
+        if (distance < 0.01f)
+            return;
+        Vec3 relDir = rel * (1.0f / distance);
+
+        Vec3 threatDir(cosf(threat.headingRad), 0.0f, sinf(threat.headingRad));
+        float closing = (myVelocity - threatDir * threat.speed).Dot(relDir);
+
+        Vec3 relRight(relDir.GetZ(), 0.0f, -relDir.GetX());
+        float halfExtent = ObstacleHalfExtentAlong(threat, relRight) + GetHalfWidth();
+        float gap = std::max(0.0f, distance - ObstacleHalfExtentAlong(threat, relDir) - GetHalfWidth());
+
+        // 접근속도 기준(정면충돌은 이게 커서 일찍 반응) + 근접 기준 중 큰 쪽
+        float weight = 0.0f;
+        if (closing > MIN_CLOSING)
+            weight = std::max(0.0f, 1.0f - (gap / closing) / TTC_HORIZON);
+        weight = std::max(weight, 1.0f - std::min(1.0f, gap / PROXIMITY_RANGE));
+        if (weight <= 0.0f)
+            return;
+
+        float threatRad = WrapAngleRad(DirectionToAngleRad(rel) - headingRad);
+        float angularHalf = atan2f(halfExtent, std::max(1.0f, distance));
+
+        for (int i = 0; i < SLOT_COUNT; ++i)
+        {
+            float delta = std::fabs(WrapAngleRad(-FAN_HALF + i * slotStep - threatRad));
+            float falloff = delta <= angularHalf
+                                ? 1.0f
+                                : 1.0f - std::min(1.0f, (delta - angularHalf) / EDGE_FALLOFF);
+            if (falloff <= 0.0f)
+                continue;
+            danger[i] += weight * falloff;
+            totalDanger += weight * falloff;
+        }
+    };
+
+    for (const VehicleCollision::Obstacle &stored : m_obstacles)
+    {
+        if (stored.sourceCar == nullptr)
+        {
+            accumulate(stored);
+            continue;
+        }
+        if (!m_SimState->IsCarAlive(stored.sourceCar))
+            continue;
+        accumulate(stored.sourceCar->MakeVehicleObstacle()); // 0.2s 캐시 대신 현재 위치
+    }
+
+    m_ctxSteerOpenLines.clear();
+    m_ctxSteerBlockedLines.clear();
+    for (int i = 0; i < SLOT_COUNT; ++i)
+    {
+        float slotRad = headingRad + (-FAN_HALF + i * slotStep);
+        Vec3 end = position + Vec3(cosf(slotRad), 0.0f, sinf(slotRad)) * STEER_LOOKAHEAD;
+        std::vector<Vec3> &bucket = danger[i] >= DANGER_CUTOFF ? m_ctxSteerBlockedLines : m_ctxSteerOpenLines;
+        bucket.push_back(position);
+        bucket.push_back(end);
+    }
+
+    if (totalDanger <= 0.0f)
+    {
+        m_ctxSteerDebugRad = 0.0f;
+        m_ctxSteerDebugDanger = 0.0f;
+        return pursuitSteer; // 위협 없으면 슬롯 양자화로 흔들 필요 없다
+    }
+
+    float desiredRad = WrapAngleRad(DirectionToAngleRad(pursuitTarget - position) - headingRad);
+
+    int best = -1;
+    float bestInterest = -1.0f;
+    for (int i = 0; i < SLOT_COUNT; ++i)
+    {
+        if (danger[i] >= DANGER_CUTOFF)
+            continue;
+        float slotRad = -FAN_HALF + i * slotStep;
+        float interest = std::max(0.0f, cosf(slotRad - desiredRad)) + (slotRad < 0.0f ? RIGHT_BIAS : 0.0f);
+        if (interest > bestInterest)
+        {
+            bestInterest = interest;
+            best = i;
+        }
+    }
+
+    if (best < 0) // 전부 봉쇄면 가장 덜 위험한 쪽으로라도
+    {
+        float least = std::numeric_limits<float>::max();
+        for (int i = 0; i < SLOT_COUNT; ++i)
+            if (danger[i] < least)
+            {
+                least = danger[i];
+                best = i;
+            }
+    }
+
+    m_ctxSteerDebugRad = -FAN_HALF + best * slotStep;
+    m_ctxSteerDebugDanger = danger[best];
+
+    float chosenRad = headingRad + m_ctxSteerDebugRad;
+    Vec3 aim = position + Vec3(cosf(chosenRad), 0.0f, sinf(chosenRad)) * STEER_LOOKAHEAD;
+    return std::clamp(PurePursuitSteerAt(position, headingRad, aim, m_wheelbase),
+                      -m_maxSteerAngle, m_maxSteerAngle);
+}
+
+// 정적장애물은 Static 바디라 접촉 콜백이 없고, IDM이 닿기 전에 세운다.
+// 그래서 "앞이 정적물이고 사실상 멈춰 있는 시간"으로 막힘을 판정한다.
+void Car::TryStartStaticReverseEscape()
+{
+    if (m_currentLeader == nullptr || m_currentLeader->isVehicle || m_speed > STATIC_BLOCK_SPEED)
+    {
+        m_staticBlockTimer = 0.0f;
+        return;
+    }
+
+    Vec3 forward = GetForwardAxis();
+    Vec3 frontBumper = GetBodyCenter() + forward * m_halfExtents.GetZ();
+    Vec3 toBlocker = VehicleCollision::ClosestPointOnObstacle(frontBumper, *m_currentLeader) - frontBumper;
+    float gap = toBlocker.Length();
+
+    bool blocked = gap <= STATIC_BLOCK_RANGE &&
+                   (gap < 0.01f || forward.Dot(toBlocker * (1.0f / gap)) >= HEADON_FRONT_COS);
+    if (!blocked)
+    {
+        m_staticBlockTimer = 0.0f;
+        return;
+    }
+
+    m_staticBlockTimer += m_deltaTime;
+    if (m_staticBlockTimer < STATIC_BLOCK_TRIGGER)
+        return;
+
+    m_staticBlockTimer = 0.0f;
+    m_acceleration = 0.0f;
+    m_speed = 0.0f;
+    m_isReverse = true;
+    m_reverseEscapeSteer = ComputeReverseEscapeSteer(m_currentLeader->center);
+    m_reverseEscapeTimer = REVERSE_ESCAPE_TIME;
+    DebugConsole::Log(GetName() + ": static block, reversing");
+}
+
 Car::ThreatKind Car::ClassifyFrontThreat() const
 {
     if (m_currentLeader == nullptr)
@@ -2443,6 +2666,12 @@ void Car::UpdateSensors()
 
 bool Car::HandleContactPending()
 {
+    if (m_reverseEscapeTimer > 0.0f) // 후진중엔 회피판단 중단, 조향은 DriveControl이
+    {
+        m_contactPending = false;
+        return true;
+    }
+
     if (!m_contactPending)
         return false;
 
