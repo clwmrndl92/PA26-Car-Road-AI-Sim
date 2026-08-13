@@ -11,8 +11,12 @@
 #include "Utill/DebugConsole.h"
 #include "Utill/Assert.h"
 
-void Car::Init(const CarSpec &spec, const CarPersonality &personality, SimulationState *simState, JPH::Vec3 position)
+void Car::Init(const CarSpec &spec, const CarPersonality &personality, SimulationState *simState, JPH::Vec3 position,
+                float aiStartDelay)
 {
+    m_aiStartDelay = aiStartDelay;
+    m_aiDelayTimer = 0.0f;
+
     SetName(spec.name);
     m_carModel = ModelManager::Get().CreateFromFile(spec.modelPath);
     m_render.SetModel(m_carModel);
@@ -20,6 +24,7 @@ void Car::Init(const CarSpec &spec, const CarPersonality &personality, Simulatio
     m_wheelbase = spec.wheelbase;
     m_halfExtents = spec.halfExtents;
     m_personality = personality;
+    m_maxAccel = m_personality.maxAccel;
     m_jerkUp = m_personality.jerkUp;
     m_jerkDown = m_personality.jerkDown;
 
@@ -59,6 +64,12 @@ void Car::Update(float dt)
         return;
     }
 
+    if (IsAiDelayed())
+    {
+        m_aiDelayTimer += dt;
+        return;
+    }
+
     UpdateMode();
     m_wantSegmentTick = false;
     switch (m_mode)
@@ -79,6 +90,8 @@ void Car::Update(float dt)
 void Car::UpdatePhysics(float dt)
 {
     m_deltaTime = dt;
+    if (IsAiDelayed())
+        return;
     if (m_wantSegmentTick)
         m_vehicleController.Tick(*this);
     UpdateCar();
@@ -87,6 +100,8 @@ void Car::UpdatePhysics(float dt)
 
 void Car::UpdateUI(float dt)
 {
+    if (IsAiDelayed())
+        return;
     UpdateTrail();
     UpdateDebugWindow();
 }
@@ -244,6 +259,17 @@ void Car::Accelerate(float desiredAccel)
     m_planAccelDebug = m_acceleration;
 }
 
+// 도망차는 여유부릴 상황이 아니다
+void Car::FullAccelerateVel(float desiredVelocity)
+{
+    FullAccelerate(m_speedGain * (desiredVelocity - m_speed));
+}
+void Car::FullAccelerate(float desiredAccel)
+{
+    m_acceleration = std::clamp(desiredAccel, -m_maxBrake, m_maxAccel);
+    m_planAccelDebug = m_acceleration;
+}
+
 void Car::Steer(float radian, float steerRamp)
 {
     float maxDelta = steerRamp * m_deltaTime;
@@ -357,8 +383,12 @@ void Car::UpdateCar()
     if (m_reverseEscapeTimer > 0.0f)
     {
         m_reverseEscapeTimer -= m_deltaTime;
-        if (m_reverseEscapeTimer <= 0.0f)
+        float turnedCos = GetForwardAxis().Normalized().Dot(m_reverseEscapeStartFwd);
+        if (m_reverseEscapeTimer <= 0.0f || turnedCos <= REVERSE_ESCAPE_TURN_COS)
+        {
+            m_reverseEscapeTimer = 0.0f;
             m_isReverse = false; // 전진 복귀, 조향은 반응형이 다시 잡는다
+        }
     }
 
     if (m_acceleration == 0.0f)
@@ -399,6 +429,7 @@ void Car::ApplySpecialPersonality()
         bool urgent = m_sirenOn || m_fleeOn;
         m_personality = GetCarPersonality(urgent ? CarPersonalityType::Siren : CarPersonalityType::Cautious);
     }
+    m_maxAccel = m_personality.maxAccel;
     m_jerkUp = m_personality.jerkUp;
     m_jerkDown = m_personality.jerkDown;
 }
@@ -486,6 +517,7 @@ void Car::ApplyMotion()
                 m_speed = 0.0f;
                 m_isReverse = true;
                 m_reverseEscapeSteer = ComputeReverseEscapeSteer(other->GetBodyCenter());
+                m_reverseEscapeStartFwd = GetForwardAxis().Normalized();
                 DebugConsole::Log(GetName() + ": HEAD-ON, reversing");
             }
             m_reverseEscapeTimer = REVERSE_ESCAPE_TIME; // 붙어있는 동안 계속 갱신
@@ -747,6 +779,8 @@ void Car::UpdateDebugWindow()
         else if (UsesReactiveSteer())
             ImGui::Text("ReactiveSteer: slot %.0f deg, danger %.2f", ToDegrees(m_ctxSteerDebugRad),
                         m_ctxSteerDebugDanger);
+        if (UsesReactiveSteer())
+            ImGui::Text("Static block: %.2fs / %.2fs", m_staticBlockTimer, STATIC_BLOCK_TRIGGER);
 
         ImGui::Separator();
         ImGui::Text("Personality (notes/accel.txt A~D)");

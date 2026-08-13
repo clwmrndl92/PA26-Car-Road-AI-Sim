@@ -24,6 +24,13 @@ void VehicleController::Tick(Car &car)
     if (IsFinished())
         return;
 
+    // 후진탈출은 계획 기어를 무시
+    if (car.IsReverseEscaping())
+    {
+        m_segments[m_index]->Tick(car);
+        return;
+    }
+
     // 다음 세그먼트가 지금과 다른 기어를 요구하면, 완전히 멈춘 뒤 기어 변경
     bool wantsReverse = m_segments[m_index]->GetRequiredGear() == ReedsShepp::Gear::Backward;
     if (wantsReverse != car.IsReverse())

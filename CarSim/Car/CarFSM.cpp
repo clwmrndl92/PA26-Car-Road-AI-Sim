@@ -21,9 +21,8 @@ namespace
 
     constexpr float SIREN_DETECT_RADIUS = 40.0f; // 사이렌 감지반경
 
-    constexpr float CHASE_DETECT_RADIUS = 200.0f; // 도망차 탐색반경
     constexpr float CHASE_REPATH_INTERVAL = 1.0f; // 추격경로 갱신주기
-    constexpr float CHASE_BLOCK_RANGE = 20.0f;    // 이 안에서 앞서면 차단
+    constexpr float CHASE_BLOCK_RANGE = 20.0f;     // 이 안에서 앞서면 차단
 
     float NearestBandOffset(const RoadRef &road, float d)
     {
@@ -1251,7 +1250,10 @@ void Car::DriveControl()
     if (m_reverseEscapeTimer > 0.0f) // 정면충돌 후진탈출
     {
         Steer(m_reverseEscapeSteer, REVERSE_STEER_RAMP);
-        AccelerateVel(REVERSE_ESCAPE_SPEED);
+        if (m_fleeOn)
+            FullAccelerateVel(REVERSE_ESCAPE_SPEED);
+        else
+            AccelerateVel(REVERSE_ESCAPE_SPEED);
         return;
     }
 
@@ -1302,6 +1304,10 @@ void Car::DriveControl()
     {
         EmergBrake();
         m_limitDebug = SpeedLimitDebug{"emergRay", 0.0f, 0.0f};
+    }
+    else if (m_fleeOn && m_speed < FLEE_LAUNCH_SPEED && accelIDM > 0.0f)
+    {
+        FullAccelerate(accelIDM); // 출발은 즉시 최대가속
     }
     else
     {
@@ -2499,7 +2505,13 @@ float Car::ComputeContextSteer(const Vec3 &pursuitTarget, float pursuitSteer) co
 // 스윕을 안 쓰니 앞범퍼 근접으로 직접 판정한다.
 void Car::TryStartStaticReverseEscape()
 {
-    if (m_speed > STATIC_BLOCK_SPEED)
+    Vec3 position = GetRigidbodyPosition();
+    Vec3 moved = position - m_staticBlockLastPos;
+    m_staticBlockLastPos = position;
+
+    // 지령속도는 벽에 밀려도 안 떨어진다
+    float actualSpeed = m_deltaTime > 0.0001f ? moved.Length() / m_deltaTime : 0.0f;
+    if (actualSpeed > STATIC_BLOCK_SPEED)
     {
         m_staticBlockTimer = 0.0f;
         return;
@@ -2515,7 +2527,9 @@ void Car::TryStartStaticReverseEscape()
         if (obstacle.isVehicle)
             continue;
 
-        Vec3 toBlocker = VehicleCollision::ClosestPointOnObstacle(frontBumper, obstacle) - frontBumper;
+        // 장애물 y는 바닥값이라 차체 높이가 섞이면 안 된다
+        Vec3 delta = VehicleCollision::ClosestPointOnObstacle(frontBumper, obstacle) - frontBumper;
+        Vec3 toBlocker(delta.GetX(), 0.0f, delta.GetZ());
         float gap = toBlocker.Length();
         if (gap > nearestGap)
             continue;
@@ -2541,6 +2555,7 @@ void Car::TryStartStaticReverseEscape()
     m_speed = 0.0f;
     m_isReverse = true;
     m_reverseEscapeSteer = ComputeReverseEscapeSteer(blocker->center);
+    m_reverseEscapeStartFwd = forward.Normalized();
     m_reverseEscapeTimer = REVERSE_ESCAPE_TIME;
     DebugConsole::Log(GetName() + ": static block, reversing");
 }
@@ -2673,7 +2688,8 @@ void Car::UpdateSensors()
             continue;
         if (std::fabs(other->GetPosition().GetY() - myPosition.GetY()) > VERTICAL_SEPARATION)
             continue;
-        if ((other->GetPosition() - myPosition).Length() > DETECT_RANGE)
+        bool inRange = (other->GetPosition() - myPosition).Length() <= DETECT_RANGE;
+        if (!inRange && !(m_chaseOn && other->m_fleeOn)) // 추격차는 도망차를 거리 무관 인지
             continue;
 
         m_nearbyCars.push_back(other);
@@ -2816,7 +2832,7 @@ bool Car::HasSirenCarBehind() const
 {
     if (m_currentRoad == nullptr)
         return false;
-    if (m_fleeOn) // 도망차는 양보 안함
+    if (m_fleeOn || m_chaseOn) // 도망/추격차는 양보 안함
         return false;
 
     const Spline &ref = m_currentRoad->GetReferenceLine();
@@ -2904,7 +2920,7 @@ bool Car::UpdateSirenWait()
 Car *Car::FindFleeTarget() const
 {
     Car *best = nullptr;
-    float bestDistance = CHASE_DETECT_RADIUS;
+    float bestDistance = std::numeric_limits<float>::max();
 
     for (Car *other : m_nearbyCars)
     {

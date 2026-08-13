@@ -1,6 +1,6 @@
 {
   "nodes": [
-    { "id": 1, "position": [130.0, 0.0, -20.0], "direction": [0.0, 1.0, 0.0], "type": "unknown" },
+    { "id": 1, "position": [133.0, 0.0, -54.0], "direction": [0.0, 1.0, 0.0], "type": "unknown" },
     { "id": 2, "position": [3.0, 0.0, -15.0], "direction": [0.0, 0.0, 1.0], "type": "traffic_light", "roads": [1], "movements": [101, 102], "red_duration": 36.0 },
     { "id": 3, "position": [-3.0, 0.0, 15.0], "direction": [0.0, 0.0, -1.0], "type": "traffic_light", "roads": [3], "phase_offset": 12.0, "movements": [105, 101], "red_duration": 36.0 },
     { "id": 4, "position": [-15.0, 0.0, -3.0], "direction": [1.0, 0.0, 0.0], "type": "traffic_light", "roads": [5], "phase_offset": 24.0, "movements": [107, 106], "red_duration": 36.0 },
@@ -12,12 +12,7 @@
     { "id": 10, "position": [-103.0, 0.0, 3.0], "direction": [-1.0, 0.0, 0.0], "type": "traffic_light", "roads": [5], "phase_offset": 12.0, "movements": [126], "green_duration": 9.0, "red_duration": 24.0 },
     { "id": 11, "position": [-115.0, 0.0, 0.0], "direction": [0.0, 0.0, 1.0], "type": "traffic_light", "roads": [209, 211], "movements": [129, 128, 127], "green_duration": 21.0 },
     { "id": 12, "position": [103.0, 0.0, -3.0], "direction": [1.0, 0.0, 0.0], "type": "traffic_light", "roads": [7], "phase_offset": 12.0, "movements": [131], "green_duration": 9.0, "red_duration": 24.0 },
-    { "id": 13, "position": [115.0, 0.0, 0.0], "direction": [0.0, 0.0, 1.0], "type": "traffic_light", "roads": [213, 215], "movements": [135, 134, 133], "green_duration": 21.0 },
-    { "id": 100, "position": [-122.0, 0.0, 64.0], "direction": [-1.0, 0.0, 0.0], "type": "park", "child": [101, 102, 103, 103] },
-    { "id": 101, "position": [-130.0, 0.0, 67.0], "direction": [0.0, 0.0, -1.0], "type": "park_spot" },
-    { "id": 102, "position": [-135.0, 0.0, 67.0], "direction": [0.0, 0.0, -1.0], "type": "park_spot" },
-    { "id": 103, "position": [-140.0, 0.0, 67.0], "direction": [0.0, 0.0, -1.0], "type": "park_spot" },
-    { "id": 104, "position": [-145.0, 0.0, 67.0], "direction": [0.0, 0.0, -1.0], "type": "park_spot" }
+    { "id": 13, "position": [115.0, 0.0, 0.0], "direction": [0.0, 0.0, 1.0], "type": "traffic_light", "roads": [213, 215], "movements": [135, 134, 133], "green_duration": 21.0 }
   ],
   "obstacles": [],
   "dynamic_obstacles": [],

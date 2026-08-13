@@ -8,6 +8,7 @@ struct CarPersonality
 {
     float speedFactor = 1.0f;         // 목표속도 = 도로 제한속도 * speedFactor (작을수록 신중, 커질수록 과감)
     float headwayFactor = 1.0f;       // IDM 안전거리(s0)·시간간격(T)에 곱하는 계수 (작을수록 바짝 붙음)
+    float maxAccel = (100.0f / 3.6f) / 14.0f; // 최대가속(m/s^2), 0-100km/h 기준 초
     float jerkUp = 4.0f;              // 가속 방향 저크 상한 (m/s^3)
     float jerkDown = 15.0f;           // 제동 방향 저크 상한 (m/s^3)
     float brakeFactor = 1.0f;         // IDM 쾌적감속(b)에 곱하는 계수 (클수록 더 세게 감속)

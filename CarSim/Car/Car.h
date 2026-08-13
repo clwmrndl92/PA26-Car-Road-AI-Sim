@@ -21,7 +21,8 @@ class VehicleSegment;
 class Car : public GameObject
 {
 public:
-    void Init(const CarSpec &spec, const CarPersonality &personality, SimulationState *simState, JPH::Vec3 position = JPH::Vec3::sZero());
+    void Init(const CarSpec &spec, const CarPersonality &personality, SimulationState *simState, JPH::Vec3 position = JPH::Vec3::sZero(),
+              float aiStartDelay = 0.0f);
 
     void UpdatePhysics(float dt) override;
     void Update(float dt) override;
@@ -34,6 +35,7 @@ public:
     Vec3 GetForwardAxis() const;
     float GetDeltaTime() const { return m_deltaTime; }
     float GetSpeed() const { return m_speed; }
+    void SetSpeed(float speed) { m_speed = std::clamp(speed, 0.0f, m_maxSpeed); } // 가속/저크 안 거치고 즉시 세팅
     float GetSteerAngle() const { return m_steerAngle; }
     float GetWheelbase() const { return m_wheelbase; }
 
@@ -69,16 +71,21 @@ public:
 
     void AccelerateVel(float desiredVelocity);
     void Accelerate(float desiredAccel);
+    void FullAccelerateVel(float desiredVelocity); // 저크램프 생략
+    void FullAccelerate(float desiredAccel);
     void EmergBrake();
     void Steer(float desiredRadian, float steerRamp = 1.0f);
     void ChangeGear();
     bool IsReverse() const { return m_isReverse; }
+    bool IsReverseEscaping() const { return m_reverseEscapeTimer > 0.0f; }
 
     void DriveControl();
     float PurePursuit(Vec3 target);
     float Stanley(const Spline &spline);
 
 private:
+    bool IsAiDelayed() const { return !m_isControl && m_aiDelayTimer < m_aiStartDelay; }
+
     void UpdateCar();
     void UpdateWithControl();
     void ApplyMotion();
@@ -320,22 +327,22 @@ private:
         Static,  // 멈춰 있는 장애물 -- 오프셋 회피
     };
 
-    void ApplySpecialPersonality(); // 사이렌/추격/도망 성격 전환
-    void UpdateSensors();                                                            // 장애물 목록 수집
-    bool HandleContactPending();                                                     // 충돌 뒷수습, 최우선
-    Car *FindContactCar(JPH::BodyID otherId) const;                                  // 부딪힌 BodyID -> Car
-    bool IsHeadOnContact(const Car *other) const;                                    // 정면(헤딩 평행)으로 박았나
-    float ComputeReverseEscapeSteer(const Vec3 &blockerCenter) const;                // 후진중 코를 돌릴 조향
-    void TryStartStaticReverseEscape();                                              // 정적장애물에 막히면 후진
-    bool UpdateSirenWait();                                                          // 사이렌차 감지→강제전환/해제, 처리시 true
-    bool HasSirenCarBehind() const;                                                  // 반경 내 뒤쪽 사이렌차 존재?
-    float ComputeSirenStopOffset() const;                                            // 가장 오른쪽 밴드 오른쪽 경계 d
-    bool UpdateChase();                                                              // 추격: 경로갱신+차단정차, 처리시 true
-    Car *FindFleeTarget() const;                                                     // 반경 내 최근접 도망차
-    bool BuildChasePath(Car *target);                                                // 도망차 도로까지 경로 재계산
-    bool IsAheadOfFleeTarget(const Car *target) const;                               // 같은 도로에서 앞질렀나
-    float ComputeChaseBlockOffset(const Car *target) const;                          // 도망차 차로중심 d
-    void ClearChase();                                                               // 추격상태 해제
+    void ApplySpecialPersonality();                                   // 사이렌/추격/도망 성격 전환
+    void UpdateSensors();                                             // 장애물 목록 수집
+    bool HandleContactPending();                                      // 충돌 뒷수습, 최우선
+    Car *FindContactCar(JPH::BodyID otherId) const;                   // 부딪힌 BodyID -> Car
+    bool IsHeadOnContact(const Car *other) const;                     // 정면(헤딩 평행)으로 박았나
+    float ComputeReverseEscapeSteer(const Vec3 &blockerCenter) const; // 후진중 코를 돌릴 조향
+    void TryStartStaticReverseEscape();                               // 정적장애물에 막히면 후진
+    bool UpdateSirenWait();                                           // 사이렌차 감지→강제전환/해제, 처리시 true
+    bool HasSirenCarBehind() const;                                   // 반경 내 뒤쪽 사이렌차 존재?
+    float ComputeSirenStopOffset() const;                             // 가장 오른쪽 밴드 오른쪽 경계 d
+    bool UpdateChase();                                               // 추격: 경로갱신+차단정차, 처리시 true
+    Car *FindFleeTarget() const;                                      // 반경 내 최근접 도망차
+    bool BuildChasePath(Car *target);                                 // 도망차 도로까지 경로 재계산
+    bool IsAheadOfFleeTarget(const Car *target) const;                // 같은 도로에서 앞질렀나
+    float ComputeChaseBlockOffset(const Car *target) const;           // 도망차 차로중심 d
+    void ClearChase();                                                // 추격상태 해제
     // 부채꼴 슬롯 interest/danger로 매프레임 조향각 생성(추격/도망 전용)
     float ComputeContextSteer(const Vec3 &pursuitTarget, float pursuitSteer) const;
     void DecideAvoidance();                                                          // 위협분류→서브모드
@@ -366,15 +373,15 @@ public:
     static constexpr float STOPPED_SPEED = 0.01f;
 
 private:
-    const float m_maxSpeed = 200.0f / 3.6f;           // 200 km/h
-    const float m_maxAccel = (100.0f / 3.6f) / 14.0f; // 0-100 km/h in 14s
-    const float m_maxBrake = (100.0f / 3.6f) / 3.0f;  // 100-0 km/h in 3s
-    float m_speedGain = 2.0f;                         // 속도오차 -> 목표가속 비례게인
-    float m_jerkUp = 4.0f;                            // 가속 저크 상한
-    float m_jerkDown = 15.0f;                         // 제동 저크 상한
-    CarPersonality m_personality;                     // IDM 파라미터에 반영
-    CarPersonality m_prevPersonality;                 // 특수상태 끝나면 복원할 원래 성격
-    bool m_specialPersonalityOn = false;              // 특수 성격 적용중
+    const float m_maxSpeed = 200.0f / 3.6f;          // 200 km/h
+    float m_maxAccel = (100.0f / 3.6f) / 14.0f;      // personality.maxAccel로 갱신됨
+    const float m_maxBrake = (100.0f / 3.6f) / 3.0f; // 100-0 km/h in 3s
+    float m_speedGain = 2.0f;                        // 속도오차 -> 목표가속 비례게인
+    float m_jerkUp = 4.0f;                           // 가속 저크 상한
+    float m_jerkDown = 15.0f;                        // 제동 저크 상한
+    CarPersonality m_personality;                    // IDM 파라미터에 반영
+    CarPersonality m_prevPersonality;                // 특수상태 끝나면 복원할 원래 성격
+    bool m_specialPersonalityOn = false;             // 특수 성격 적용중
 
     float m_wheelbase = 0.0f;
     float m_mass = 1.0f;
@@ -401,8 +408,10 @@ private:
     Car *m_chaseTarget = nullptr;    // 추격중인 도망차, 역참조전 생존확인
     int m_chaseTargetRoadId = -1;    // 바뀌면 즉시 재계획
     float m_lastChasePlanTime = -1000.0f;
-    bool m_isControl = false;        // true면 수동조작
+    bool m_isControl = false; // true면 수동조작
     int m_id = -1;
+    float m_aiStartDelay = 0.0f; // Init에서 지정, 이 시간까지 AI 정지
+    float m_aiDelayTimer = 0.0f;
 
     SimulationState *m_SimState = nullptr;
     Mode m_mode = Mode::Stop;
@@ -470,8 +479,8 @@ private:
     mutable std::vector<Vec3> m_sweepDebugCorners;
     mutable std::vector<Vec3> m_emergRayDebugLines;
     mutable bool m_emergRayDebugBlocked = false;
-    mutable float m_ctxSteerDebugRad = 0.0f;    // 반응형 조향이 고른 슬롯각
-    mutable float m_ctxSteerDebugDanger = 0.0f; // 그 슬롯의 danger
+    mutable float m_ctxSteerDebugRad = 0.0f;          // 반응형 조향이 고른 슬롯각
+    mutable float m_ctxSteerDebugDanger = 0.0f;       // 그 슬롯의 danger
     mutable std::vector<Vec3> m_ctxSteerOpenLines;    // 안전 슬롯 레이(초록)
     mutable std::vector<Vec3> m_ctxSteerBlockedLines; // 위험 슬롯 레이(빨강)
 
@@ -482,24 +491,28 @@ private:
     static constexpr float AVOID_MIN_SHIFT = 0.5f;        // 최소 유효 횡이동
     static constexpr float AVOID_SIM_MIN_SPEED = 3.0f;    // 스윕 최소속도(m/s)
     // 정면충돌 후진탈출(추격/도망 전용)
-    static constexpr float REVERSE_ESCAPE_TIME = 1.2f;    // 후진 지속시간(s)
-    static constexpr float REVERSE_ESCAPE_SPEED = 2.5f;   // 후진 속도(m/s)
+    static constexpr float REVERSE_ESCAPE_TIME = 5.0f;     // 후진 상한(s), 안전장치
+    static constexpr float REVERSE_ESCAPE_TURN_COS = 0.7f; // 코 60도 돌면 탈출
+    static constexpr float REVERSE_ESCAPE_SPEED = 2.5f;    // 후진 속도(m/s)
+    static constexpr float FLEE_LAUNCH_SPEED = 5.0f;       // 이 아래면 출발가속 취급(m/s)
     static constexpr float REVERSE_ESCAPE_STEER = ToRadians(30.0f);
     static constexpr float REVERSE_STEER_RAMP = 2.0f;
     static constexpr float HEADON_PARALLEL_COS = 0.82f; // 헤딩 평행 판정(~35도)
     static constexpr float HEADON_FRONT_COS = 0.5f;     // 앞쪽 60도 안에서 부딪혔나
     // 정적장애물은 접촉이벤트가 없다(Static 바디). IDM이 닿기 전에 세우므로 "막혀 선 시간"으로 판정
-    static constexpr float STATIC_BLOCK_TRIGGER = 0.8f; // 이 시간 막혀 있으면 후진(s)
+    static constexpr float STATIC_BLOCK_TRIGGER = 0.3f; // 이 시간 막혀 있으면 후진(s)
     static constexpr float STATIC_BLOCK_RANGE = 3.0f;   // 앞범퍼 기준 이 안이면 막힘
     static constexpr float STATIC_BLOCK_SPEED = 0.5f;   // 사실상 정지(m/s)
 
     // 물리/판단 틱 다름
     bool m_contactPending = false;
-    float m_reverseEscapeTimer = 0.0f; // >0이면 정면충돌 후진중
-    float m_reverseEscapeSteer = 0.0f; // 후진하며 코를 돌릴 방향
+    float m_reverseEscapeTimer = 0.0f;            // >0이면 정면충돌 후진중
+    float m_reverseEscapeSteer = 0.0f;            // 후진하며 코를 돌릴 방향
+    Vec3 m_reverseEscapeStartFwd = Vec3::sZero(); // 회전량 측정 기준
 
-    float m_staticBlockTimer = 0.0f; // 정적장애물 막힘 시간
-    bool m_stuck = false;            // 못피해 정지
+    float m_staticBlockTimer = 0.0f;           // 정적장애물 막힘 시간
+    Vec3 m_staticBlockLastPos = Vec3::sZero(); // 실제 이동량 측정 기준
+    bool m_stuck = false;                      // 못피해 정지
     ManeuverState m_maneuver;
     float m_speedCap = -1.0f;
 
@@ -515,13 +528,13 @@ private:
     RenderObject m_steerLine;
     RenderObject m_targetMarker;
     RenderObject m_splineRender;
-    RenderObject m_sensorRender;     // 스윕박스 윤곽선(디버그)
-    RenderObject m_emergRayRender;   // 긴급제동 레이(디버그)
+    RenderObject m_sensorRender;          // 스윕박스 윤곽선(디버그)
+    RenderObject m_emergRayRender;        // 긴급제동 레이(디버그)
     RenderObject m_ctxSteerOpenRender;    // 반응형 조향 안전 레이(디버그)
     RenderObject m_ctxSteerBlockedRender; // 반응형 조향 위험 레이(디버그)
-    RenderObject m_parkPathRender;   // Park 계획(RS 경로) 폴리라인
-    RenderObject m_parkTargetMarker; // Park 목표 위치
-    RenderObject m_parkTargetLine;   // Park 목표 방향
+    RenderObject m_parkPathRender;        // Park 계획(RS 경로) 폴리라인
+    RenderObject m_parkTargetMarker;      // Park 목표 위치
+    RenderObject m_parkTargetLine;        // Park 목표 방향
 };
 
 static float CalcMaxSteerAngle(float speed)

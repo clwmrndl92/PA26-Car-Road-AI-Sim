@@ -13,6 +13,7 @@ class SimulationState
 {
 public:
     void Tick(float dt) { m_simTime += dt; } // 전역 시뮬레이션 시계 누적
+    float GetSimTime() const { return m_simTime; }
     // durations는 신호(RoadNode)마다 다르게 줄 수 있다 -- 이 클래스는 전역 시계(m_simTime)만 들고 있다.
     TrafficSignal::Color GetSignalColor(float phaseOffset, float greenDuration, float yellowDuration,
                                         float redDuration) const;

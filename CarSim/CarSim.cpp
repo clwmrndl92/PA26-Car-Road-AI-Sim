@@ -62,7 +62,7 @@ bool CarSim::Init()
     if (!GameApp::Init())
         return false;
 
-    m_RoadDataManager.Init(NAV_DATA_DIR "/data5.json");
+    m_RoadDataManager.Init(NAV_DATA_DIR "/data3.json");
     m_MarkingDataManager.Init(NAV_DATA_DIR "/marking.json");
 
     if (!InitResource())
@@ -138,32 +138,19 @@ bool CarSim::InitResource()
         InitDynamicObstacleRenders();
     }
 
-    // Car 1
-    {
-        auto car = std::make_shared<Car>();
-        car->Init(GetCarSpec(CarType::Car0), GetCarPersonality(CarPersonalityType::Normal), &m_SimState, JPH::Vec3(0.0f, 0.1f, -30.0f));
-
-        // car->SetDestination(m_RoadDataManager.GetNode(1));
-        // std::shared_ptr<RoadNode> dest = m_RoadDataManager.GetRandomDestNode();
-        // if (dest)
-        //     car->SetDestination(dest);
-        car->SetRoaming(true); // 목적지 없이 스플라인 따라 배회
-        car->SetRotation(Vec3(-1, 0, 0));
-
-        m_GameObjects.push_back(car);
-        m_CarObjects.push_back(car);
-        FocusOnObject(car);
-    }
-
-    // // Car 2
+    // // Car 1
     // {
     //     auto car = std::make_shared<Car>();
-    //     car->Init(GetCarSpec(CarType::Car1), &m_SimState, JPH::Vec3(-25.0f, 0.1f, 8.0f));
-    //     car->SetDestination(m_RoadDataManager.GetNode(1));
-    //     car->SetRotation(Vec3(-1, 0, 0));
+    //     car->Init(GetCarSpec(CarType::Jeep), GetCarPersonality(CarPersonalityType::Siren),
+    //               &m_SimState, JPH::Vec3(133.0f, 0.0, -74.0f), 100.0f);
+    //     car->SetSpeed(20.0f);
+    //     car->SetRotation(Vec3(0, 0, 1));
+    //     car->SetRoaming(true);
+    //     car->SetFleeOn(false);
 
     //     m_GameObjects.push_back(car);
     //     m_CarObjects.push_back(car);
+    //     FocusOnObject(car);
     // }
 
     return true;
@@ -460,6 +447,7 @@ void CarSim::UpdateUI(float dt)
             if (isActive)
                 ImGui::PopStyleColor();
         }
+        ImGui::Text("Elapsed: %.1fs", m_SimState.GetSimTime());
     }
     ImGui::End();
 

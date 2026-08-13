@@ -21,16 +21,17 @@ const CarPersonality &GetCarPersonality(CarPersonalityType type)
 {
         // float speedFactor = 1.0f;         // 목표속도 = 도로 제한속도 * speedFactor (작을수록 신중, 커질수록 과감)
         // float headwayFactor = 1.0f;       // IDM 안전거리(s0)·시간간격(T)에 곱하는 계수 (작을수록 바짝 붙음)
+        // float maxAccel = 1.98f;           // 최대가속(m/s^2), 0-100km/h 기준 초
         // float jerkUp = 4.0f;              // 가속 방향 저크 상한 (m/s^3)
         // float jerkDown = 15.0f;           // 제동 방향 저크 상한 (m/s^3)
         // float brakeFactor = 1.0f;         // IDM 쾌적감속(b)에 곱하는 계수 (클수록 더 세게 감속)
         // float politeness = 0.2f;          // MOBIL 이타성 계수 (0=완전 이기주의 ~ 0.5=현실적 양보)
         // float laneChangeLerpAlpha = 0.2f; // 횡오프셋 Lerp 비율 (리플랜 주기마다 목표로 이만큼 이동, 클수록 급하게 붙음)
         static const CarPersonality personalities[] = {
-            CarPersonality{1.0f, 1.0f, 4.0f, 15.0f, 1.0f, 0.2f, 0.2f},  // Normal
-            CarPersonality{1.2f, 0.8f, 6.0f, 20.0f, 1.2f, 0.1f, 0.3f},  // Aggressive
-            CarPersonality{0.8f, 1.2f, 3.0f, 10.0f, 0.8f, 0.3f, 0.1f},  // Cautious
-            CarPersonality{2.0f, 0.5f, 10.0f, 30.0f, 1.2f, 0.1f, 0.4f}, // Siren
+            CarPersonality{1.0f, 1.0f, 1.98f, 4.0f, 15.0f, 1.0f, 0.2f, 0.2f},  // Normal:      0-100km/h 14s
+            CarPersonality{1.2f, 0.8f, 2.52f, 6.0f, 20.0f, 1.2f, 0.1f, 0.3f},  // Aggressive:  0-100km/h 11s
+            CarPersonality{0.8f, 1.2f, 1.63f, 3.0f, 10.0f, 0.8f, 0.3f, 0.1f},  // Cautious:    0-100km/h 17s
+            CarPersonality{2.0f, 0.5f, 4.63f, 10.0f, 30.0f, 1.2f, 0.1f, 0.4f}, // Siren:       0-100km/h 6s
         };
         return personalities[static_cast<size_t>(type)];
 }
