@@ -439,6 +439,10 @@ private:
     bool m_lotEntryHold = false;
     // leg1 목표 pose
     static constexpr float PARK_PRE_LEAD_DISTANCE = 3.0f;
+    // 스팟 반대쪽 랜덤 조향
+    static constexpr float PARK_PRE_YAW_MAX = ToRadians(90.0f);
+    static constexpr float PARK_PRE_SIDE_MAX = 1.5f; // 조향각 비례 측면 오프셋
+    float m_parkPreYaw = 0.0f;                       // 스팟당 1회 추첨
 
     bool m_roaming = true;                         // 목적지 없이 배회
     static constexpr size_t ROAMING_MIN_AHEAD = 3; // 배회 최소 버퍼 수

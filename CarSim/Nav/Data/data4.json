@@ -1,6 +1,6 @@
 {
   "nodes": [
-    { "id": 1, "position": [130.0, 0.0, -20.0], "direction": [0.0, 1.0, 0.0], "type": "unknown" },
+    { "id": 1, "position": [-48.0, 0.0, 6.0], "direction": [-1.0, 0.0, 0.0], "type": "unknown" },
     { "id": 2, "position": [3.0, 0.0, -15.0], "direction": [0.0, 0.0, 1.0], "type": "traffic_light", "roads": [1], "movements": [101, 102], "red_duration": 36.0 },
     { "id": 3, "position": [-3.0, 0.0, 15.0], "direction": [0.0, 0.0, -1.0], "type": "traffic_light", "roads": [3], "phase_offset": 12.0, "movements": [105, 101], "red_duration": 36.0 },
     { "id": 4, "position": [-15.0, 0.0, -3.0], "direction": [1.0, 0.0, 0.0], "type": "traffic_light", "roads": [5], "phase_offset": 24.0, "movements": [107, 106], "red_duration": 36.0 },
@@ -22,7 +22,8 @@
   "obstacles": [
     { "position": [-55.0, 0.0, 17.0], "size": [20.0, 10.0], "height": 50.0, "rotation": 0.0 },
     { "position": [-57.0, 0.0, 39.25], "size": [23.0, 1.0], "height": 1.5, "rotation": 0.0 },
-    { "position": [-55.0, 0.0, 57.0], "size": [30.0, 2.0], "height": 1.5, "rotation": 0.0 }
+    { "position": [-55.0, 0.0, 57.0], "size": [30.0, 2.0], "height": 1.5, "rotation": 0.0 },
+    { "position": [-63.0, 0.0, 52.0], "size": [2.0, 4.0], "height": 1.5, "rotation": 0.0 }
   ],
   "dynamic_obstacles": [],
   "roads": [

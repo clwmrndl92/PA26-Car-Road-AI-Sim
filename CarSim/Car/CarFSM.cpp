@@ -22,7 +22,7 @@ namespace
     constexpr float SIREN_DETECT_RADIUS = 40.0f; // 사이렌 감지반경
 
     constexpr float CHASE_REPATH_INTERVAL = 1.0f; // 추격경로 갱신주기
-    constexpr float CHASE_BLOCK_RANGE = 20.0f;     // 이 안에서 앞서면 차단
+    constexpr float CHASE_BLOCK_RANGE = 20.0f;    // 이 안에서 앞서면 차단
 
     float NearestBandOffset(const RoadRef &road, float d)
     {
@@ -910,7 +910,18 @@ bool Car::ComputeParkPrePose(Vec3 &outPos, float &outAngleRad) const
     float dirSign = GetTravelSign(aisleDirection);
     outPos = bestSpline->GetLookaheadPoint(m_parkSpot->position, PARK_PRE_LEAD_DISTANCE * dirSign);
     float pParam = bestSpline->GetSplinePosition(outPos);
-    outAngleRad = DirectionToAngleRad(bestSpline->GetDirectionAt(pParam) * dirSign);
+    Vec3 pDir = bestSpline->GetDirectionAt(pParam) * dirSign;
+
+    // 스팟 반대쪽으로 틀기
+    Vec3 spotDir = m_parkSpot->direction.Normalized();
+    float spotCross = pDir.GetX() * spotDir.GetZ() - pDir.GetZ() * spotDir.GetX();
+    float yawSign = spotCross > 0.0f ? 1.0f : -1.0f;
+    outAngleRad = DirectionToAngleRad(pDir) + yawSign * m_parkPreYaw;
+
+    // 조향각만큼 옆으로도 밀기
+    Vec3 pLeft(-pDir.GetZ(), 0.0f, pDir.GetX());
+    float sideRatio = PARK_PRE_YAW_MAX > 0.0f ? m_parkPreYaw / PARK_PRE_YAW_MAX : 0.0f;
+    outPos += pLeft * (yawSign * PARK_PRE_SIDE_MAX * sideRatio);
     return true;
 }
 
@@ -979,6 +990,7 @@ bool Car::BeginParkEnterOrRetry()
     while (m_parkSpot != nullptr)
     {
         m_parkLegTries = 0;
+        m_parkPreYaw = PARK_PRE_YAW_MAX * (static_cast<float>(rand()) / static_cast<float>(RAND_MAX));
         if (PlanEnterForCurrentSpot())
             return true;
         if (!ReserveNextParkSpot())
