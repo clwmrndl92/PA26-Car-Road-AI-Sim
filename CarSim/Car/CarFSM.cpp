@@ -1992,6 +1992,10 @@ float Car::ComputeLateralTarget(const IDM::Params &idm,
     LaneNeighbors cur = GatherLaneNeighbors(m_currentRoad, refLine, m_currentBand->centerOffset, m_currentBand->width * 0.5f, myS, dirSign);
     if (cur.leaderCar != nullptr && !cur.leaderCar->IsOnLane(cur.leaderCar->m_currentOffset))
         return m_currentOffset;
+    // 내 차선의 앞/뒤차가 차선변경 중이면 그 차의 목표차로를 예측 못하니 보류
+    if ((cur.leaderCar != nullptr && cur.leaderCar->m_subMode == SubMode::D_LaneChange) ||
+        (cur.followerCar != nullptr && cur.followerCar->m_subMode == SubMode::D_LaneChange))
+        return m_currentBand->centerOffset;
     const Mobil::VehicleState *curLeader = cur.hasLeader ? &cur.leader : &farLeader;
     const Mobil::VehicleState *oldFollower = cur.hasFollower ? &cur.follower : nullptr;
     const Mobil::VehicleState &myLeader = *curLeader;
@@ -2048,6 +2052,10 @@ float Car::ComputeLateralTarget(const IDM::Params &idm,
         if (nbr.leaderCar != nullptr && !nbr.leaderCar->IsOnLane(nbr.leaderCar->m_currentOffset))
             continue;
         if (nbr.hasLeader && std::fabs(nbr.leader.position - myBlockS) < MOBIL_LEADER_ALIGN_GAP)
+            continue;
+        // 옆차선의 앞/뒤차가 차선변경 중이면 거기 끼어들지 않는다
+        if ((nbr.leaderCar != nullptr && nbr.leaderCar->m_subMode == SubMode::D_LaneChange) ||
+            (nbr.followerCar != nullptr && nbr.followerCar->m_subMode == SubMode::D_LaneChange))
             continue;
         const Mobil::VehicleState &newLeader = nbr.hasLeader ? nbr.leader : farLeader;
         const Mobil::VehicleState *newFollower = nbr.hasFollower ? &nbr.follower : nullptr;
@@ -2361,10 +2369,10 @@ float Car::ComputeContextSteer(const Vec3 &pursuitTarget, float pursuitSteer) co
 {
     constexpr int SLOT_COUNT = 11;
     constexpr float FAN_HALF = ToRadians(60.0f);
-    constexpr float TTC_HORIZON = 3.0f;      // 이 시간 밖 위협은 무시
-    constexpr float PROXIMITY_RANGE = 6.0f;  // 접근속도 0이어도 위험한 거리
-    constexpr float DANGER_CUTOFF = 0.35f;   // 이 위 슬롯은 봉쇄로 본다
-    constexpr float RIGHT_BIAS = 0.06f;      // 마주보기 교착 깨기
+    constexpr float TTC_HORIZON = 3.0f;     // 이 시간 밖 위협은 무시
+    constexpr float PROXIMITY_RANGE = 6.0f; // 접근속도 0이어도 위험한 거리
+    constexpr float DANGER_CUTOFF = 0.35f;  // 이 위 슬롯은 봉쇄로 본다
+    constexpr float RIGHT_BIAS = 0.06f;     // 마주보기 교착 깨기
     constexpr float EDGE_FALLOFF = ToRadians(25.0f);
     constexpr float STEER_LOOKAHEAD = 6.0f;
     constexpr float MIN_CLOSING = 0.1f;
@@ -2766,8 +2774,9 @@ void Car::UpdateLaneChange()
     Vec3 sideFrontPivot = OffsetLookaheadPoint(referenceLine, rigidPosition, GetLength(), m_maneuver.laneChangeTarget, reversed);
     bool sideBlocked = VehicleCollision::IsColliding(sidePivot, headingRad, m_obstacles, shape) ||
                        VehicleCollision::IsColliding(sideFrontPivot, headingRad, m_obstacles, shape);
+    bool unsafe = !IsSafeLaneEntry(CurrentRoadRef(), m_maneuver.laneChangeTarget);
 
-    if (sideBlocked && progress < 0.3f)
+    if (progress < 0.3f && (unsafe || sideBlocked))
     {
         SetCurrentOffset(m_maneuver.laneOffset);
         m_maneuver.laneChangeTarget = m_maneuver.laneOffset;
