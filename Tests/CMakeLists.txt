@@ -11,6 +11,7 @@ add_executable(Tests
     TestHarness.cpp
     TrafficSignalTests.cpp
     VehicleCollisionBenchmark.cpp
+    CorridorSweepBenchmark.cpp
     ${CMAKE_SOURCE_DIR}/CarSim/Nav/ReedsShepp.cpp
     ${CMAKE_SOURCE_DIR}/CarSim/Nav/TrafficSignal.cpp
     ${CMAKE_SOURCE_DIR}/CarSim/Nav/VehicleCollision.cpp
