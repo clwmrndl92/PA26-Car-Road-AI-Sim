@@ -457,7 +457,7 @@ namespace ReedsShepp
         constexpr double REVERSE_WEIGHT = 1.75;      // 후진 페널티
         constexpr double TURN_WEIGHT = 1.3;          // 회전 페널티
         constexpr double GEAR_CHANGE_PENALTY = 3.0;  // 기어변경 페널티
-        constexpr double STEER_CHANGE_PENALTY = 1.0; // 회전 방향 변경 페널티
+        constexpr double STEER_CHANGE_PENALTY = 1.5; // 회전 방향 변경 페널티
 
         // 세그먼트 하나의 비용: 실제 거리에 회전/후진 가중치를 곱한다(직진-전진이 가중치 1.0 기준).
         double SegmentCost(const PathElement &e)
@@ -644,7 +644,7 @@ namespace ReedsShepp
     }
 
     std::vector<Leg> GetLegs(const Path &path, const Vec3 &start, float startAngleRad,
-                            float turningRadius, float sampleSpacing)
+                             float turningRadius, float sampleSpacing)
     {
         std::vector<Leg> legs;
         if (path.empty() || turningRadius <= 0.0f || sampleSpacing <= 0.0f)

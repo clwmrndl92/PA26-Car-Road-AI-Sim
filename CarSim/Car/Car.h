@@ -129,17 +129,17 @@ private:
 
         // Drive
         D_Normal,     // 일반 주행
-        D_WaitSignal, // 신호대기
+        D_Pursuit,    // 추격/도망 반응형 주행
         D_Avoid,      // 오프셋 회피주행
         D_LaneChange, // MOBIL 차선변경
         D_SirenWait,  // 사이렌차 양보정차
         D_ChaseBlock, // 도망차 앞 차단정차
 
         // Park
-        P_EXIT,        // 출차
-        P_ENTER_LEG1,  // 입차1: P점까지
-        P_ENTER_LEG2,  // 입차: P -> 스팟
-        P_ENTER_ALIGN, // 입차: 최종 정밀 정렬
+        P_Exit,        // 출차
+        P_Enter_Prep,  // 입차1: P점까지
+        P_Enter,       // 입차: P -> 스팟
+        P_Enter_Align, // 입차: 최종 정밀 정렬
     };
     const char *Car::SubStateToString(SubMode subMode) const
     {
@@ -149,8 +149,8 @@ private:
             return "None";
         case SubMode::D_Normal:
             return "Normal";
-        case SubMode::D_WaitSignal:
-            return "WaitSignal";
+        case SubMode::D_Pursuit:
+            return "Pursuit";
         case SubMode::D_Avoid:
             return "Avoid";
         case SubMode::D_LaneChange:
@@ -159,13 +159,13 @@ private:
             return "SirenWait";
         case SubMode::D_ChaseBlock:
             return "ChaseBlock";
-        case SubMode::P_EXIT:
+        case SubMode::P_Exit:
             return "ParkExit";
-        case SubMode::P_ENTER_LEG1:
+        case SubMode::P_Enter_Prep:
             return "ParkEnterLeg1";
-        case SubMode::P_ENTER_LEG2:
+        case SubMode::P_Enter:
             return "ParkEnterLeg2";
-        case SubMode::P_ENTER_ALIGN:
+        case SubMode::P_Enter_Align:
             return "ParkEnterAlign";
         }
         return "?";
@@ -189,10 +189,11 @@ private:
     bool IsChasing() const { return m_chaseOn && m_sirenOn; } // 대상 잡고 사이렌 켠 상태
     // 추격/도망은 신호·교차로 대기 무시
     bool IgnoresTrafficRules() const { return IsChasing() || m_fleeOn; }
-    // 반응형 조향. 차단/양보는 지정 오프셋이 필요해 제외
-    bool UsesReactiveSteer() const
+    bool UsesReactiveSteer() const { return m_subMode == SubMode::D_Pursuit; }
+    // 기동이 끝났을 때 돌아갈 주행 상태
+    SubMode BaseDriveSubMode() const
     {
-        return IgnoresTrafficRules() && m_subMode != SubMode::D_ChaseBlock && m_subMode != SubMode::D_SirenWait;
+        return IgnoresTrafficRules() ? SubMode::D_Pursuit : SubMode::D_Normal;
     }
     bool TryFindPathAndSetRoad();
 

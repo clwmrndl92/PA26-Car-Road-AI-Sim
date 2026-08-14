@@ -340,7 +340,7 @@ Car::Mode Car::DecideNextMode(const char **reason) const
             *reason = "parking in progress";
             return Mode::Park;
         }
-        if (m_subMode == SubMode::P_EXIT)
+        if (m_subMode == SubMode::P_Exit)
         {
 
             *reason = "normal driving";
@@ -391,7 +391,7 @@ void Car::OnModeEnter(Mode prev)
 
     if (m_mode == Mode::Drive)
     {
-        SetSubMode(SubMode::D_Normal);
+        SetSubMode(BaseDriveSubMode());
         m_planAccelDebug = 0.0f;
 
         m_staticBlockTimer = 0.0f;
@@ -403,14 +403,14 @@ void Car::OnModeEnter(Mode prev)
     }
     else if (m_mode == Mode::Park)
     {
-        SetSubMode(prev == Mode::Stop ? SubMode::P_EXIT : SubMode::P_ENTER_LEG1);
+        SetSubMode(prev == Mode::Stop ? SubMode::P_Exit : SubMode::P_Enter_Prep);
         m_parkPlanPending = true;
         m_parkSequenceActive = true;
     }
     else if (m_mode == Mode::Stop)
     {
 
-        if (prev == Mode::Park && m_subMode == SubMode::P_ENTER_ALIGN)
+        if (prev == Mode::Park && m_subMode == SubMode::P_Enter_Align)
             BeginSegment(std::make_unique<CenterSteerSegment>());
         SetSubMode(SubMode::None);
     }
@@ -683,7 +683,7 @@ void Car::UpdatePark()
         return;
     }
 
-    if (m_subMode == SubMode::P_EXIT)
+    if (m_subMode == SubMode::P_Exit)
     {
 
         m_parkSequenceActive = false;
@@ -718,7 +718,7 @@ void Car::UpdatePark()
     if (m_parkSpot != nullptr)
     {
 
-        if (m_subMode == SubMode::P_ENTER_LEG1)
+        if (m_subMode == SubMode::P_Enter_Prep)
         {
 
             if (m_speed > STOPPED_SPEED)
@@ -736,19 +736,19 @@ void Car::UpdatePark()
                 m_parkLegTries < PARK_MAX_LEG_TRIES && PlanEnterForCurrentSpot())
                 return;
 
-            SetSubMode(SubMode::P_ENTER_LEG2);
+            SetSubMode(SubMode::P_Enter);
             BeginParkSpotLeg();
             return;
         }
 
-        if (m_subMode == SubMode::P_ENTER_LEG2)
+        if (m_subMode == SubMode::P_Enter)
         {
             if (m_speed > STOPPED_SPEED)
             {
                 AccelerateVel(0.0f);
                 return;
             }
-            SetSubMode(SubMode::P_ENTER_ALIGN);
+            SetSubMode(SubMode::P_Enter_Align);
             Vec3 spotTarget = m_parkSpot->position - m_parkSpot->direction.Normalized() * m_wheelbase;
             float spotAngleRad = DirectionToAngleRad(m_parkSpot->direction);
             if (PlanParkLegTo(spotTarget, spotAngleRad, true))
@@ -756,7 +756,7 @@ void Car::UpdatePark()
         }
     }
 
-    if (m_subMode == SubMode::None || m_subMode == SubMode::P_ENTER_ALIGN)
+    if (m_subMode == SubMode::None || m_subMode == SubMode::P_Enter_Align)
     {
         m_parkSequenceActive = false;
         m_destRoad = nullptr;
@@ -771,7 +771,7 @@ void Car::BeginParkPlan()
     Vec3 rigidPosition = m_rigidbody.GetPosition();
     float startAngleRad = DirectionToAngleRad(GetForwardAxis());
 
-    if (m_subMode == SubMode::P_EXIT)
+    if (m_subMode == SubMode::P_Exit)
     {
 
         Vec3 frontPos = GetPosition();
@@ -868,7 +868,7 @@ void Car::BeginParkPlan()
         return;
     }
 
-    if (m_subMode == SubMode::P_ENTER_LEG1)
+    if (m_subMode == SubMode::P_Enter_Prep)
     {
         if (!BeginParkEnterOrRetry())
         {
@@ -935,7 +935,7 @@ bool Car::PlanEnterForCurrentSpot()
         ++m_parkLegTries;
         if (PlanParkLegTo(pPos, pAngleRad))
         {
-            SetSubMode(SubMode::P_ENTER_LEG1);
+            SetSubMode(SubMode::P_Enter_Prep);
             return true;
         }
 
@@ -952,7 +952,7 @@ bool Car::PlanEnterForCurrentSpot()
             float entryAngleRad = DirectionToAngleRad(bestSpline->GetDirectionAt(entryT) * dirSign);
             if (PlanParkLegTo(entryPos, entryAngleRad))
             {
-                SetSubMode(SubMode::P_ENTER_LEG1);
+                SetSubMode(SubMode::P_Enter_Prep);
                 return true;
             }
         }
@@ -968,7 +968,7 @@ bool Car::PlanEnterForCurrentSpot()
     }
     if (PlanParkLegTo(spotTarget, spotAngleRad))
     {
-        SetSubMode(SubMode::P_ENTER_LEG2);
+        SetSubMode(SubMode::P_Enter);
         return true;
     }
     return false;
@@ -1097,17 +1097,22 @@ void Car::UpdateDrive()
     {
         if (IgnoresTrafficRules()) // 횡방향은 반응형 조향이 맡는다
         {
-            if (m_subMode != SubMode::D_Normal)
+            if (m_subMode != SubMode::D_Pursuit)
             {
                 m_maneuver = ManeuverState{};
                 m_staticBlockTimer = 0.0f;
                 m_stuck = false;
-                SetSubMode(SubMode::D_Normal);
+                SetSubMode(SubMode::D_Pursuit);
             }
             TryStartStaticReverseEscape();
         }
         else
         {
+            if (m_subMode == SubMode::D_Pursuit) // 역할 풀리면 일반 주행으로
+            {
+                m_maneuver = ManeuverState{};
+                SetSubMode(SubMode::D_Normal);
+            }
             switch (m_subMode)
             {
             case SubMode::D_Avoid:
@@ -2394,7 +2399,7 @@ float Car::ComputeContextSteer(const Vec3 &pursuitTarget, float pursuitSteer) co
     constexpr float PROXIMITY_RANGE = 6.0f; // 접근속도 0이어도 위험한 거리
     constexpr float DANGER_CUTOFF = 0.35f;  // 이 위 슬롯은 봉쇄로 본다
     constexpr float RIGHT_BIAS = 0.06f;     // 마주보기 교착 깨기
-    constexpr float EDGE_FALLOFF = ToRadians(25.0f);
+    constexpr float EDGE_FALLOFF = ToRadians(30.0f);
     constexpr float STEER_LOOKAHEAD = 6.0f;
     constexpr float MIN_CLOSING = 0.1f;
 
@@ -2924,7 +2929,7 @@ bool Car::UpdateSirenWait()
     {
         m_maneuver = ManeuverState{};
         m_sirenPulledOver = false;
-        SetSubMode(SubMode::D_Normal);
+        SetSubMode(BaseDriveSubMode());
     }
     return false;
 }
@@ -2999,7 +3004,7 @@ void Car::ClearChase()
     if (m_subMode == SubMode::D_ChaseBlock)
     {
         m_maneuver = ManeuverState{};
-        SetSubMode(SubMode::D_Normal);
+        SetSubMode(BaseDriveSubMode());
     }
 }
 
@@ -3040,7 +3045,7 @@ bool Car::UpdateChase()
         if (m_subMode == SubMode::D_ChaseBlock)
         {
             m_maneuver = ManeuverState{};
-            SetSubMode(SubMode::D_Normal);
+            SetSubMode(BaseDriveSubMode());
         }
         return false;
     }
