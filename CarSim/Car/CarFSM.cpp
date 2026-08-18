@@ -475,7 +475,13 @@ namespace
 
         // 코너를 서다/서다로 도는 게 아니라, 마찰원 안에서 브레이킹하며 진입하고
         // 여유가 생기는 만큼 가속하며 탈출하도록 구간 전체를 체이닝해서 푼다.
-        constexpr float SPEED_PREVIEW = 100.0f;
+        //
+        // 미리보는 거리가 고정 100m였는데, 최고속(약 88.9m/s)에서 완전정지까지 필요한
+        // 거리가 v^2/(2*maxBrake) ~= 257m라 100m로는 코너를 발견했을 때 이미 너무 늦다.
+        // 코너 근처에서는 마찰원이 제동 여유를 더 깎기까지 하니 1.5배 여유를 둔다.
+        const float currentSpeedSq = currentSpeed * currentSpeed;
+        const float stopDistance = currentSpeedSq / (2.0f * std::max(1.0f, maxBrake));
+        const float SPEED_PREVIEW = std::max(50.0f, stopDistance * 1.5f);
         constexpr float CURVATURE_MIN = 1.0f / 500.0f;
         constexpr float FRICTION_ACCEL = 8.0f; // 타이어 마찰원 반경(횡/종 공유)
 
@@ -549,8 +555,9 @@ namespace
     void PreviewUpcomingRoad(RacingPlan &plan, const std::vector<RoadRef> &path, size_t pathIndex,
                              float maxSpeed, float currentSpeed, float maxBrake)
     {
-        constexpr float SPEED_PREVIEW = 100.0f;
         const float racingBrake = std::max(1.0f, maxBrake * 0.75f);
+        // 고정 100m는 고속에서 정지거리보다 짧아 제한속도 급변 구간을 늦게 발견했다.
+        const float SPEED_PREVIEW = std::max(50.0f, (currentSpeed * currentSpeed) / (2.0f * racingBrake) * 1.5f);
         float distanceToRoad = plan.remainingDistance;
 
         for (size_t pathI = pathIndex + 1;
@@ -769,15 +776,18 @@ bool Car::CheckPath()
     constexpr float LANE_TRANSITION_THRESHOLD = 2.0f;
 
     Vec3 position = GetPosition();
-    auto roadEnd = [&]() -> Vec3
+    // 참조선(중심선) 기준 arc-length로 도로 끝을 판단한다 -- m_currentSpline은
+    // m_currentOffset만큼 민 평행곡선이라, 레이싱 라인이 차를 그 오프셋과 다른 쪽으로
+    // 멀리 태워가면(코너에서 흔함) 이 평행곡선의 끝점이 실제 차 위치와 동떨어져서
+    // roadEndDistance가 계속 커 보인다 -- 도로를 다 지나도 전환이 안 걸리는 원인이었다.
+    auto remainingOnRoad = [](const Spline &referenceLine, const Vec3 &pos) -> float
     {
-        const std::vector<Vec3> &pts = m_currentSpline.GetSplinePoints();
-        return pts.empty() ? position : pts.back();
+        float t = std::clamp(referenceLine.GetSplinePosition(pos), 0.0f, 1.0f);
+        return referenceLine.GetLength() * (1.0f - t);
     };
 
-    Vec3 projectedPosition = m_currentSpline.GetLookaheadPoint(position, 0.0f);
-    float roadEndDistance = (roadEnd() - projectedPosition).Length();
-    while (roadEndDistance < LANE_TRANSITION_THRESHOLD)
+    float remaining = remainingOnRoad(m_currentRoad->GetReferenceLine(), position);
+    while (remaining < LANE_TRANSITION_THRESHOLD)
     {
         if (m_pathIndex + 1 >= m_path.size())
         {
@@ -791,15 +801,13 @@ bool Car::CheckPath()
 
         ++m_pathIndex;
         const RoadRef &next = m_path[m_pathIndex];
-        bool hasLaneMapping = false;
-        float nextOffset = RoadDataManager::Get().ResolveConnectingOffset(CurrentRoadRef(), next, m_currentOffset, &hasLaneMapping);
-
-        if (!hasLaneMapping)
-            nextOffset = ComputeReferenceOffset(next.road->GetReferenceLine(), position);
+        // 레이싱 라인이 차를 어디로 태워왔든, 항상 실측 위치로 다음 도로의 오프셋/밴드를
+        // 잡는다. 정적 차선 연결 매핑(ResolveConnectingOffset)은 차선 중앙을 따라가는
+        // 일반 주행용이라 레이싱 라인과 무관하게 옆 차선으로 튀어 버린다.
+        float nextOffset = ComputeReferenceOffset(next.road->GetReferenceLine(), position);
 
         SetCurrentRoad(next.road, nextOffset);
-        projectedPosition = m_currentSpline.GetLookaheadPoint(position, 0.0f);
-        roadEndDistance = (roadEnd() - projectedPosition).Length();
+        remaining = remainingOnRoad(next.road->GetReferenceLine(), position);
     }
     return true;
 }
