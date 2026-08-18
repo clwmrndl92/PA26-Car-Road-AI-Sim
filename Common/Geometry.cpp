@@ -863,7 +863,7 @@ namespace Geometry
     }
 
     GeometryData CreateDashedRibbon(const std::vector<DirectX::XMFLOAT3> &centerPoints, float width,
-                                    float dashLength, float dashGap)
+                                    float dashLength, float dashGap, bool startInDash)
     {
         using namespace DirectX;
 
@@ -904,9 +904,10 @@ namespace Geometry
 
         // Walk the centerline by arc length, alternating "on" (dash) / "off" (gap) phases of
         // fixed length; each "on" phase becomes its own sub-polyline fed through CreateRibbon.
-        bool inDash = true;
+        bool inDash = startInDash;
         float phaseDistance = 0.0f;
-        currentDash.push_back(centerPoints[0]);
+        if (inDash)
+            currentDash.push_back(centerPoints[0]);
 
         for (size_t i = 0; i + 1 < centerPoints.size(); ++i)
         {

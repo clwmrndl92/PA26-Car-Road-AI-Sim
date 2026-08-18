@@ -62,7 +62,7 @@ bool CarSim::Init()
     if (!GameApp::Init())
         return false;
 
-    m_RoadDataManager.Init(NAV_DATA_DIR "/data4.json");
+    m_RoadDataManager.Init(NAV_DATA_DIR "/data6.json");
     m_MarkingDataManager.Init(NAV_DATA_DIR "/marking.json");
 
     if (!InitResource())
@@ -156,11 +156,17 @@ bool CarSim::InitResource()
 
 void CarSim::SpawnCar(CarType type, CarPersonalityType personality)
 {
-    auto spawnNode = m_RoadDataManager.GetRandomDestNode();
-    if (!spawnNode)
+    const std::vector<std::shared_ptr<Road>> &roads = m_RoadDataManager.GetRoads();
+    if (roads.empty())
         return;
 
-    SpawnCarAt(spawnNode->position, spawnNode->direction, type, personality);
+    const std::shared_ptr<Road> &road = roads[rand() % roads.size()];
+    const Spline &ref = road->GetReferenceLine();
+    if (ref.GetSplinePoints().size() < 2)
+        return;
+
+    float t = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
+    SpawnCarAt(ref.GetPositionAt(t), ref.GetDirectionAt(t), type, personality);
 }
 
 std::shared_ptr<Car> CarSim::SpawnCarAt(const Vec3 &position, const Vec3 &direction, CarType type,
@@ -246,8 +252,6 @@ void CarSim::RemoveAllCars()
 
 void CarSim::SpawnManualCar(CarType type)
 {
-    // 기존 사용자 조작 차가 있으면 그 자리(위치/방향)를 기억해두고 제거한 뒤 같은 자리에 새 차종으로 소환한다.
-    // 처음 소환하는 경우엔 초기 AI 차(Car 1, (0,0.1,-30) 부근에서 -X 방향)와 안 겹치도록 그 뒤(+X쪽)에 둔다.
     JPH::Vec3 spawnPos(15.0f, 0.1f, -30.0f);
     Vec3 spawnDir(-1.0f, 0.0f, 0.0f);
     if (m_ManualCar)
@@ -255,8 +259,6 @@ void CarSim::SpawnManualCar(CarType type)
         Vec3 pos = m_ManualCar->GetPosition();
         spawnPos = JPH::Vec3(pos.GetX(), pos.GetY(), pos.GetZ());
         spawnDir = m_ManualCar->GetForwardAxis();
-        // 복사본으로 넘긴다: RemoveCar가 내부에서 m_ManualCar를 reset하므로, 멤버를 그대로 참조로 넘기면
-        // reset 직후 같은 객체를 가리키는 참조가 null이 되어 곧이은 car->Destroy()가 크래시난다.
         std::shared_ptr<Car> oldManualCar = m_ManualCar;
         RemoveCar(oldManualCar);
     }
@@ -650,9 +652,28 @@ void CarSim::InitRoadRenderer()
                 }
                 if (poly.size() < 2)
                     return;
-                GeometryData geo = mk.type == BoundaryMark::Type::Broken
-                                       ? Geometry::CreateDashedRibbon(poly, mk.width, 3.0f, 5.0f)
-                                       : Geometry::CreateRibbon(poly, mk.width);
+                if (mk.type == BoundaryMark::Type::Broken)
+                {
+                    constexpr float kDashLen = 3.0f; // 하양:빨강 = 1:1
+                    GeometryData whiteGeo = Geometry::CreateDashedRibbon(poly, mk.width, kDashLen, kDashLen);
+                    if (!whiteGeo.vertices.empty())
+                    {
+                        Model *pm = m_ModelManager.CreateFromGeometry(name, whiteGeo);
+                        pm->materials[0].Set<XMFLOAT4>("$DiffuseColor", roadMarkColor(mk.color));
+                        pm->materials[0].Set<float>("$Opacity", 1.0f);
+                        m_RoadRenders.emplace_back().SetModel(pm);
+                    }
+                    GeometryData redGeo = Geometry::CreateDashedRibbon(poly, mk.width, kDashLen, kDashLen, false);
+                    if (!redGeo.vertices.empty())
+                    {
+                        Model *pmRed = m_ModelManager.CreateFromGeometry(name + "_gap", redGeo);
+                        pmRed->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f));
+                        pmRed->materials[0].Set<float>("$Opacity", 1.0f);
+                        m_RoadRenders.emplace_back().SetModel(pmRed);
+                    }
+                    return;
+                }
+                GeometryData geo = Geometry::CreateRibbon(poly, mk.width);
                 if (geo.vertices.empty())
                     return;
                 Model *pm = m_ModelManager.CreateFromGeometry(name, geo);

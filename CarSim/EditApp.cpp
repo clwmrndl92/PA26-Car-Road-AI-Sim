@@ -305,9 +305,28 @@ void EditApp::RebuildRenderObjects()
                 std::vector<XMFLOAT3> poly = OffsetReferencePolyline(road.referenceLine, dd, 0.06f);
                 if (poly.size() < 2)
                     return;
-                GeometryData geo = mk.type == BoundaryMarkType::Broken
-                                       ? Geometry::CreateDashedRibbon(poly, mk.width, 3.0f, 5.0f)
-                                       : Geometry::CreateRibbon(poly, mk.width);
+                if (mk.type == BoundaryMarkType::Broken)
+                {
+                    constexpr float kDashLen = 3.0f; // 하양:빨강 = 1:1
+                    GeometryData whiteGeo = Geometry::CreateDashedRibbon(poly, mk.width, kDashLen, kDashLen);
+                    if (!whiteGeo.vertices.empty())
+                    {
+                        Model *pm = m_ModelManager.CreateFromGeometry(name, whiteGeo);
+                        pm->materials[0].Set<XMFLOAT4>("$DiffuseColor", roadMarkColor(mk.color));
+                        pm->materials[0].Set<float>("$Opacity", 1.0f);
+                        m_RoadRenders.emplace_back().SetModel(pm);
+                    }
+                    GeometryData redGeo = Geometry::CreateDashedRibbon(poly, mk.width, kDashLen, kDashLen, false);
+                    if (!redGeo.vertices.empty())
+                    {
+                        Model *pmRed = m_ModelManager.CreateFromGeometry(name + "_gap", redGeo);
+                        pmRed->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f));
+                        pmRed->materials[0].Set<float>("$Opacity", 1.0f);
+                        m_RoadRenders.emplace_back().SetModel(pmRed);
+                    }
+                    return;
+                }
+                GeometryData geo = Geometry::CreateRibbon(poly, mk.width);
                 if (geo.vertices.empty())
                     return;
                 Model *pm = m_ModelManager.CreateFromGeometry(name, geo);

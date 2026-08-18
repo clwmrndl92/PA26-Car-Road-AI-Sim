@@ -69,8 +69,11 @@ namespace Geometry
 
     // Create a dashed version of CreateRibbon: walks the centerline by arc length, alternating
     // dashLength (drawn) / dashGap (empty) phases, and merges each drawn dash's ribbon into one mesh.
+    // startInDash=false begins in the gap phase instead, so calling this with dashLength/dashGap
+    // swapped and startInDash=false yields the exact complement of the startInDash=true call
+    // (useful for filling the gaps with a second color).
     GeometryData CreateDashedRibbon(const std::vector<DirectX::XMFLOAT3>& centerPoints, float width,
-                                     float dashLength, float dashGap);
+                                     float dashLength, float dashGap, bool startInDash = true);
 
 }
 
