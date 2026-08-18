@@ -175,7 +175,7 @@ public:
     Vec3 GetTravelEnd(const shared_ptr<Road> &road) const;
 
 public:
-    static constexpr float ROAD_WIDTH = 4.0f; // 차선 폭
+    static constexpr float ROAD_WIDTH = 12.0f; // 차선 폭
 
 private:
     // 명시 링크(successor, junction이면 connection)로 successor 그래프를 짠다.

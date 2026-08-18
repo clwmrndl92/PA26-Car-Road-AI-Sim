@@ -119,7 +119,7 @@ bool CarSim::InitResource()
     //
     // Road
     {
-        constexpr float ROAD_SIZE = 2000.0f;
+        constexpr float ROAD_SIZE = 5000.0f;
 
         auto road = std::make_shared<GameObject>();
         road->SetName("Ground");
@@ -376,13 +376,13 @@ void CarSim::UpdateCamera(float dt)
         right.y = 0.0f;
 
         if (ImGui::IsKeyDown(ImGuiKey_W))
-            cam1st->Translate(forward, dt * 10.0f);
+            cam1st->Translate(forward, dt * 50.0f);
         if (ImGui::IsKeyDown(ImGuiKey_S))
-            cam1st->Translate(forward, -dt * 10.0f);
+            cam1st->Translate(forward, -dt * 50.0f);
         if (ImGui::IsKeyDown(ImGuiKey_A))
-            cam1st->Translate(right, -dt * 10.0f);
+            cam1st->Translate(right, -dt * 50.0f);
         if (ImGui::IsKeyDown(ImGuiKey_D))
-            cam1st->Translate(right, dt * 10.0f);
+            cam1st->Translate(right, dt * 50.0f);
         if (ImGui::IsKeyDown(ImGuiKey_Q))
             cam1st->Translate(XMFLOAT3(0, -1, 0), dt * 10.0f);
         if (ImGui::IsKeyDown(ImGuiKey_E))

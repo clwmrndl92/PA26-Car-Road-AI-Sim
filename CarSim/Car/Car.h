@@ -15,9 +15,28 @@ class SimulationState;
 class Spline;
 class VehicleSegment;
 
+// 최소 곡률 QP로 미리 푼 레이싱 라인. 도로 문맥이 바뀔 때만 다시 만든다.
+struct RaceLine
+{
+    std::vector<Vec3> points; // 월드 좌표
+    std::vector<float> arcLength;
+    std::vector<float> curvature;
+    float drawFromS = 0.0f; // 디버그로 그릴 구간(문맥 도로 제외)
+    float drawToS = 0.0f;
+};
+
 class Car : public GameObject
 {
 public:
+    // 코너에서 에이펙스를 어디에 찍을지
+    enum class ApexStrategy
+    {
+        Early, // 일찍 -- 진입 빠르고 탈출 좁음
+        Apex,  // 곡률 정점 그대로
+        Late,  // 늦게 -- 탈출 넓고 가속 유리
+        Count,
+    };
+
     void Init(const CarSpec &spec, const CarPersonality &personality, SimulationState *simState, JPH::Vec3 position = JPH::Vec3::sZero(),
               float aiStartDelay = 0.0f);
 
@@ -56,14 +75,12 @@ public:
 
     void AccelerateVel(float desiredVelocity);
     void Accelerate(float desiredAccel);
-    void EmergBrake();
     void Steer(float desiredRadian, float steerRamp = 1.0f);
     void ChangeGear();
     bool IsReverse() const { return m_isReverse; }
 
     void DriveControl();
-    float PurePursuit(Vec3 target);
-    float Stanley(const Spline &spline);
+    float Stanley(Vec3 pathPoint, Vec3 pathDirection);
 
 private:
     bool IsAiDelayed() const { return !m_isControl && m_aiDelayTimer < m_aiStartDelay; }
@@ -80,6 +97,7 @@ private:
     void RebuildTrailRender(RenderObject &render, const std::deque<DirectX::XMFLOAT3> &trail,
                             const std::string &name, const DirectX::XMFLOAT4 &color);
     void RebuildSplineRender();
+    void RebuildRacingLineRender();
 
 #pragma region FSM
     enum class Mode
@@ -140,13 +158,13 @@ private:
 
     void UpdateDrive();
     bool CheckPath();
+    bool IsOutsideDrivingBands() const;
     bool CanEnterFromCurrentBand(const RoadRef &next) const;
     bool RepathFromCurrentBand();
 
     void UpdateHorn(float dt);
     bool IsHornSituation() const;
     bool KnowsRedSignalAhead() const;
-    bool IsEmergencyRayBlocked() const;
 
 #pragma endregion
 
@@ -162,25 +180,25 @@ private:
     float ComputeContextSteer(const Vec3 &pursuitTarget, float pursuitSteer) const;
     Vec3 GetBodyCenter() const;                             // OBB 판정 기준점
     VehicleCollision::Obstacle MakeVehicleObstacle() const; // 이 차의 차체 OBB를 장애물 하나로
-    void RebuildEmergRayRender();
     void RebuildCtxSteerRender();
 #pragma endregion
 
 private:
-    const float m_maxSpeed = 200.0f / 3.6f;          // 200 km/h
-    float m_maxAccel = (100.0f / 3.6f) / 14.0f;      // personality.maxAccel로 갱신됨
-    const float m_maxBrake = (100.0f / 3.6f) / 3.0f; // 100-0 km/h in 3s
-    float m_speedGain = 2.0f;                        // 속도오차 -> 목표가속 비례게인
-    float m_jerkUp = 4.0f;                           // 가속 저크 상한
-    float m_jerkDown = 15.0f;                        // 제동 저크 상한
+    // Track-focused GT racing specification.
+    const float m_maxSpeed = 320.0f / 3.6f;          // 최고속도 320 km/h
+    float m_maxAccel = (100.0f / 3.6f) / 3.0f;       // 0-100 km/h 약 3.0초
+    const float m_maxBrake = (100.0f / 3.6f) / 1.8f; // 100-0 km/h 약 1.8초 (약 1.57 g)
+    float m_speedGain = 3.5f;                        // 목표속도 변화에 빠르게 풀스로틀/브레이크
+    float m_jerkUp = 30.0f;                          // 가속 저크 상한 (m/s^3)
+    float m_jerkDown = 60.0f;                        // 제동 저크 상한 (m/s^3)
     CarPersonality m_personality;
 
     float m_wheelbase = 0.0f;
     float m_mass = 1.0f;
     Vec3 m_halfExtents = Vec3::sZero();       // x=반폭 z=반길이
-    float m_maxSteerAngle = ToRadians(45.0f); // 최대 조향각 (45도)
-    float m_stanleyGain = 1.0f;               // Stanley 횡오차 게인 k
-    float m_stanleySoft = 1.0f;               // 저속 발산 방지
+    float m_maxSteerAngle = ToRadians(35.0f); // 저속 최대 조향각
+    float m_stanleyGain = 2.5f;               // 고속에서도 레이싱 라인을 붙잡는 횡오차 게인
+    float m_stanleySoft = 2.0f;               // 저속 조향 진동 억제
 
     float m_speed = 0.0f;
     float m_acceleration = 0.0f;
@@ -216,14 +234,11 @@ private:
     Model *m_carModel = nullptr;                   // 경적시 색 변경용
 
     static constexpr float BEHAVIOR_PLAN_INTERVAL = 0.2f; // 행동계획 주기
-    static constexpr float SAFE_GAP = 2.0f;               // 긴급제동 레이 여유거리
 
     float m_lastBehaviorPlanTime = -1000.0f; // 첫 판단 즉시 실행되게
     float m_planAccelDebug = 0.0f;           // 매프레임 가속도
     std::vector<VehicleCollision::Obstacle> m_obstacles;
-    std::vector<Car *> m_nearbyCars; // 재수집 비용 회피 캐시
-    mutable std::vector<Vec3> m_emergRayDebugLines;
-    mutable bool m_emergRayDebugBlocked = false;
+    std::vector<Car *> m_nearbyCars;                  // 재수집 비용 회피 캐시
     mutable float m_ctxSteerDebugRad = 0.0f;          // 반응형 조향이 고른 슬롯각
     mutable float m_ctxSteerDebugDanger = 0.0f;       // 그 슬롯의 danger
     mutable std::vector<Vec3> m_ctxSteerOpenLines;    // 안전 슬롯 레이(초록)
@@ -241,14 +256,26 @@ private:
     RenderObject m_steerLine;
     RenderObject m_targetMarker;
     RenderObject m_splineRender;
-    RenderObject m_emergRayRender;        // 긴급제동 레이(디버그)
     RenderObject m_ctxSteerOpenRender;    // 반응형 조향 안전 레이(디버그)
     RenderObject m_ctxSteerBlockedRender; // 반응형 조향 위험 레이(디버그)
+    RenderObject m_racingLineRender; // 레이싱 라인(디버그)
+    RaceLine m_raceLine;
+    std::vector<const Road *> m_racingLineRoads; // 재생성 판단용
+    ApexStrategy m_apexStrategy = ApexStrategy::Late;
+    ApexStrategy m_racingLineStrategy = ApexStrategy::Late; // 라인이 만들어진 전략
 };
 
-static float CalcMaxSteerAngle(float speed)
+static float CalcMaxSteerAngle(float speed, float wheelbase)
 {
-    constexpr float LOW_SPEED_CUTOFF = 18.26f / 3.6f;
-    constexpr float MAX_STEER_ANGLE = ToRadians(45.0f);
-    return (speed <= LOW_SPEED_CUTOFF) ? MAX_STEER_ANGLE : 20.2f / (speed * speed);
+    constexpr float MAX_STEER_ANGLE = ToRadians(35.0f);
+    constexpr float MAX_LATERAL_ACCEL = 15.0f; // 약 1.5 g 타이어 그립 한계
+    constexpr float MIN_WHEELBASE = 0.1f;
+
+    wheelbase = std::max(wheelbase, MIN_WHEELBASE);
+    float transitionSpeed = std::sqrt(MAX_LATERAL_ACCEL * wheelbase / std::tan(MAX_STEER_ANGLE));
+    if (speed <= transitionSpeed)
+        return MAX_STEER_ANGLE;
+
+    // bicycle model: lateral accel = v^2 * tan(steer) / wheelbase
+    return std::atan(MAX_LATERAL_ACCEL * wheelbase / (speed * speed));
 }

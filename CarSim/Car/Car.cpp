@@ -23,9 +23,6 @@ void Car::Init(const CarSpec &spec, const CarPersonality &personality, Simulatio
     m_wheelbase = spec.wheelbase;
     m_halfExtents = spec.halfExtents;
     m_personality = personality;
-    m_maxAccel = m_personality.maxAccel;
-    m_jerkUp = m_personality.jerkUp;
-    m_jerkDown = m_personality.jerkDown;
 
     DirectX::XMFLOAT3 fwd = m_transform.GetForwardAxis();
     m_transform.SetPosition(position.GetX() - fwd.x * m_wheelbase,
@@ -138,7 +135,8 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
     }
 
     if ((m_rearTrailRender.GetModel() || m_frontTrailRender.GetModel() || m_splineRender.GetModel() ||
-         m_emergRayRender.GetModel() || m_ctxSteerOpenRender.GetModel() || m_ctxSteerBlockedRender.GetModel()))
+         m_ctxSteerOpenRender.GetModel() || m_ctxSteerBlockedRender.GetModel() ||
+         m_racingLineRender.GetModel()))
     {
         if (auto *pBasic = dynamic_cast<BasicEffect *>(&effect))
         {
@@ -149,12 +147,12 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
                 m_frontTrailRender.Draw(context, effect);
             if (m_splineRender.GetModel())
                 m_splineRender.Draw(context, effect);
-            if (m_emergRayRender.GetModel())
-                m_emergRayRender.Draw(context, effect);
             if (m_ctxSteerOpenRender.GetModel())
                 m_ctxSteerOpenRender.Draw(context, effect);
             if (m_ctxSteerBlockedRender.GetModel())
                 m_ctxSteerBlockedRender.Draw(context, effect);
+            if (m_racingLineRender.GetModel())
+                m_racingLineRender.Draw(context, effect);
             pBasic->SetRenderDefault();
         }
     }
@@ -210,12 +208,6 @@ void Car::SetRotation(Vec3 direction)
     Vec3 frontAxle = GetPosition();
     GameObject::SetRotation(rotation);
     SetPosition(frontAxle);
-}
-
-void Car::EmergBrake()
-{
-    m_acceleration = -m_maxBrake;
-    m_planAccelDebug = -m_maxBrake;
 }
 
 void Car::AccelerateVel(float desiredVelocity)
@@ -292,7 +284,7 @@ void Car::UpdateCar()
 
     m_speed = std::clamp(m_speed, 0.0f, m_maxSpeed);
 
-    m_maxSteerAngle = CalcMaxSteerAngle(m_speed);
+    m_maxSteerAngle = CalcMaxSteerAngle(m_speed, m_wheelbase);
     m_steerAngle = std::clamp(m_steerAngle, -m_maxSteerAngle, m_maxSteerAngle);
 }
 
@@ -362,39 +354,12 @@ JPH::Vec3 Car::ComputeDesiredVelocity() const
     return JPH::Vec3(fwd.x * signedSpeed, vy > 0.0f ? 0.0f : vy, fwd.z * signedSpeed);
 }
 
-float Car::PurePursuit(Vec3 target)
-{
-    Vec3 rigidPosition = m_rigidbody.GetPosition();
-    Vec3 targetVec = target - rigidPosition;
-
-    float distance = targetVec.Length();
-
-    if (distance < 0.001f)
-        return 0.0f;
-
-    Vec3 carFwd = ToVec3(m_transform.GetForwardAxis()).Normalized();
-    Vec3 carRight = ToVec3(m_transform.GetRightAxis()).Normalized();
-
-    float dotProd = carFwd.Dot(targetVec) / distance;
-    dotProd = std::clamp(dotProd, -1.0f, 1.0f);
-    float headingError = acosf(dotProd);
-
-    float directionSign = (carRight.Dot(targetVec) > 0.0f) ? 1.0f : -1.0f;
-
-    float steeringAngle = atanf((2.0f * m_wheelbase * sinf(headingError)) / distance);
-
-    return steeringAngle * directionSign;
-}
-
-float Car::Stanley(const Spline &spline)
+float Car::Stanley(Vec3 pathPoint, Vec3 pathDirection)
 {
     Vec3 frontAxle = GetPosition();
-    float t = spline.GetSplinePosition(frontAxle);
-    Vec3 pathPoint = spline.GetPositionAt(t);
-    Vec3 pathDir = spline.GetDirectionAt(t).Normalized();
-
     Vec3 carFwd = ToVec3(m_transform.GetForwardAxis()).Normalized();
     Vec3 carRight = ToVec3(m_transform.GetRightAxis()).Normalized();
+    Vec3 pathDir = pathDirection.LengthSq() > 0.000001f ? pathDirection.Normalized() : carFwd;
 
     float headingError = atan2f(carRight.Dot(pathDir), carFwd.Dot(pathDir));
 
@@ -491,9 +456,16 @@ void Car::UpdateDebugWindow()
                         m_ctxSteerDebugDanger);
 
         ImGui::Separator();
+        ImGui::Text("Racing Strategy");
+        static const char *apexNames[] = {"1. Early Apex", "2. Geometric Apex", "3. Late Apex"};
+        int apexIndex = static_cast<int>(m_apexStrategy);
+        if (ImGui::Combo("Apex", &apexIndex, apexNames, IM_ARRAYSIZE(apexNames)))
+            m_apexStrategy = static_cast<ApexStrategy>(apexIndex);
+
+        ImGui::Separator();
         ImGui::Text("Personality (notes/accel.txt A~D)");
-        ImGui::SliderFloat("Jerk Up Max", &m_jerkUp, 0.5f, 10.0f);
-        ImGui::SliderFloat("Jerk Down Max", &m_jerkDown, 1.0f, 30.0f);
+        ImGui::SliderFloat("Jerk Up Max", &m_jerkUp, 5.0f, 50.0f);
+        ImGui::SliderFloat("Jerk Down Max", &m_jerkDown, 10.0f, 100.0f);
     }
     ImGui::End();
 }
@@ -580,43 +552,39 @@ void Car::RebuildSplineRender()
     m_splineRender.SetModel(pModel);
 }
 
-void Car::RebuildEmergRayRender()
+void Car::RebuildRacingLineRender()
 {
-    if (m_emergRayDebugLines.empty())
+    if (m_raceLine.points.size() < 2)
     {
-        m_emergRayRender.SetModel(nullptr);
+        m_racingLineRender.SetModel(nullptr);
         return;
     }
 
-    constexpr float DEBUG_LINE_HEIGHT = 0.2f; // 스윕박스보다 살짝 위(겹침 방지)
+    constexpr float RACING_LINE_HEIGHT = 0.35f; // 다른 디버그선 위로
 
-    GeometryData geoData;
-    geoData.vertices.reserve(m_emergRayDebugLines.size());
-    for (const Vec3 &point : m_emergRayDebugLines)
+    // 문맥용으로만 붙인 앞뒤 도로는 빼고 그린다
+    std::vector<DirectX::XMFLOAT3> points;
+    points.reserve(m_raceLine.points.size());
+    for (size_t i = 0; i < m_raceLine.points.size(); ++i)
     {
-        DirectX::XMFLOAT3 p = ToXMFLOAT3(point);
-        p.y += DEBUG_LINE_HEIGHT;
-        geoData.vertices.push_back(p);
+        float s = m_raceLine.arcLength[i];
+        if (s < m_raceLine.drawFromS || s > m_raceLine.drawToS)
+            continue;
+        DirectX::XMFLOAT3 p = ToXMFLOAT3(m_raceLine.points[i]);
+        p.y += RACING_LINE_HEIGHT;
+        points.push_back(p);
     }
-    geoData.normals.assign(geoData.vertices.size(), DirectX::XMFLOAT3(0.0f, 1.0f, 0.0f));
-    geoData.texcoords.assign(geoData.vertices.size(), DirectX::XMFLOAT2(0.0f, 0.0f));
-
-    std::vector<uint32_t> indices;
-    size_t rayCount = m_emergRayDebugLines.size() / 2;
-    indices.reserve(rayCount * 2);
-    for (size_t ray = 0; ray < rayCount; ++ray)
+    if (points.size() < 2)
     {
-        indices.push_back(static_cast<uint32_t>(ray * 2));
-        indices.push_back(static_cast<uint32_t>(ray * 2 + 1));
+        m_racingLineRender.SetModel(nullptr);
+        return;
     }
-    geoData.indices16.assign(indices.begin(), indices.end());
 
-    Model *pModel = ModelManager::Get().CreateFromGeometry("__emerg_ray__:" + GetName(), geoData);
-    DirectX::XMFLOAT4 color = m_emergRayDebugBlocked ? DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f)
-                                                     : DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f);
-    pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", color);
+    Model *pModel = ModelManager::Get().CreateFromGeometry("__racing_line__:" + GetName(),
+                                                           Geometry::CreatePolyline(points));
+    pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(0.0f, 0.3f, 1.0f, 1.0f));
     pModel->materials[0].Set<float>("$Opacity", 1.0f);
-    m_emergRayRender.SetModel(pModel);
+    m_racingLineRender.SetModel(pModel);
 }
 
 namespace

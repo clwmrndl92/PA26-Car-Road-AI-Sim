@@ -63,7 +63,7 @@ void EditApp::UpdateCamera(float dt)
         return;
 
     ImGuiIO &io = ImGui::GetIO();
-    constexpr float MOVE_SPEED = 10.0f;
+    constexpr float MOVE_SPEED = 50.0f;
 
     // WASD moves parallel to the XZ plane regardless of view pitch:
     //  - Walk() uses cross(right, up), i.e. the look direction flattened onto XZ.
@@ -679,9 +679,9 @@ void EditApp::SaveToJson()
     auto markToJson = [&](const EditBoundaryMark &mk)
     {
         json jm;
-        jm["type"] = mk.type == BoundaryMarkType::Solid ? "solid" : mk.type == BoundaryMarkType::Broken ? "broken"
+        jm["type"] = mk.type == BoundaryMarkType::Solid ? "solid" : mk.type == BoundaryMarkType::Broken    ? "broken"
                                                                 : mk.type == BoundaryMarkType::DoubleSolid ? "double_solid"
-                                                                                                          : "none";
+                                                                                                           : "none";
         jm["color"] = mk.color == MarkingColor::Yellow ? "yellow" : mk.color == MarkingColor::Gray ? "gray"
                                                                                                    : "white";
         jm["width"] = round2(mk.width);
@@ -838,9 +838,9 @@ void EditApp::LoadFromJson(const std::filesystem::path &path)
     {
         EditBoundaryMark mk;
         std::string t = jm.value("type", std::string("none"));
-        mk.type = t == "solid" ? BoundaryMarkType::Solid : t == "broken" ? BoundaryMarkType::Broken
-                              : t == "double_solid"    ? BoundaryMarkType::DoubleSolid
-                                                       : BoundaryMarkType::None;
+        mk.type = t == "solid" ? BoundaryMarkType::Solid : t == "broken"     ? BoundaryMarkType::Broken
+                                                       : t == "double_solid" ? BoundaryMarkType::DoubleSolid
+                                                                             : BoundaryMarkType::None;
         std::string c = jm.value("color", std::string("white"));
         mk.color = c == "yellow" ? MarkingColor::Yellow : c == "gray" ? MarkingColor::Gray
                                                                       : MarkingColor::White;

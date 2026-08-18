@@ -185,6 +185,391 @@ namespace
         }
         return points[index];
     }
+
+    struct RacingPathData
+    {
+        std::vector<Vec3> points; // 직전 도로 꼬리 + 현재 도로
+        std::vector<float> arcLength;
+        std::vector<float> curvature;
+        size_t closest = 0;
+    };
+
+    struct RacingPlan
+    {
+        Vec3 target;
+        Vec3 pathPoint;
+        Vec3 pathDirection;
+        float targetSpeed = 0.0f;
+        float brakingAccel = 0.0f;
+        float maxAccelNow = 0.0f; // 지금 곡률에서 마찰원이 남겨준 가속 여유
+        float remainingDistance = 0.0f;
+        bool hasLocalCorner = false;
+    };
+
+    float HorizontalLength(const Vec3 &v)
+    {
+        return std::sqrt(v.GetX() * v.GetX() + v.GetZ() * v.GetZ());
+    }
+
+    // points가 채워진 뒤 호길이/곡률/최근접점을 메운다.
+    void FillRacingMetrics(RacingPathData &data, const Vec3 &position)
+    {
+        const std::vector<Vec3> &points = data.points;
+        data.arcLength.assign(points.size(), 0.0f);
+        data.curvature.assign(points.size(), 0.0f);
+        float closestDistance = std::numeric_limits<float>::max();
+        for (size_t i = 0; i < points.size(); ++i)
+        {
+            if (i > 0)
+                data.arcLength[i] = data.arcLength[i - 1] + HorizontalLength(points[i] - points[i - 1]);
+            float distance = (points[i] - position).LengthSq();
+            if (distance < closestDistance)
+            {
+                closestDistance = distance;
+                data.closest = i;
+            }
+        }
+
+        constexpr float CURVATURE_WINDOW = 2.0f;
+        for (size_t i = 1; i + 1 < points.size(); ++i)
+        {
+            size_t prev = i;
+            while (prev > 0 && data.arcLength[i] - data.arcLength[prev] < CURVATURE_WINDOW)
+                --prev;
+            size_t next = i;
+            while (next + 1 < points.size() && data.arcLength[next] - data.arcLength[i] < CURVATURE_WINDOW)
+                ++next;
+            if (prev == i || next == i)
+                continue;
+
+            Vec3 a = points[i] - points[prev];
+            Vec3 b = points[next] - points[i];
+            Vec3 chord = points[next] - points[prev];
+            float denominator = HorizontalLength(a) * HorizontalLength(b) * HorizontalLength(chord);
+            if (denominator < 0.001f)
+                continue;
+            float cross = a.GetX() * b.GetZ() - a.GetZ() * b.GetX();
+            data.curvature[i] = 2.0f * cross / denominator;
+        }
+    }
+
+    // QP 스텐실이 등간격 h를 가정하므로 먼저 균일 리샘플한다.
+    std::vector<Vec3> ResampleUniform(const std::vector<Vec3> &in, float spacing)
+    {
+        std::vector<Vec3> out;
+        if (in.size() < 2 || spacing <= 0.001f)
+            return out;
+
+        out.push_back(in.front());
+        float carry = 0.0f;
+        for (size_t i = 0; i + 1 < in.size(); ++i)
+        {
+            Vec3 seg = in[i + 1] - in[i];
+            float segLen = HorizontalLength(seg);
+            if (segLen < 1e-5f)
+                continue;
+
+            float placed = spacing - carry;
+            while (placed <= segLen)
+            {
+                out.push_back(in[i] + seg * (placed / segLen));
+                placed += spacing;
+            }
+            carry = segLen - (placed - spacing);
+        }
+        if (out.size() < 2)
+            out.push_back(in.back());
+        return out;
+    }
+
+    // 최소 곡률 QP.  min  sum_i k_i^2 + w * sum_i kRef_i * d_i   s.t.  dMin <= d_i <= dMax
+    //
+    // 경로 곡률을 선형화하면  k_i = kRef_i - (d_{i-1} - 2d_i + d_{i+1}) / h^2  이고,
+    // 목적함수가 d에 대해 2차 + 제약이 박스뿐이라 볼록 QP다. 정상조건을 정리하면
+    // d의 4차 스텐실만 남는다:
+    //     d_{j-2} - 4d_{j-1} + 6d_j - 4d_{j+1} + d_{j+2} = R_j
+    //     R_j = h^2 * (kRef_{j-1} - 2kRef_j + kRef_{j+1}) - w * kRef_j
+    // 이걸 projected Gauss-Seidel(SOR)로 푼다. 매 갱신마다 클램프하는 게 곧 박스 제약이라
+    // 도로 밖으로는 원리적으로 못 나간다.
+    void SolveMinCurvature(const std::vector<float> &refCurvature, float h, float dMin, float dMax,
+                           float lengthWeight, int iterations, std::vector<float> &d)
+    {
+        const size_t n = refCurvature.size();
+        if (n < 5 || d.size() != n)
+            return;
+
+        std::vector<float> rhs(n, 0.0f);
+        for (size_t i = 1; i + 1 < n; ++i)
+        {
+            float secondDiff = refCurvature[i - 1] - 2.0f * refCurvature[i] + refCurvature[i + 1];
+            rhs[i] = h * h * secondDiff - lengthWeight * refCurvature[i];
+        }
+
+        constexpr float OMEGA = 1.7f; // 과이완(SOR)
+        for (int iter = 0; iter < iterations; ++iter)
+        {
+            for (size_t j = 2; j + 2 < n; ++j)
+            {
+                float target = (rhs[j] - d[j - 2] + 4.0f * d[j - 1] + 4.0f * d[j + 1] - d[j + 2]) / 6.0f;
+                d[j] = std::clamp(d[j] + OMEGA * (target - d[j]), dMin, dMax);
+            }
+        }
+    }
+
+    float SampleLinear(const std::vector<float> &v, float x)
+    {
+        if (v.empty())
+            return 0.0f;
+        float clamped = std::clamp(x, 0.0f, static_cast<float>(v.size() - 1));
+        size_t i = static_cast<size_t>(clamped);
+        size_t j = std::min(i + 1, v.size() - 1);
+        return v[i] + (v[j] - v[i]) * (clamped - static_cast<float>(i));
+    }
+
+    // 4차 스텐실은 Gauss-Seidel 정보 전파가 sweep당 한 칸이라, 점이 수천 개면 수만 번
+    // 돌려도 초기값에서 못 벗어난다. 거친 격자부터 풀어 초기값으로 내려주면(nested iteration)
+    // 각 레벨은 고주파 오차만 남아 금방 수렴한다.
+    std::vector<float> SolveMinCurvatureCascade(const std::vector<float> &refCurvature, float h,
+                                                float dMin, float dMax, float lengthWeight)
+    {
+        const size_t n = refCurvature.size();
+        if (n < 8)
+            return std::vector<float>(n, 0.0f);
+
+        size_t stride = 1;
+        while (stride * 64 < n)
+            stride *= 2;
+
+        std::vector<float> coarse; // 직전(두 배 거친) 레벨의 해
+        for (; stride >= 1; stride /= 2)
+        {
+            const size_t m = (n + stride - 1) / stride;
+            std::vector<float> levelCurvature(m);
+            for (size_t i = 0; i < m; ++i)
+                levelCurvature[i] = refCurvature[std::min(i * stride, n - 1)];
+
+            std::vector<float> d(m, 0.0f);
+            for (size_t i = 0; i < m; ++i)
+                d[i] = SampleLinear(coarse, static_cast<float>(i) * 0.5f);
+
+            int iterations = static_cast<int>(std::clamp(200000.0 / static_cast<double>(m), 300.0, 20000.0));
+            SolveMinCurvature(levelCurvature, h * static_cast<float>(stride), dMin, dMax,
+                              lengthWeight, iterations, d);
+            coarse.swap(d);
+            if (stride == 1)
+                break;
+        }
+        coarse.resize(n, coarse.empty() ? 0.0f : coarse.back());
+        return coarse;
+    }
+
+    // 전략 = 곡률 최소 <-> 거리 최소 사이의 가중치.
+    // 거리항을 키우면 안쪽을 파고들어(=이른 에이펙스) 짧게 가고, 0이면 순수 최소곡률(=늦은 에이펙스).
+    float StrategyLengthWeight(Car::ApexStrategy strategy)
+    {
+        switch (strategy)
+        {
+        case Car::ApexStrategy::Early:
+            return 0.20f;
+        case Car::ApexStrategy::Apex:
+            return 0.05f;
+        default:
+            return 0.0f;
+        }
+    }
+
+    // 문맥 도로들을 이어 최소곡률 라인을 푼다. 도로 문맥이 바뀔 때만 호출할 것(무겁다).
+    RaceLine BuildRaceLine(const std::vector<const Spline *> &lines, size_t drawBegin, size_t drawEnd,
+                           float laneCenter, float lineRoom, Car::ApexStrategy strategy)
+    {
+        RaceLine line;
+        std::vector<Vec3> merged;
+        float beforeDraw = 0.0f;
+        float throughDraw = 0.0f;
+        for (size_t i = 0; i < lines.size(); ++i)
+        {
+            const std::vector<Vec3> &points = lines[i]->GetSplinePoints();
+            float length = 0.0f;
+            for (size_t k = 0; k + 1 < points.size(); ++k)
+                length += HorizontalLength(points[k + 1] - points[k]);
+            if (i < drawBegin)
+                beforeDraw += length;
+            if (i <= drawEnd)
+                throughDraw += length;
+            merged.insert(merged.end(), points.begin(), points.end());
+        }
+        if (merged.size() < 2)
+            return line;
+
+        constexpr float SPACING = 1.0f;
+        RacingPathData ref;
+        ref.points = ResampleUniform(merged, SPACING);
+        if (ref.points.size() < 5)
+            return line;
+        FillRacingMetrics(ref, ref.points.front());
+
+        std::vector<float> d = SolveMinCurvatureCascade(ref.curvature, SPACING, -lineRoom, lineRoom,
+                                                        StrategyLengthWeight(strategy));
+
+        RacingPathData solved;
+        solved.points.reserve(ref.points.size());
+        for (size_t i = 0; i < ref.points.size(); ++i)
+            solved.points.push_back(OffsetSampleAt(ref.points, i, laneCenter + d[i]));
+        FillRacingMetrics(solved, solved.points.front());
+
+        line.points = std::move(solved.points);
+        line.arcLength = std::move(solved.arcLength);
+        line.curvature = std::move(solved.curvature);
+        line.drawFromS = beforeDraw;
+        line.drawToS = throughDraw;
+        return line;
+    }
+
+    size_t ClosestOnLine(const RaceLine &line, const Vec3 &position)
+    {
+        size_t closest = 0;
+        float best = std::numeric_limits<float>::max();
+        for (size_t i = 0; i < line.points.size(); ++i)
+        {
+            float distance = (line.points[i] - position).LengthSq();
+            if (distance < best)
+            {
+                best = distance;
+                closest = i;
+            }
+        }
+        return closest;
+    }
+
+    size_t IndexAtS(const RaceLine &line, float s)
+    {
+        size_t i = static_cast<size_t>(
+            std::lower_bound(line.arcLength.begin(), line.arcLength.end(), s) - line.arcLength.begin());
+        return std::min(i, line.points.size() - 1);
+    }
+
+    // 마찰원: 타이어가 낼 수 있는 가속도는 횡/종방향을 나눠 쓰는 게 아니라 하나의 원 예산을
+    // 공유한다. 코너링에 횡가속도를 이미 많이 쓰고 있으면, 남은 종방향(가감속) 여유는
+    // sqrt(1 - (횡/한계)^2)만큼만 남는다 -- 이게 트레일 브레이킹/파워다운을 자연스럽게 만든다.
+    float FrictionLongitudinalBudget(float longitudinalCap, float lateralAccel, float frictionLimit)
+    {
+        if (frictionLimit <= 0.001f)
+            return 0.0f;
+        float ratio = std::clamp(lateralAccel / frictionLimit, 0.0f, 1.0f);
+        return longitudinalCap * std::sqrt(std::max(0.0f, 1.0f - ratio * ratio));
+    }
+
+    RacingPlan BuildRacingPlan(const RaceLine &line, const Vec3 &position, float lookahead,
+                               float cruiseSpeed, float currentSpeed, float maxAccel, float maxBrake)
+    {
+        RacingPlan plan;
+        plan.target = position;
+        plan.pathPoint = position;
+        plan.targetSpeed = cruiseSpeed;
+        if (line.points.size() < 2)
+            return plan;
+
+        const size_t closest = ClosestOnLine(line, position);
+        const float currentS = line.arcLength[closest];
+        plan.remainingDistance = line.arcLength.back() - currentS;
+
+        // 코너를 서다/서다로 도는 게 아니라, 마찰원 안에서 브레이킹하며 진입하고
+        // 여유가 생기는 만큼 가속하며 탈출하도록 구간 전체를 체이닝해서 푼다.
+        constexpr float SPEED_PREVIEW = 100.0f;
+        constexpr float CURVATURE_MIN = 1.0f / 500.0f;
+        constexpr float FRICTION_ACCEL = 8.0f; // 타이어 마찰원 반경(횡/종 공유)
+
+        size_t last = closest;
+        while (last + 1 < line.points.size() && line.arcLength[last] - currentS <= SPEED_PREVIEW)
+            ++last;
+
+        std::vector<float> vLat(last - closest + 1, cruiseSpeed);
+        for (size_t i = closest; i <= last; ++i)
+        {
+            float absCurvature = std::fabs(line.curvature[i]);
+            if (absCurvature >= CURVATURE_MIN)
+            {
+                vLat[i - closest] = std::min(cruiseSpeed, std::sqrt(FRICTION_ACCEL / absCurvature));
+                plan.hasLocalCorner = true;
+            }
+        }
+
+        // 뒤에서부터: 코너 진입 전에 마찰원이 허락하는 만큼만 감속(트레일 브레이킹).
+        // idx-1==0 전이에서 쓰인 avail이 "지금 이 순간" 낼 수 있는 감속 여유다.
+        std::vector<float> vBrake = vLat;
+        float brakeAvailNow = maxBrake;
+        for (size_t i = last; i > closest; --i)
+        {
+            size_t idx = i - closest;
+            float ds = std::max(0.001f, line.arcLength[i] - line.arcLength[i - 1]);
+            float lateralAtNext = vBrake[idx] * vBrake[idx] * std::fabs(line.curvature[i]);
+            float avail = FrictionLongitudinalBudget(maxBrake, lateralAtNext, FRICTION_ACCEL);
+            float candidate = std::sqrt(vBrake[idx] * vBrake[idx] + 2.0f * avail * ds);
+            vBrake[idx - 1] = std::min(vLat[idx - 1], candidate);
+            if (idx == 1)
+                brakeAvailNow = avail;
+        }
+
+        // 앞에서부터: 지금 속도/곡률에서 마찰원이 허락하는 만큼만 가속(파워다운 이후 점진 가속).
+        // 이 값을 plan.maxAccelNow로 내보내 DriveControl의 가속 명령 자체를 캡한다 --
+        // 목표속도 배열만으론 지금 순간의 가속 여유가 P제어기에 전달되지 않는다.
+        std::vector<float> vAccel = vLat;
+        vAccel[0] = currentSpeed;
+        float accelAvailNow = maxAccel;
+        for (size_t i = closest + 1; i <= last; ++i)
+        {
+            size_t idx = i - closest;
+            float ds = std::max(0.001f, line.arcLength[i] - line.arcLength[i - 1]);
+            float lateralAtPrev = vAccel[idx - 1] * vAccel[idx - 1] * std::fabs(line.curvature[i - 1]);
+            float avail = FrictionLongitudinalBudget(maxAccel, lateralAtPrev, FRICTION_ACCEL);
+            float candidate = std::sqrt(vAccel[idx - 1] * vAccel[idx - 1] + 2.0f * avail * ds);
+            vAccel[idx] = std::min(vLat[idx], candidate);
+            if (idx == 1)
+                accelAvailNow = avail;
+        }
+
+        plan.targetSpeed = vBrake[0];
+        plan.maxAccelNow = accelAvailNow;
+        if (currentSpeed > plan.targetSpeed + 0.2f)
+            plan.brakingAccel = -brakeAvailNow;
+
+        plan.pathPoint = line.points[closest];
+        plan.target = line.points[IndexAtS(line, currentS + lookahead)];
+
+        const size_t aheadIndex = IndexAtS(line, currentS + 2.0f);
+        Vec3 plannedDirection = line.points[aheadIndex] - plan.pathPoint;
+        if (HorizontalLength(plannedDirection) > 0.001f)
+            plan.pathDirection = plannedDirection.Normalized();
+        else if (closest + 1 < line.points.size())
+            plan.pathDirection = (line.points[closest + 1] - plan.pathPoint).Normalized();
+        return plan;
+    }
+
+    // 레이싱 라인이 이미 앞 도로들을 포함하므로 여기선 도로별 제한속도만 본다.
+    void PreviewUpcomingRoad(RacingPlan &plan, const std::vector<RoadRef> &path, size_t pathIndex,
+                             float maxSpeed, float currentSpeed, float maxBrake)
+    {
+        constexpr float SPEED_PREVIEW = 100.0f;
+        const float racingBrake = std::max(1.0f, maxBrake * 0.75f);
+        float distanceToRoad = plan.remainingDistance;
+
+        for (size_t pathI = pathIndex + 1;
+             pathI < path.size() && distanceToRoad <= SPEED_PREVIEW; ++pathI)
+        {
+            const shared_ptr<Road> &road = path[pathI].road;
+            if (road == nullptr)
+                continue;
+
+            float roadSpeed = std::min(road->GetSpeedLimit(), maxSpeed);
+            float entrySpeed = std::sqrt(roadSpeed * roadSpeed + 2.0f * racingBrake * distanceToRoad);
+            plan.targetSpeed = std::min(plan.targetSpeed, entrySpeed);
+            distanceToRoad += road->GetReferenceLine().GetLength();
+        }
+
+        // 더 강하게(음수로 더 큰 쪽) 요구하는 제동만 반영 -- 코너용 마찰원 제동값을 덮어쓰지 않는다.
+        if (currentSpeed > plan.targetSpeed + 0.2f)
+            plan.brakingAccel = std::min(plan.brakingAccel, -racingBrake);
+    }
 }
 
 #pragma region Common
@@ -419,23 +804,107 @@ bool Car::CheckPath()
     return true;
 }
 
+bool Car::IsOutsideDrivingBands() const
+{
+    if (m_currentRoad == nullptr)
+        return false;
+
+    const Spline &referenceLine = m_currentRoad->GetReferenceLine();
+    if (referenceLine.GetSplinePoints().size() < 2)
+        return false;
+
+    Vec3 center = GetBodyCenter();
+    float t = std::clamp(referenceLine.GetSplinePosition(center), 0.0f, 1.0f);
+    float s = t * referenceLine.GetLength();
+    const LaneSection *section = RoadDataManager::Get().GetLateralProfile(m_currentRoad, s);
+    if (section == nullptr)
+        return false;
+
+    float minOffset = std::numeric_limits<float>::max();
+    float maxOffset = -std::numeric_limits<float>::max();
+    bool hasDrivingBand = false;
+    for (const LaneBand &band : section->bands)
+    {
+        if (band.type != LaneType::Driving)
+            continue;
+        minOffset = std::min(minOffset, band.centerOffset - band.width * 0.5f);
+        maxOffset = std::max(maxOffset, band.centerOffset + band.width * 0.5f);
+        hasDrivingBand = true;
+    }
+    if (!hasDrivingBand)
+        return false;
+
+    float centerOffset = ComputeReferenceOffset(referenceLine, center);
+    return centerOffset < minOffset || centerOffset > maxOffset;
+}
+
 void Car::DriveControl()
 {
-    const Spline &spline = m_currentSpline;
+    // if (IsOutsideDrivingBands())
+    // {
+    //     SetSpeed(0.0f);
+    //     m_acceleration = 0.0f;
+    //     m_planAccelDebug = 0.0f;
+    //     Steer(0.0f);
+    //     return;
+    // }
 
-    float lookaheadDistance = 5.0f;
-    Vec3 target = spline.GetLookaheadPoint(GetRigidbodyPosition(), lookaheadDistance);
-    float targetSteer = ComputeContextSteer(target, PurePursuit(target));
+    const Vec3 position = GetRigidbodyPosition();
+
+    // High speed needs a longer sight line so steering stays progressive instead of twitchy.
+    float lookaheadDistance = std::clamp(4.5f + m_speed * 0.35f, 5.0f, 13.0f);
+    float laneCenter = m_currentBand != nullptr ? m_currentBand->centerOffset : m_currentOffset;
+    float laneHalfWidth = m_currentBand != nullptr ? m_currentBand->width * 0.5f : 0.0f;
+    // 차체가 도로 밖으로 나가면 안 된다
+    constexpr float EDGE_MARGIN = 0.2f;
+    constexpr float MAX_RACING_OFFSET = 6.0f;
+    float lineRoom = std::clamp(laneHalfWidth - GetHalfWidth() - EDGE_MARGIN, 0.0f, MAX_RACING_OFFSET);
+    // 앞뒤 한 칸은 QP 경계 효과를 흡수시키는 문맥용. 그리진 않는다.
+    std::vector<const Road *> contextRoads;
+    size_t drawBegin = 0;
+    size_t drawEnd = 0;
+    for (size_t i = m_pathIndex > 0 ? m_pathIndex - 1 : 0;
+         i < m_path.size() && i <= m_pathIndex + 3; ++i)
+    {
+        if (m_path[i].road == nullptr)
+            continue;
+        if (i == m_pathIndex)
+            drawBegin = contextRoads.size();
+        if (i <= m_pathIndex + 2)
+            drawEnd = contextRoads.size();
+        contextRoads.push_back(m_path[i].road.get());
+    }
+    // 최소곡률 QP는 무거우니 도로 문맥이나 전략이 바뀔 때만 푼다
+    if (contextRoads != m_racingLineRoads || m_racingLineStrategy != m_apexStrategy)
+    {
+        std::vector<const Spline *> lines;
+        lines.reserve(contextRoads.size());
+        for (const Road *road : contextRoads)
+            lines.push_back(&road->GetReferenceLine());
+        m_raceLine = BuildRaceLine(lines, drawBegin, drawEnd, laneCenter, lineRoom, m_apexStrategy);
+        m_racingLineRoads = std::move(contextRoads);
+        m_racingLineStrategy = m_apexStrategy;
+        RebuildRacingLineRender();
+    }
+
+    RacingPlan racing = BuildRacingPlan(m_raceLine, position, lookaheadDistance,
+                                        RoadTargetSpeed(m_currentRoad), m_speed, m_maxAccel, m_maxBrake);
+    PreviewUpcomingRoad(racing, m_path, m_pathIndex, m_maxSpeed, m_speed, m_maxBrake);
+
+    Vec3 target = racing.target;
+    float targetSteer = ComputeContextSteer(target, Stanley(racing.pathPoint, racing.pathDirection));
     RebuildCtxSteerRender();
 
     Steer(targetSteer);
 
-    bool emergBlocked = IsEmergencyRayBlocked();
-    RebuildEmergRayRender();
-    if (emergBlocked)
-        EmergBrake();
+    // 여전히 돌고 있는 동안엔 마찰원이 남긴 만큼만 가속(파워다운). 감속이 필요하면
+    // (다가오는 코너의 마찰원 제동 요구, 또는 도로 제한속도) brakingAccel이 우선한다.
+    float desiredAccel = m_speedGain * (racing.targetSpeed - m_speed);
+    if (racing.brakingAccel < 0.0f)
+        desiredAccel = std::min(desiredAccel, racing.brakingAccel);
     else
-        AccelerateVel(RoadTargetSpeed(m_currentRoad));
+        desiredAccel = std::min(desiredAccel, racing.maxAccelNow);
+    Accelerate(desiredAccel);
 
     DirectX::XMFLOAT3 targetMarkerPos = ToXMFLOAT3(target);
     targetMarkerPos.y = GetPosition().GetY() + 0.2f;
@@ -647,83 +1116,6 @@ float Car::ComputeContextSteer(const Vec3 &pursuitTarget, float pursuitSteer) co
     Vec3 aim = position + Vec3(cosf(chosenRad), 0.0f, sinf(chosenRad)) * STEER_LOOKAHEAD;
     return std::clamp(PurePursuitSteerAt(position, headingRad, aim, m_wheelbase),
                       -m_maxSteerAngle, m_maxSteerAngle);
-}
-
-bool Car::IsEmergencyRayBlocked() const
-{
-    constexpr float MAX_RAY_TURN = 1.5708f; // 직선레이가 무의미해지는 각
-
-    float rayDistance = m_speed * m_speed / (2.0f * m_maxBrake) + SAFE_GAP;
-
-    Vec3 forward = GetForwardAxis();
-    Vec3 right(forward.GetZ(), 0.0f, -forward.GetX());
-    Vec3 frontCenter = GetBodyCenter() + forward * m_halfExtents.GetZ();
-    float halfWidth = m_halfExtents.GetX();
-
-    const Vec3 origins[3] = {
-        frontCenter - right * halfWidth,
-        frontCenter,
-        frontCenter + right * halfWidth,
-    };
-
-    float curvature = tanf(m_steerAngle) / m_wheelbase; // = 각속도 / 속도
-    float dTheta = std::clamp(rayDistance * curvature, -MAX_RAY_TURN, MAX_RAY_TURN);
-    bool turning = std::fabs(dTheta) > 1e-4f;
-    Vec3 icr = turning ? GetRigidbodyPosition() + right * (1.0f / curvature) : Vec3::sZero();
-    float cosT = cosf(dTheta);
-    float sinT = sinf(dTheta);
-
-    m_emergRayDebugLines.clear();
-    m_emergRayDebugBlocked = false;
-    bool blocked = false;
-
-    auto castRay = [&](const Vec3 &origin, const Vec3 &direction, float length)
-    {
-        if (length <= 0.001f)
-            return;
-
-        const VehicleCollision::Obstacle *hit = VehicleCollision::RaycastObstaclesHit(
-            origin, DirectionToAngleRad(direction), length, m_obstacles, nullptr);
-
-        m_emergRayDebugLines.push_back(origin);
-        m_emergRayDebugLines.push_back(origin + direction * length);
-
-        if (hit == nullptr)
-            return;
-        blocked = true;
-    };
-
-    for (int i = 0; i < 3; ++i)
-    {
-        const Vec3 &origin = origins[i];
-        Vec3 direction = forward;
-        if (turning)
-        {
-            Vec3 rel = origin - icr;
-            // +Y 각속도가 헤딩을 줄이는 방향(=시계) 회전
-            Vec3 turned(rel.GetX() * cosT + rel.GetZ() * sinT, 0.0f,
-                        rel.GetZ() * cosT - rel.GetX() * sinT);
-            Vec3 chord = (icr + turned) - origin;
-            if (chord.LengthSq() > 1e-6f)
-                direction = chord.Normalized();
-        }
-
-        castRay(origin, direction, rayDistance);
-
-        // 조향쪽 꼭짓점만 옆으로
-        bool isTurnCorner = (i == 0 && curvature < 0.0f) || (i == 2 && curvature > 0.0f);
-        if (isTurnCorner)
-        {
-            Vec3 lateralDir = (i == 0) ? -right : right;
-            float lateralLen = std::fabs(direction.Dot(right)) * rayDistance;
-            castRay(origin, lateralDir, lateralLen);
-        }
-    }
-
-    m_emergRayDebugBlocked = blocked;
-    if (blocked)
-        return true;
-    return false;
 }
 
 void Car::UpdateSensors()
