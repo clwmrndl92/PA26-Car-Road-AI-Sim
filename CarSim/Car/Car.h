@@ -154,8 +154,6 @@ private:
     void UpdateDrivePlan();
     float RoadTargetSpeed(const shared_ptr<Road> &road) const; // 도로 제한속도(최고속 캡)
     void ComputeDrivableRange(const RoadRef &road, float &outMin, float &outMax) const;
-    float CurveLateralAccel() const; // 조향각 상한이 허용하는 횡가속
-    float CurveSpeedLimit() const;   // 전방 곡률 선행탐색 -> 현재속도 상한
 #pragma endregion
 
 #pragma region Avoid
@@ -219,14 +217,6 @@ private:
 
     static constexpr float BEHAVIOR_PLAN_INTERVAL = 0.2f; // 행동계획 주기
     static constexpr float SAFE_GAP = 2.0f;               // 긴급제동 레이 여유거리
-
-    static constexpr float CURVE_PREVIEW_TIME = 3.0f;     // 곡률 선행탐색 시간(s)
-    static constexpr float CURVE_PREVIEW_MIN = 15.0f;     // 저속에서도 이만큼은 본다(m)
-    static constexpr float CURVE_IGNORE_RADIUS = 1000.0f; // 이보다 완만하면 직선취급
-    static constexpr float CURVE_STEER_MARGIN = 0.8f;     // 조향 포화 전에 감속
-
-    float m_curveSpeedLimit = m_maxSpeed;                                 // 곡률이 허용하는 목표속도
-    mutable float m_curveMinRadius = std::numeric_limits<float>::max();   // 선행구간 최소반경(디버그)
 
     float m_lastBehaviorPlanTime = -1000.0f; // 첫 판단 즉시 실행되게
     float m_planAccelDebug = 0.0f;           // 매프레임 가속도

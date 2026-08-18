@@ -485,11 +485,6 @@ void Car::UpdateDebugWindow()
 
         ImGui::Text("Plan accel: %.2f m/s^2", m_planAccelDebug);
         ImGui::Text("Cur offset d: %.2f m", m_currentOffset);
-        if (m_curveMinRadius < CURVE_IGNORE_RADIUS)
-            ImGui::Text("Curve limit: %.0f km/h (R %.0f m, %.0f m ahead)", m_curveSpeedLimit * 3.6f,
-                        m_curveMinRadius, std::max(m_speed * CURVE_PREVIEW_TIME, CURVE_PREVIEW_MIN));
-        else
-            ImGui::Text("Curve limit: none (straight ahead)");
 
         if (UsesReactiveSteer())
             ImGui::Text("ReactiveSteer: slot %.0f deg, danger %.2f", ToDegrees(m_ctxSteerDebugRad),

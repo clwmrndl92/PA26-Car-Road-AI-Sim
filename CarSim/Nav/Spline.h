@@ -29,8 +29,6 @@ public:
     float GetMinRadiusAhead() const { return m_minRadius; }
     float GetApexT() const { return m_apexT; }
     float GetRadiusAt(float t) const; // t 위치의 국소 곡률반경 (직선/무곡률이면 FLT_MAX)
-    // 샘플점별 곡률반경. GetSplinePoints()와 인덱스 대응(전방 스캔용)
-    const std::vector<float> &GetRadii() const { return m_radii; }
     // 컨트롤 포인트가 전부 한 직선 위에 있는지. 생성자에서 미리 계산해 캐싱한다(ComputeMinRadius가 스캔 생략 여부 판단에 씀).
     bool IsStraight() const { return m_isStraight; }
 
