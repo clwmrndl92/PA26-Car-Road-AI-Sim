@@ -229,7 +229,6 @@ void Car::OnModeEnter(Mode prev)
     {
         SetSubMode(SubMode::D_Pursuit);
         m_planAccelDebug = 0.0f;
-        m_staticBlockTimer = 0.0f;
         BeginSegment(std::make_unique<SplineFollowSegment>());
     }
     else if (m_mode == Mode::Stop)
@@ -340,9 +339,6 @@ void Car::UpdateDrive()
     if (!CheckPath())
         return;
 
-    if (m_reverseEscapeTimer <= 0.0f)
-        TryStartStaticReverseEscape();
-
     if (m_currentTime - m_lastBehaviorPlanTime >= BEHAVIOR_PLAN_INTERVAL)
     {
         UpdateSensors();
@@ -425,13 +421,6 @@ bool Car::CheckPath()
 
 void Car::DriveControl()
 {
-    if (m_reverseEscapeTimer > 0.0f) // 정적장애물 후진탈출
-    {
-        Steer(m_reverseEscapeSteer, REVERSE_STEER_RAMP);
-        AccelerateVel(REVERSE_ESCAPE_SPEED);
-        return;
-    }
-
     const Spline &spline = m_currentSpline;
 
     float lookaheadDistance = 5.0f;
@@ -446,7 +435,7 @@ void Car::DriveControl()
     if (emergBlocked)
         EmergBrake();
     else
-        AccelerateVel(RoadTargetSpeed(m_currentRoad));
+        AccelerateVel(std::min(RoadTargetSpeed(m_currentRoad), m_curveSpeedLimit));
 
     DirectX::XMFLOAT3 targetMarkerPos = ToXMFLOAT3(target);
     targetMarkerPos.y = GetPosition().GetY() + 0.2f;
@@ -489,6 +478,66 @@ float Car::RoadTargetSpeed(const shared_ptr<Road> &road) const
     return std::min(road->GetSpeedLimit(), m_maxSpeed);
 }
 
+// 최대 조향각이 v^2/R을 묶는다. tan(d)*v^2/L, 고속에선 v와 무관한 상수
+float Car::CurveLateralAccel() const
+{
+    constexpr float REF_SPEED = 30.0f; // 저속 컷오프 위면 아무 값이나 동일
+    if (m_wheelbase < 1e-3f)
+        return 0.0f;
+    return tanf(CalcMaxSteerAngle(REF_SPEED)) * REF_SPEED * REF_SPEED / m_wheelbase * CURVE_STEER_MARGIN;
+}
+
+// 앞으로 3초간 지날 구간의 곡률을 훑어, 각 지점 코너속도까지 제동으로 줄일 수 있는 현재속도 상한
+float Car::CurveSpeedLimit() const
+{
+    m_curveMinRadius = std::numeric_limits<float>::max();
+    if (m_currentRoad == nullptr)
+        return m_maxSpeed;
+
+    const float latAccel = CurveLateralAccel();
+    const float horizon = std::max(m_speed * CURVE_PREVIEW_TIME, CURVE_PREVIEW_MIN);
+    const float planLag = m_speed * BEHAVIOR_PLAN_INTERVAL; // 다음 판단까지 못 밟는 제동거리
+
+    float limit = m_maxSpeed;
+    float traveled = 0.0f;
+
+    auto scan = [&](const Spline &spline, size_t startIndex)
+    {
+        const std::vector<Vec3> &points = spline.GetSplinePoints();
+        const std::vector<float> &radii = spline.GetRadii();
+        for (size_t i = startIndex; i < points.size() && traveled <= horizon; ++i)
+        {
+            float radius = i < radii.size() ? radii[i] : std::numeric_limits<float>::max();
+            m_curveMinRadius = std::min(m_curveMinRadius, radius);
+
+            if (radius < CURVE_IGNORE_RADIUS)
+            {
+                float cornerSpeedSq = latAccel * radius;
+                float brakeRoom = std::max(0.0f, traveled - planLag);
+                limit = std::min(limit, std::sqrt(cornerSpeedSq + 2.0f * m_maxBrake * brakeRoom));
+            }
+
+            if (i + 1 < points.size())
+                traveled += (points[i + 1] - points[i]).Length();
+        }
+    };
+
+    const std::vector<Vec3> &current = m_currentSpline.GetSplinePoints();
+    if (!current.empty())
+    {
+        float t = m_currentSpline.GetSplinePosition(GetPosition());
+        size_t startIndex = t > 0.0f ? static_cast<size_t>(t * (current.size() - 1)) : 0;
+        scan(m_currentSpline, startIndex);
+    }
+
+    // 남은 구간은 다음 도로 참조선으로 잇는다. 오프셋 d는 코너반경에 비해 작다
+    for (size_t p = m_pathIndex + 1; p < m_path.size() && traveled <= horizon; ++p)
+        if (m_path[p].road != nullptr)
+            scan(m_path[p].road->GetReferenceLine(), 0);
+
+    return limit;
+}
+
 void Car::UpdateDrivePlan()
 {
     if (m_currentRoad == nullptr)
@@ -502,6 +551,8 @@ void Car::UpdateDrivePlan()
     SetCurrentOffset(std::clamp(realOffset, minOffset, maxOffset));
     m_currentSpline = RoadDataManager::Get().BuildOffsetSpline(m_currentRoad, m_currentOffset);
     RebuildSplineRender();
+
+    m_curveSpeedLimit = CurveSpeedLimit();
 }
 
 #pragma endregion
@@ -658,64 +709,6 @@ float Car::ComputeContextSteer(const Vec3 &pursuitTarget, float pursuitSteer) co
     Vec3 aim = position + Vec3(cosf(chosenRad), 0.0f, sinf(chosenRad)) * STEER_LOOKAHEAD;
     return std::clamp(PurePursuitSteerAt(position, headingRad, aim, m_wheelbase),
                       -m_maxSteerAngle, m_maxSteerAngle);
-}
-
-// 스윕을 안 쓰니 앞범퍼 근접으로 직접 판정한다.
-void Car::TryStartStaticReverseEscape()
-{
-    Vec3 position = GetRigidbodyPosition();
-    Vec3 moved = position - m_staticBlockLastPos;
-    m_staticBlockLastPos = position;
-
-    // 지령속도는 벽에 밀려도 안 떨어진다
-    float actualSpeed = m_deltaTime > 0.0001f ? moved.Length() / m_deltaTime : 0.0f;
-    if (actualSpeed > STATIC_BLOCK_SPEED)
-    {
-        m_staticBlockTimer = 0.0f;
-        return;
-    }
-
-    Vec3 forward = GetForwardAxis();
-    Vec3 frontBumper = GetBodyCenter() + forward * m_halfExtents.GetZ();
-
-    const VehicleCollision::Obstacle *blocker = nullptr;
-    float nearestGap = STATIC_BLOCK_RANGE;
-    for (const VehicleCollision::Obstacle &obstacle : m_obstacles)
-    {
-        if (obstacle.isVehicle)
-            continue;
-
-        // 장애물 y는 바닥값이라 차체 높이가 섞이면 안 된다
-        Vec3 delta = VehicleCollision::ClosestPointOnObstacle(frontBumper, obstacle) - frontBumper;
-        Vec3 toBlocker(delta.GetX(), 0.0f, delta.GetZ());
-        float gap = toBlocker.Length();
-        if (gap > nearestGap)
-            continue;
-        if (gap >= 0.01f && forward.Dot(toBlocker * (1.0f / gap)) < HEADON_FRONT_COS)
-            continue;
-
-        nearestGap = gap;
-        blocker = &obstacle;
-    }
-
-    if (blocker == nullptr)
-    {
-        m_staticBlockTimer = 0.0f;
-        return;
-    }
-
-    m_staticBlockTimer += m_deltaTime;
-    if (m_staticBlockTimer < STATIC_BLOCK_TRIGGER)
-        return;
-
-    m_staticBlockTimer = 0.0f;
-    m_acceleration = 0.0f;
-    m_speed = 0.0f;
-    m_isReverse = true;
-    m_reverseEscapeSteer = ComputeReverseEscapeSteer(blocker->center);
-    m_reverseEscapeStartFwd = forward.Normalized();
-    m_reverseEscapeTimer = REVERSE_ESCAPE_TIME;
-    DebugConsole::Log(GetName() + ": static block, reversing");
 }
 
 bool Car::IsEmergencyRayBlocked() const

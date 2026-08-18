@@ -60,7 +60,6 @@ public:
     void Steer(float desiredRadian, float steerRamp = 1.0f);
     void ChangeGear();
     bool IsReverse() const { return m_isReverse; }
-    bool IsReverseEscaping() const { return m_reverseEscapeTimer > 0.0f; }
 
     void DriveControl();
     float PurePursuit(Vec3 target);
@@ -155,12 +154,12 @@ private:
     void UpdateDrivePlan();
     float RoadTargetSpeed(const shared_ptr<Road> &road) const; // 도로 제한속도(최고속 캡)
     void ComputeDrivableRange(const RoadRef &road, float &outMin, float &outMax) const;
+    float CurveLateralAccel() const; // 조향각 상한이 허용하는 횡가속
+    float CurveSpeedLimit() const;   // 전방 곡률 선행탐색 -> 현재속도 상한
 #pragma endregion
 
 #pragma region Avoid
-    void UpdateSensors();                                             // 장애물 목록 수집
-    float ComputeReverseEscapeSteer(const Vec3 &blockerCenter) const; // 후진중 코를 돌릴 조향
-    void TryStartStaticReverseEscape();                               // 정적장애물에 막히면 후진
+    void UpdateSensors(); // 장애물 목록 수집
     // 부채꼴 슬롯 interest/danger로 매프레임 조향각 생성
     float ComputeContextSteer(const Vec3 &pursuitTarget, float pursuitSteer) const;
     Vec3 GetBodyCenter() const;                             // OBB 판정 기준점
@@ -221,6 +220,14 @@ private:
     static constexpr float BEHAVIOR_PLAN_INTERVAL = 0.2f; // 행동계획 주기
     static constexpr float SAFE_GAP = 2.0f;               // 긴급제동 레이 여유거리
 
+    static constexpr float CURVE_PREVIEW_TIME = 3.0f;     // 곡률 선행탐색 시간(s)
+    static constexpr float CURVE_PREVIEW_MIN = 15.0f;     // 저속에서도 이만큼은 본다(m)
+    static constexpr float CURVE_IGNORE_RADIUS = 1000.0f; // 이보다 완만하면 직선취급
+    static constexpr float CURVE_STEER_MARGIN = 0.8f;     // 조향 포화 전에 감속
+
+    float m_curveSpeedLimit = m_maxSpeed;                                 // 곡률이 허용하는 목표속도
+    mutable float m_curveMinRadius = std::numeric_limits<float>::max();   // 선행구간 최소반경(디버그)
+
     float m_lastBehaviorPlanTime = -1000.0f; // 첫 판단 즉시 실행되게
     float m_planAccelDebug = 0.0f;           // 매프레임 가속도
     std::vector<VehicleCollision::Obstacle> m_obstacles;
@@ -231,26 +238,6 @@ private:
     mutable float m_ctxSteerDebugDanger = 0.0f;       // 그 슬롯의 danger
     mutable std::vector<Vec3> m_ctxSteerOpenLines;    // 안전 슬롯 레이(초록)
     mutable std::vector<Vec3> m_ctxSteerBlockedLines; // 위험 슬롯 레이(빨강)
-
-    // 정적장애물 막혀서 후진탈출
-    static constexpr float REVERSE_ESCAPE_TIME = 5.0f;     // 후진 상한(s), 안전장치
-    static constexpr float REVERSE_ESCAPE_TURN_COS = 0.7f; // 코 60도 돌면 탈출
-    static constexpr float REVERSE_ESCAPE_SPEED = 2.5f;    // 후진 속도(m/s)
-    static constexpr float REVERSE_ESCAPE_STEER = ToRadians(30.0f);
-    static constexpr float REVERSE_STEER_RAMP = 2.0f;
-    static constexpr float HEADON_FRONT_COS = 0.5f; // 앞쪽 60도 안에서 부딪혔나
-    // 정적장애물은 접촉이벤트가 없다(Static 바디). 긴급제동이 닿기 전에 세우므로 "막혀 선 시간"으로 판정
-    static constexpr float STATIC_BLOCK_TRIGGER = 0.3f; // 이 시간 막혀 있으면 후진(s)
-    static constexpr float STATIC_BLOCK_RANGE = 3.0f;   // 앞범퍼 기준 이 안이면 막힘
-    static constexpr float STATIC_BLOCK_SPEED = 0.5f;   // 사실상 정지(m/s)
-
-    // 물리/판단 틱 다름
-    float m_reverseEscapeTimer = 0.0f;            // >0이면 후진탈출중
-    float m_reverseEscapeSteer = 0.0f;            // 후진하며 코를 돌릴 방향
-    Vec3 m_reverseEscapeStartFwd = Vec3::sZero(); // 회전량 측정 기준
-
-    float m_staticBlockTimer = 0.0f;           // 정적장애물 막힘 시간
-    Vec3 m_staticBlockLastPos = Vec3::sZero(); // 실제 이동량 측정 기준
 
     DirectX::XMFLOAT3 m_spawnPosition = {0.0f, 0.0f, 0.0f};
     DirectX::XMFLOAT4 m_spawnRotation = {0.0f, 0.0f, 0.0f, 1.0f};

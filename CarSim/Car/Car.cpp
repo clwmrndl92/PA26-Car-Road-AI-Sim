@@ -280,17 +280,6 @@ void Car::UpdateCar()
 {
     constexpr float FRICT_DECEL_RATE = 0.1f;
 
-    if (m_reverseEscapeTimer > 0.0f)
-    {
-        m_reverseEscapeTimer -= m_deltaTime;
-        float turnedCos = GetForwardAxis().Normalized().Dot(m_reverseEscapeStartFwd);
-        if (m_reverseEscapeTimer <= 0.0f || turnedCos <= REVERSE_ESCAPE_TURN_COS)
-        {
-            m_reverseEscapeTimer = 0.0f;
-            m_isReverse = false; // 전진 복귀, 조향은 반응형이 다시 잡는다
-        }
-    }
-
     if (m_acceleration == 0.0f)
     {
         m_speed -= m_speed * FRICT_DECEL_RATE * m_deltaTime;
@@ -351,11 +340,6 @@ void Car::ApplyMotion()
     JPH::BodyID otherId;
     if (PhysicsSystem::Get().GetNewContact(m_rigidbody.GetBodyID(), otherId))
     {
-        if (m_reverseEscapeTimer > 0.0f) // 후진탈출 중 충돌하면 중단
-        {
-            m_reverseEscapeTimer = 0.0f;
-            m_isReverse = false;
-        }
         float vy = m_rigidbody.GetLinearVelocity().GetY();
         m_rigidbody.SetLinearVelocity(JPH::Vec3(0.0f, vy, 0.0f));
         m_rigidbody.SetAngularVelocity(JPH::Vec3::sZero());
@@ -368,18 +352,6 @@ void Car::ApplyMotion()
     float angularVelocity = GetSignedSpeed() * tan(m_steerAngle) / m_wheelbase;
     m_rigidbody.SetAngularVelocity(JPH::Vec3(0.0f, angularVelocity, 0.0f));
     m_rigidbody.SetLinearVelocity(ComputeDesiredVelocity());
-}
-
-float Car::ComputeReverseEscapeSteer(const Vec3 &blockerCenter) const
-{
-    Vec3 forward = GetForwardAxis();
-    Vec3 right(forward.GetZ(), 0.0f, -forward.GetX());
-    float lateral = right.Dot(blockerCenter - GetBodyCenter());
-
-    // 후진중엔 조향 부호가 전진과 반대로 돈다(+면 코가 왼쪽). 상대 반대쪽으로 코를 뺀다.
-    if (std::fabs(lateral) < 0.3f)
-        return -REVERSE_ESCAPE_STEER; // 정확히 정면이면 우측 관례
-    return lateral > 0.0f ? REVERSE_ESCAPE_STEER : -REVERSE_ESCAPE_STEER;
 }
 
 JPH::Vec3 Car::ComputeDesiredVelocity() const
@@ -513,15 +485,15 @@ void Car::UpdateDebugWindow()
 
         ImGui::Text("Plan accel: %.2f m/s^2", m_planAccelDebug);
         ImGui::Text("Cur offset d: %.2f m", m_currentOffset);
+        if (m_curveMinRadius < CURVE_IGNORE_RADIUS)
+            ImGui::Text("Curve limit: %.0f km/h (R %.0f m, %.0f m ahead)", m_curveSpeedLimit * 3.6f,
+                        m_curveMinRadius, std::max(m_speed * CURVE_PREVIEW_TIME, CURVE_PREVIEW_MIN));
+        else
+            ImGui::Text("Curve limit: none (straight ahead)");
 
-        if (m_reverseEscapeTimer > 0.0f)
-            ImGui::Text("Reverse escape: %.1fs, steer %.0f deg", m_reverseEscapeTimer,
-                        ToDegrees(m_reverseEscapeSteer));
-        else if (UsesReactiveSteer())
+        if (UsesReactiveSteer())
             ImGui::Text("ReactiveSteer: slot %.0f deg, danger %.2f", ToDegrees(m_ctxSteerDebugRad),
                         m_ctxSteerDebugDanger);
-        if (UsesReactiveSteer())
-            ImGui::Text("Static block: %.2fs / %.2fs", m_staticBlockTimer, STATIC_BLOCK_TRIGGER);
 
         ImGui::Separator();
         ImGui::Text("Personality (notes/accel.txt A~D)");
