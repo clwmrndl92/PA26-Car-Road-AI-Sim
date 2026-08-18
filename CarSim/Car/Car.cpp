@@ -9,7 +9,6 @@
 #include <utility>
 #include <imgui.h>
 #include "Utill/DebugConsole.h"
-#include "Utill/Assert.h"
 
 void Car::Init(const CarSpec &spec, const CarPersonality &personality, SimulationState *simState, JPH::Vec3 position,
                 float aiStartDelay)
@@ -44,12 +43,6 @@ void Car::Init(const CarSpec &spec, const CarPersonality &personality, Simulatio
     m_SimState = simState;
     m_SimState->RegisterCar(this);
 
-    m_parkSpot = make_shared<RoadNode>();
-    m_parkSpot->id = -1;
-    m_parkSpot->position = GetPosition();
-    m_parkSpot->direction = GetForwardAxis();
-    m_parkSpot->nodeType = RoadNodeType::ParkSpot;
-
     DebugInit();
 }
 
@@ -76,9 +69,6 @@ void Car::Update(float dt)
     {
     case Mode::Stop:
         UpdateStop();
-        break;
-    case Mode::Park:
-        UpdatePark();
         break;
     case Mode::Drive:
         UpdateDrive();
@@ -111,14 +101,8 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
     using namespace DirectX;
 
     bool honking = m_hornFlashTimer > 0.0f && m_carModel != nullptr;
-    bool chasing = IsChasing() && m_carModel != nullptr;
-    bool tint = (honking || m_highlighted || m_mobilHighlighted || chasing) && m_carModel != nullptr;
-    XMFLOAT4 tintColor = honking              ? XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f)
-                         : m_highlighted      ? XMFLOAT4(0.0f, 0.4f, 1.0f, 1.0f)
-                         : m_mobilHighlighted ? XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f)
-                                              : XMFLOAT4(1.0f, 0.5f, 0.0f, 1.0f); // 추격중
     std::vector<std::pair<size_t, XMFLOAT4>> savedDiffuse;
-    if (tint)
+    if (honking)
     {
         for (size_t i = 0; i < m_carModel->materials.size(); ++i)
         {
@@ -126,7 +110,7 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
             if (!mat.Has<XMFLOAT4>("$DiffuseColor"))
                 continue;
             savedDiffuse.emplace_back(i, mat.Get<XMFLOAT4>("$DiffuseColor"));
-            mat.Set<XMFLOAT4>("$DiffuseColor", tintColor);
+            mat.Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f));
         }
     }
     GameObject::Draw(context, effect);
@@ -154,8 +138,7 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
     }
 
     if ((m_rearTrailRender.GetModel() || m_frontTrailRender.GetModel() || m_splineRender.GetModel() ||
-         m_sensorRender.GetModel() || m_emergRayRender.GetModel() || m_parkPathRender.GetModel() ||
-         m_parkTargetLine.GetModel() || m_ctxSteerOpenRender.GetModel() || m_ctxSteerBlockedRender.GetModel()))
+         m_emergRayRender.GetModel() || m_ctxSteerOpenRender.GetModel() || m_ctxSteerBlockedRender.GetModel()))
     {
         if (auto *pBasic = dynamic_cast<BasicEffect *>(&effect))
         {
@@ -166,14 +149,8 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
                 m_frontTrailRender.Draw(context, effect);
             if (m_splineRender.GetModel())
                 m_splineRender.Draw(context, effect);
-            if (m_sensorRender.GetModel())
-                m_sensorRender.Draw(context, effect);
             if (m_emergRayRender.GetModel())
                 m_emergRayRender.Draw(context, effect);
-            if (m_parkPathRender.GetModel())
-                m_parkPathRender.Draw(context, effect);
-            if (m_parkTargetLine.GetModel())
-                m_parkTargetLine.Draw(context, effect);
             if (m_ctxSteerOpenRender.GetModel())
                 m_ctxSteerOpenRender.Draw(context, effect);
             if (m_ctxSteerBlockedRender.GetModel())
@@ -204,8 +181,6 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
 
     if (m_targetMarker.GetModel())
         m_targetMarker.Draw(context, effect);
-    if (m_parkTargetMarker.GetModel())
-        m_parkTargetMarker.Draw(context, effect);
 }
 
 Vec3 Car::GetPosition() const
@@ -259,17 +234,6 @@ void Car::Accelerate(float desiredAccel)
     m_planAccelDebug = m_acceleration;
 }
 
-// 도망차는 여유부릴 상황이 아니다
-void Car::FullAccelerateVel(float desiredVelocity)
-{
-    FullAccelerate(m_speedGain * (desiredVelocity - m_speed));
-}
-void Car::FullAccelerate(float desiredAccel)
-{
-    m_acceleration = std::clamp(desiredAccel, -m_maxBrake, m_maxAccel);
-    m_planAccelDebug = m_acceleration;
-}
-
 void Car::Steer(float radian, float steerRamp)
 {
     float maxDelta = steerRamp * m_deltaTime;
@@ -290,27 +254,18 @@ void Car::ChangeGear()
 void Car::Destroy()
 {
     if (m_SimState != nullptr)
-    {
-        if (m_parkSpot != nullptr)
-            m_SimState->ReleaseParkSpot(m_parkSpot->id);
         m_SimState->UnregisterCar(this);
-    }
     GameObject::Destroy();
 }
 
-void Car::SetCurrentRoad(const shared_ptr<Road> &road, float offset, LaneDirection direction)
+void Car::SetCurrentRoad(const shared_ptr<Road> &road, float offset)
 {
-    if (m_currentRoad == road && m_currentOffset == offset && m_travelDir == direction)
+    if (m_currentRoad == road && m_currentOffset == offset)
         return;
 
-    int nextJunctionId = road != nullptr ? road->GetJunctionId() : -1;
-    if (m_reservedJunctionId >= 0 && m_reservedJunctionId != nextJunctionId)
-        ReleaseJunctionReservation();
-
     m_currentRoad = road;
-    m_travelDir = direction;
     SetCurrentOffset(offset);
-    m_currentSpline = RoadDataManager::Get().BuildOffsetSpline(road, offset, direction);
+    m_currentSpline = RoadDataManager::Get().BuildOffsetSpline(road, offset);
 
     RebuildSplineRender();
 }
@@ -318,62 +273,7 @@ void Car::SetCurrentRoad(const shared_ptr<Road> &road, float offset, LaneDirecti
 void Car::SetCurrentOffset(float offset)
 {
     m_currentOffset = offset;
-
-    if (IgnoresTrafficRules()) // 역주행 차로에 있어도 그 밴드로 인정
-    {
-        const LaneBand *nearest = nullptr;
-        for (const LaneBand *band : GatherCandidateBands(CurrentRoadRef()))
-            if (nearest == nullptr ||
-                std::fabs(offset - band->centerOffset) < std::fabs(offset - nearest->centerOffset))
-                nearest = band;
-        if (nearest != nullptr)
-        {
-            m_currentBand = nearest;
-            return;
-        }
-    }
-    m_currentBand = RoadDataManager::Get().FindNearestBand(m_currentRoad, m_currentOffset, m_travelDir);
-}
-
-bool Car::ShouldStopForSignal(const shared_ptr<Road> &road, LaneDirection direction, int nextRoadId) const
-{
-    if (!road || IgnoresTrafficRules())
-        return false;
-    shared_ptr<RoadNode> signalNode = RoadDataManager::Get().GetSignalNodeForRoad(road->GetId(), nextRoadId);
-    if (!signalNode)
-        return false;
-
-    const Spline &spline = road->GetReferenceLine();
-    float sign = GetTravelSign(direction);
-    float nodeT = spline.GetSplinePosition(signalNode->position);
-    Vec3 travelDir = spline.GetDirectionAt(nodeT) * sign;
-    if ((GetPosition() - signalNode->position).Dot(travelDir) > 0.0f)
-    {
-        if (m_committedYellowNodeId == signalNode->id)
-            m_committedYellowNodeId = -1;
-        return false;
-    }
-
-    TrafficSignal::Color color = m_SimState->GetSignalColor(signalNode->signalPhaseOffset, signalNode->signalGreenDuration,
-                                                            signalNode->signalYellowDuration, signalNode->signalRedDuration);
-    float gap = (signalNode->position - GetPosition()).Length();
-    float emergStopDistance = (m_speed * m_speed) / (2.0f * m_maxBrake);
-    if (color == TrafficSignal::Color::Green)
-    {
-        if (m_committedYellowNodeId == signalNode->id)
-            m_committedYellowNodeId = -1;
-    }
-    else if (color == TrafficSignal::Color::Yellow && m_committedYellowNodeId != signalNode->id)
-    {
-        if (gap <= emergStopDistance)
-            m_committedYellowNodeId = signalNode->id;
-    }
-    else if (color == TrafficSignal::Color::Red && m_committedYellowNodeId == signalNode->id)
-    {
-        if (gap > emergStopDistance)
-            m_committedYellowNodeId = -1;
-    }
-    return color != TrafficSignal::Color::Green && m_committedYellowNodeId != signalNode->id;
+    m_currentBand = RoadDataManager::Get().FindNearestBand(m_currentRoad, m_currentOffset);
 }
 
 void Car::UpdateCar()
@@ -405,62 +305,6 @@ void Car::UpdateCar()
 
     m_maxSteerAngle = CalcMaxSteerAngle(m_speed);
     m_steerAngle = std::clamp(m_steerAngle, -m_maxSteerAngle, m_maxSteerAngle);
-}
-
-// 사이렌/도망=Siren, 추격 대기중(타겟없음)=Cautious
-void Car::ApplySpecialPersonality()
-{
-    bool special = m_sirenOn || m_chaseOn || m_fleeOn;
-    if (!special)
-    {
-        if (m_specialPersonalityOn)
-        {
-            m_personality = m_prevPersonality;
-            m_specialPersonalityOn = false;
-        }
-    }
-    else
-    {
-        if (!m_specialPersonalityOn) // 원래 성격은 한번만 저장
-        {
-            m_prevPersonality = m_personality;
-            m_specialPersonalityOn = true;
-        }
-        bool urgent = m_sirenOn || m_fleeOn;
-        m_personality = GetCarPersonality(urgent ? CarPersonalityType::Siren : CarPersonalityType::Cautious);
-    }
-    m_maxAccel = m_personality.maxAccel;
-    m_jerkUp = m_personality.jerkUp;
-    m_jerkDown = m_personality.jerkDown;
-}
-
-void Car::SetSirenOn(bool on)
-{
-    if (on == m_sirenOn)
-        return;
-
-    m_sirenOn = on;
-    ApplySpecialPersonality();
-}
-
-void Car::SetChaseOn(bool on)
-{
-    if (on == m_chaseOn)
-        return;
-
-    m_chaseOn = on;
-    if (!on)
-        ClearChase();
-    ApplySpecialPersonality();
-}
-
-void Car::SetFleeOn(bool on)
-{
-    if (on == m_fleeOn)
-        return;
-
-    m_fleeOn = on;
-    ApplySpecialPersonality();
 }
 
 void Car::UpdateWithControl()
@@ -507,68 +351,23 @@ void Car::ApplyMotion()
     JPH::BodyID otherId;
     if (PhysicsSystem::Get().GetNewContact(m_rigidbody.GetBodyID(), otherId))
     {
-        // 추격/도망차가 정면으로 박았으면 후진해서 다시 각을 잡는다. 옆 추돌은 기존대로 멈추고 민다.
-        Car *other = IgnoresTrafficRules() ? FindContactCar(otherId) : nullptr;
-        if (other != nullptr && IsHeadOnContact(other))
+        if (m_reverseEscapeTimer > 0.0f) // 후진탈출 중 충돌하면 중단
         {
-            if (m_reverseEscapeTimer <= 0.0f) // 첫 프레임에만 방향 결정
-            {
-                m_acceleration = 0.0f;
-                m_speed = 0.0f;
-                m_isReverse = true;
-                m_reverseEscapeSteer = ComputeReverseEscapeSteer(other->GetBodyCenter());
-                m_reverseEscapeStartFwd = GetForwardAxis().Normalized();
-                DebugConsole::Log(GetName() + ": HEAD-ON, reversing");
-            }
-            m_reverseEscapeTimer = REVERSE_ESCAPE_TIME; // 붙어있는 동안 계속 갱신
+            m_reverseEscapeTimer = 0.0f;
+            m_isReverse = false;
         }
-        else
-        {
-            if (m_reverseEscapeTimer > 0.0f) // 뒤에 뭔가 있으면 후진 중단
-            {
-                m_reverseEscapeTimer = 0.0f;
-                m_isReverse = false;
-            }
-            float vy = m_rigidbody.GetLinearVelocity().GetY();
-            m_rigidbody.SetLinearVelocity(JPH::Vec3(0.0f, vy, 0.0f));
-            m_rigidbody.SetAngularVelocity(JPH::Vec3::sZero());
-            m_acceleration = 0.0f;
-            m_speed = 0.0f;
-            m_contactPending = true;
-            DebugConsole::Log(GetName() + ": CRASH!!");
-            return;
-        }
+        float vy = m_rigidbody.GetLinearVelocity().GetY();
+        m_rigidbody.SetLinearVelocity(JPH::Vec3(0.0f, vy, 0.0f));
+        m_rigidbody.SetAngularVelocity(JPH::Vec3::sZero());
+        m_acceleration = 0.0f;
+        m_speed = 0.0f;
+        DebugConsole::Log(GetName() + ": CRASH!!");
+        return;
     }
 
     float angularVelocity = GetSignedSpeed() * tan(m_steerAngle) / m_wheelbase;
     m_rigidbody.SetAngularVelocity(JPH::Vec3(0.0f, angularVelocity, 0.0f));
     m_rigidbody.SetLinearVelocity(ComputeDesiredVelocity());
-}
-
-Car *Car::FindContactCar(JPH::BodyID otherId) const
-{
-    for (Car *other : m_nearbyCars)
-    {
-        if (other == nullptr || !m_SimState->IsCarAlive(other))
-            continue;
-        if (other->m_rigidbody.GetBodyID() == otherId)
-            return other;
-    }
-    return nullptr;
-}
-
-bool Car::IsHeadOnContact(const Car *other) const
-{
-    Vec3 forward = GetForwardAxis();
-    Vec3 toOther = other->GetBodyCenter() - GetBodyCenter();
-    float distance = toOther.Length();
-    if (distance < 0.01f)
-        return true;
-
-    // 앞쪽에서 부딪혔고 두 헤딩이 거의 평행해야 정면. 옆구리를 긁은 건 제외
-    if (forward.Dot(toOther * (1.0f / distance)) < HEADON_FRONT_COS)
-        return false;
-    return std::fabs(forward.Dot(other->GetForwardAxis())) > HEADON_PARALLEL_COS;
 }
 
 float Car::ComputeReverseEscapeSteer(const Vec3 &blockerCenter) const
@@ -633,23 +432,6 @@ float Car::Stanley(const Spline &spline)
     return std::clamp(headingError + crossTrackTerm, -m_maxSteerAngle, m_maxSteerAngle);
 }
 
-void Car::SetDestination(const shared_ptr<RoadNode> &destNode)
-{
-    if (destNode == nullptr || destNode->nodeType != RoadNodeType::Park)
-        return;
-
-    m_destRoad = RoadDataManager::Get().GetClosestRoad(destNode->position).road;
-    DebugConsole::Log(GetName() + ": SetDestination -> node " + std::to_string(destNode->id) +
-                      " (road " + std::to_string(m_destRoad ? m_destRoad->GetId() : -1) + ")");
-    if (destNode->nodeType == RoadNodeType::Park)
-    {
-        m_pendingParkNode = destNode;
-    }
-
-    if (m_currentRoad != nullptr)
-        TryFindPathAndSetRoad();
-}
-
 void Car::UpdateHorn(float dt)
 {
     constexpr float HORN_INTERVAL = 5.0f;
@@ -695,8 +477,7 @@ bool Car::KnowsRedSignalAhead() const
         if (i == m_pathIndex)
         {
             const Spline &spline = road.road->GetReferenceLine();
-            float sign = GetTravelSign(road.direction);
-            if (spline.GetSplinePosition(GetPosition()) * sign > spline.GetSplinePosition(signalNode->position) * sign)
+            if (spline.GetSplinePosition(GetPosition()) > spline.GetSplinePosition(signalNode->position))
                 continue;
         }
 
@@ -725,56 +506,16 @@ void Car::UpdateDebugWindow()
         ImGui::Text("Current Road: %d", m_currentRoad != nullptr ? m_currentRoad->GetId() : -1);
         RoadRef nextRoad = (m_pathIndex + 1 < m_path.size()) ? m_path[m_pathIndex + 1] : RoadRef{};
         ImGui::Text("Next Road: %d", nextRoad.road != nullptr ? nextRoad.road->GetId() : -1);
-        if (m_roaming)
-            ImGui::Text("Dest Road: roaming");
-        else
-            ImGui::Text("Dest Road: %d", m_destRoad != nullptr ? m_destRoad->GetId() : -1);
         if (m_mode == Mode::Drive)
             ImGui::Text("Mode: %s / %s", StateToString(m_mode), SubStateToString(m_subMode));
         else
             ImGui::Text("Mode: %s", StateToString(m_mode));
-        bool sirenOn = m_sirenOn;
-        if (ImGui::Checkbox("Siren", &sirenOn))
-            SetSirenOn(sirenOn);
-        ImGui::SameLine();
-        bool chaseOn = m_chaseOn;
-        if (ImGui::Checkbox("Chase", &chaseOn))
-            SetChaseOn(chaseOn);
-        ImGui::SameLine();
-        bool fleeOn = m_fleeOn;
-        if (ImGui::Checkbox("Flee", &fleeOn))
-            SetFleeOn(fleeOn);
-        if (m_chaseOn)
-        {
-            if (m_chaseTarget != nullptr && m_SimState->IsCarAlive(m_chaseTarget))
-                ImGui::Text("Chasing: %s (dist %.1f m, road %d)", m_chaseTarget->GetName().c_str(),
-                            (m_chaseTarget->GetPosition() - GetPosition()).Length(), m_chaseTargetRoadId);
-            else
-                ImGui::Text("Chasing: no target in range");
-        }
 
-        ImGui::Text("Plan accel(IDM): %.2f m/s^2", m_planAccelDebug);
-        ImGui::Text("Limit cause: %s (target %.1f km/h, gap %.1f m)", m_limitDebug.label.c_str(),
-                    m_limitDebug.targetSpeed * 3.6f, m_limitDebug.gap);
+        ImGui::Text("Plan accel: %.2f m/s^2", m_planAccelDebug);
         ImGui::Text("Cur offset d: %.2f m", m_currentOffset);
 
-        ThreatKind frontThreat = ClassifyFrontThreat();
-        const char *frontThreatStr = frontThreat == ThreatKind::Vehicle  ? "vehicle"
-                                     : frontThreat == ThreatKind::Static ? "static"
-                                                                         : "none";
-        float leaderDist = m_currentLeader != nullptr ? (m_currentLeader->center - GetPosition()).Length() : -1.0f;
-        ImGui::Text("Front leader: %s (dist %.1f m)", frontThreatStr, leaderDist);
-        if (m_subMode == SubMode::D_Avoid)
-            ImGui::Text("Avoid: shifted d %.2f -> %.2f", m_maneuver.laneOffset, m_maneuver.avoidOffset);
-        else if (m_subMode == SubMode::D_SirenWait)
-            ImGui::Text("SirenWait: d %.2f (%s)", m_maneuver.avoidOffset,
-                        m_sirenPulledOver ? "stopped" : "pulling over");
-        else if (m_subMode == SubMode::D_ChaseBlock)
-            ImGui::Text("ChaseBlock: d %.2f", m_maneuver.avoidOffset);
-        else if (m_stuck)
-            ImGui::Text("Avoid: stuck (no gap)");
         if (m_reverseEscapeTimer > 0.0f)
-            ImGui::Text("HeadOn reverse: %.1fs, steer %.0f deg", m_reverseEscapeTimer,
+            ImGui::Text("Reverse escape: %.1fs, steer %.0f deg", m_reverseEscapeTimer,
                         ToDegrees(m_reverseEscapeSteer));
         else if (UsesReactiveSteer())
             ImGui::Text("ReactiveSteer: slot %.0f deg, danger %.2f", ToDegrees(m_ctxSteerDebugRad),
@@ -784,13 +525,8 @@ void Car::UpdateDebugWindow()
 
         ImGui::Separator();
         ImGui::Text("Personality (notes/accel.txt A~D)");
-        ImGui::SliderFloat("Speed Factor", &m_personality.speedFactor, 0.5f, 1.3f);
-        ImGui::SliderFloat("Headway Factor", &m_personality.headwayFactor, 0.5f, 2.0f);
         ImGui::SliderFloat("Jerk Up Max", &m_jerkUp, 0.5f, 10.0f);
         ImGui::SliderFloat("Jerk Down Max", &m_jerkDown, 1.0f, 30.0f);
-        ImGui::SliderFloat("Brake Factor", &m_personality.brakeFactor, 0.3f, 2.0f);
-        ImGui::SliderFloat("Politeness", &m_personality.politeness, 0.0f, 0.5f);
-        ImGui::SliderFloat("Lateral Lerp", &m_personality.laneChangeLerpAlpha, 0.05f, 0.6f);
     }
     ImGui::End();
 }
@@ -875,50 +611,6 @@ void Car::RebuildSplineRender()
     pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f));
     pModel->materials[0].Set<float>("$Opacity", 1.0f);
     m_splineRender.SetModel(pModel);
-}
-
-void Car::RebuildSensorRender()
-{
-    if (m_sweepDebugCorners.empty())
-    {
-        m_sensorRender.SetModel(nullptr);
-        return;
-    }
-
-    constexpr float DEBUG_LINE_HEIGHT = 0.15f;
-
-    GeometryData geoData;
-    geoData.vertices.reserve(m_sweepDebugCorners.size());
-    for (const Vec3 &corner : m_sweepDebugCorners)
-    {
-        DirectX::XMFLOAT3 p = ToXMFLOAT3(corner);
-        p.y += DEBUG_LINE_HEIGHT;
-        geoData.vertices.push_back(p);
-    }
-    geoData.normals.assign(geoData.vertices.size(), DirectX::XMFLOAT3(0.0f, 1.0f, 0.0f));
-    geoData.texcoords.assign(geoData.vertices.size(), DirectX::XMFLOAT2(0.0f, 0.0f));
-
-    std::vector<uint32_t> indices;
-    size_t boxCount = m_sweepDebugCorners.size() / 4;
-    indices.reserve(boxCount * 8);
-    for (size_t box = 0; box < boxCount; ++box)
-    {
-        uint32_t base = static_cast<uint32_t>(box * 4);
-        for (uint32_t i = 0; i < 4; ++i)
-        {
-            indices.push_back(base + i);
-            indices.push_back(base + (i + 1) % 4);
-        }
-    }
-    if (indices.size() > 65535)
-        geoData.indices32 = std::move(indices);
-    else
-        geoData.indices16.assign(indices.begin(), indices.end());
-
-    Model *pModel = ModelManager::Get().CreateFromGeometry("__sensor_sweep__:" + GetName(), geoData);
-    pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f));
-    pModel->materials[0].Set<float>("$Opacity", 1.0f);
-    m_sensorRender.SetModel(pModel);
 }
 
 void Car::RebuildEmergRayRender()
@@ -1008,51 +700,6 @@ void Car::RebuildCtxSteerRender()
                        DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f), DEBUG_LINE_HEIGHT);
 }
 
-void Car::RebuildRSDebugRender(const ReedsShepp::Path &path, const Vec3 &startPos, float startAngleRad,
-                               float turningRadius, const Vec3 &targetPos, float targetAngleRad)
-{
-    constexpr float DEBUG_LINE_HEIGHT = 0.15f;
-
-    std::vector<Vec3> pathPoints = ReedsShepp::GetDebugPath(path, startPos, startAngleRad, turningRadius);
-    if (pathPoints.size() < 2)
-    {
-        m_parkPathRender.SetModel(nullptr);
-    }
-    else
-    {
-        std::vector<DirectX::XMFLOAT3> points;
-        points.reserve(pathPoints.size());
-        for (const Vec3 &point : pathPoints)
-        {
-            DirectX::XMFLOAT3 p = ToXMFLOAT3(point);
-            p.y += DEBUG_LINE_HEIGHT;
-            points.push_back(p);
-        }
-
-        Model *pPathModel = ModelManager::Get().CreateFromGeometry("__park_path__:" + GetName(), Geometry::CreatePolyline(points));
-        pPathModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(1.0f, 0.0f, 1.0f, 1.0f));
-        pPathModel->materials[0].Set<float>("$Opacity", 1.0f);
-        m_parkPathRender.SetModel(pPathModel);
-    }
-
-    DirectX::XMFLOAT3 markerPos = ToXMFLOAT3(targetPos);
-    markerPos.y += DEBUG_LINE_HEIGHT;
-    m_parkTargetMarker.GetTransform().SetPosition(markerPos);
-
-    constexpr float TARGET_LINE_LENGTH = 6.0f;
-    Vec3 targetDir(cosf(targetAngleRad), 0.0f, sinf(targetAngleRad));
-    DirectX::XMFLOAT3 lineStart = ToXMFLOAT3(targetPos);
-    DirectX::XMFLOAT3 lineEnd = ToXMFLOAT3(targetPos + targetDir * TARGET_LINE_LENGTH);
-    lineStart.y += DEBUG_LINE_HEIGHT;
-    lineEnd.y += DEBUG_LINE_HEIGHT;
-
-    Model *pTargetLineModel = ModelManager::Get().CreateFromGeometry("__park_target_line__:" + GetName(),
-                                                                     Geometry::CreateLine(lineStart, lineEnd));
-    pTargetLineModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f));
-    pTargetLineModel->materials[0].Set<float>("$Opacity", 1.0f);
-    m_parkTargetLine.SetModel(pTargetLineModel);
-}
-
 void Car::DebugInit()
 {
     float w = m_halfExtents.GetX() * 2.0f;
@@ -1075,11 +722,5 @@ void Car::DebugInit()
     pTargetMarker->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f));
     pTargetMarker->materials[0].Set<float>("$Opacity", 1.0f);
     m_targetMarker.SetModel(pTargetMarker);
-
-    Model *pParkTargetMarker = ModelManager::Get().CreateFromGeometry("__park_target_marker__:" + GetName(),
-                                                                      Geometry::CreatePlane(TARGET_MARKER_SIZE, TARGET_MARKER_SIZE));
-    pParkTargetMarker->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f));
-    pParkTargetMarker->materials[0].Set<float>("$Opacity", 1.0f);
-    m_parkTargetMarker.SetModel(pParkTargetMarker);
 }
 #pragma endregion

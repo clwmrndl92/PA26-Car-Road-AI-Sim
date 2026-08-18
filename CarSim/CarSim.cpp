@@ -145,8 +145,6 @@ bool CarSim::InitResource()
     //               &m_SimState, JPH::Vec3(133.0f, 0.0, -74.0f), 100.0f);
     //     car->SetSpeed(20.0f);
     //     car->SetRotation(Vec3(0, 0, 1));
-    //     car->SetRoaming(true);
-    //     car->SetFleeOn(false);
 
     //     m_GameObjects.push_back(car);
     //     m_CarObjects.push_back(car);
@@ -156,33 +154,22 @@ bool CarSim::InitResource()
     return true;
 }
 
-void CarSim::SpawnCar(CarType type, CarPersonalityType personality, bool roaming)
+void CarSim::SpawnCar(CarType type, CarPersonalityType personality)
 {
     auto spawnNode = m_RoadDataManager.GetRandomDestNode();
     if (!spawnNode)
         return;
 
-    std::shared_ptr<RoadNode> destNode;
-    if (!roaming)
-    {
-        destNode = m_RoadDataManager.GetRandomParkNode();
-        if (!destNode)
-            return;
-    }
-
-    auto car = SpawnCarAt(spawnNode->position, spawnNode->direction, type, personality, roaming);
-    if (!roaming)
-        car->SetDestination(destNode);
+    SpawnCarAt(spawnNode->position, spawnNode->direction, type, personality);
 }
 
 std::shared_ptr<Car> CarSim::SpawnCarAt(const Vec3 &position, const Vec3 &direction, CarType type,
-                                        CarPersonalityType personality, bool roaming)
+                                        CarPersonalityType personality)
 {
     auto car = std::make_shared<Car>();
     car->Init(GetCarSpec(type), GetCarPersonality(personality), &m_SimState,
               JPH::Vec3(position.GetX(), 0.1f, position.GetZ()));
     car->SetRotation(direction);
-    car->SetRoaming(roaming);
     car->SetId(m_carIDCounter);
     car->SetName(car->GetName() + ToString(m_carIDCounter++));
 
@@ -210,7 +197,7 @@ void CarSim::SpawnAllCars()
         CarType type = static_cast<CarType>(PickWeightedIndex(kCarTypeWeights, IM_ARRAYSIZE(kCarTypeWeights)));
         CarPersonalityType personality =
             static_cast<CarPersonalityType>(PickWeightedIndex(kPersonalityWeights, IM_ARRAYSIZE(kPersonalityWeights)));
-        SpawnCarAt(position, direction, type, personality, /*roaming=*/true);
+        SpawnCarAt(position, direction, type, personality);
     }
 }
 
@@ -227,7 +214,7 @@ void CarSim::SpawnAllNodes()
         CarType type = static_cast<CarType>(PickWeightedIndex(kCarTypeWeights, IM_ARRAYSIZE(kCarTypeWeights)));
         CarPersonalityType personality =
             static_cast<CarPersonalityType>(PickWeightedIndex(kPersonalityWeights, IM_ARRAYSIZE(kPersonalityWeights)));
-        SpawnCarAt(node->position, node->direction, type, personality, /*roaming=*/true);
+        SpawnCarAt(node->position, node->direction, type, personality);
     }
 }
 
@@ -319,23 +306,7 @@ void CarSim::UpdateCamera(float dt)
 {
     auto pickedObj = m_pPickedObject.lock();
     for (auto &car : m_CarObjects)
-    {
         car->SetFocused(car == pickedObj);
-        car->SetHighlighted(false);
-        car->SetMobilHighlighted(false);
-    }
-    if (pickedObj != nullptr)
-    {
-        if (Car *leader = pickedObj->GetIdmLeader())
-            leader->SetHighlighted(true);
-        Car *laneLeader = nullptr;
-        Car *laneFollower = nullptr;
-        pickedObj->GetLaneChangeNeighbors(laneLeader, laneFollower);
-        if (laneLeader != nullptr)
-            laneLeader->SetMobilHighlighted(true);
-        if (laneFollower != nullptr)
-            laneFollower->SetMobilHighlighted(true);
-    }
     if (auto picked = m_pPickedObject.lock())
     {
         if (auto cam3rd = std::dynamic_pointer_cast<FocusCamera>(m_pCamera))
@@ -488,7 +459,6 @@ void CarSim::UpdateUI(float dt)
         static const char *kPersonalityNames[] = {"Normal", "Aggressive", "Cautious"};
         ImGui::Combo("Personality", &m_SpawnPersonalityIndex, kPersonalityNames, IM_ARRAYSIZE(kPersonalityNames));
         CarPersonalityType personality = static_cast<CarPersonalityType>(m_SpawnPersonalityIndex);
-        ImGui::Checkbox("Roaming (no destination)", &m_SpawnRoaming);
 
         ImGui::Separator();
         for (int i = 0; i < static_cast<int>(CarType::Count); ++i)
@@ -497,7 +467,7 @@ void CarSim::UpdateUI(float dt)
             ImGui::Text("%s", GetCarSpec(type).name);
             ImGui::SameLine();
             if (ImGui::Button(("Spawn##spawnCar" + std::to_string(i)).c_str()))
-                SpawnCar(type, personality, m_SpawnRoaming);
+                SpawnCar(type, personality);
         }
 
         ImGui::Separator();
@@ -756,32 +726,27 @@ void CarSim::InitRoadRenderer()
         }
     }
 
-    // road 그래프의 successor 연결(진행방향 끝 -> 다음 road의 진행방향 시작)을 노란 선으로 시각화한다.
-    // 왕복 도로는 방향마다 나가는 곳이 다르므로 두 방향을 모두 그린다.
+    // road 그래프의 successor 연결(도로 끝 -> 다음 road의 시작)을 노란 선으로 시각화한다.
     m_RoadEdgeRenders.clear();
     int linkIndex = 0;
     for (const auto &road : m_RoadDataManager.GetRoads())
     {
         if (road->GetReferenceLine().GetSplinePoints().size() < 2)
             continue;
-        for (LaneDirection travel : {LaneDirection::Forward, LaneDirection::Backward})
+        Vec3 from = m_RoadDataManager.GetTravelEnd(road) + Vec3(0.0f, EDGE_LINE_HEIGHT, 0.0f);
+        for (const RoadRef &succ : m_RoadDataManager.GetRoadSuccessors(road->GetId()))
         {
-            Vec3 from = m_RoadDataManager.GetTravelEnd(road, travel) + Vec3(0.0f, EDGE_LINE_HEIGHT, 0.0f);
-            for (const RoadRef &succ : m_RoadDataManager.GetRoadSuccessors(road->GetId(), travel))
-            {
-                if (succ.road->GetReferenceLine().GetSplinePoints().size() < 2)
-                    continue;
-                // 다음 road의 '진행방향 시작' = 반대 방향으로 봤을 때의 끝.
-                Vec3 to = m_RoadDataManager.GetTravelEnd(succ.road, GetOppositeDirection(succ.direction)) +
-                          Vec3(0.0f, EDGE_LINE_HEIGHT, 0.0f);
+            const std::vector<Vec3> &succPts = succ.road->GetReferenceLine().GetSplinePoints();
+            if (succPts.size() < 2)
+                continue;
+            Vec3 to = succPts.front() + Vec3(0.0f, EDGE_LINE_HEIGHT, 0.0f);
 
-                Model *pLine = m_ModelManager.CreateFromGeometry("edge_line" + std::to_string(linkIndex++), Geometry::CreateLine(ToXMFLOAT3(from), ToXMFLOAT3(to)));
-                pLine->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f));
-                pLine->materials[0].Set<float>("$Opacity", 1.0f);
+            Model *pLine = m_ModelManager.CreateFromGeometry("edge_line" + std::to_string(linkIndex++), Geometry::CreateLine(ToXMFLOAT3(from), ToXMFLOAT3(to)));
+            pLine->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f));
+            pLine->materials[0].Set<float>("$Opacity", 1.0f);
 
-                RenderObject &edgeRender = m_RoadEdgeRenders.emplace_back();
-                edgeRender.SetModel(pLine);
-            }
+            RenderObject &edgeRender = m_RoadEdgeRenders.emplace_back();
+            edgeRender.SetModel(pLine);
         }
     }
 

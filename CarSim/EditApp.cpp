@@ -289,8 +289,7 @@ void EditApp::RebuildRenderObjects()
             if (!geo.vertices.empty())
             {
                 Model *pRef = m_ModelManager.CreateFromGeometry("edit_refline_" + std::to_string(road.id), geo);
-                XMFLOAT4 refColor = road.isParking ? XMFLOAT4(0.0f, 0.85f, 1.0f, 1.0f) : XMFLOAT4(0.1f, 0.9f, 0.3f, 1.0f);
-                pRef->materials[0].Set<XMFLOAT4>("$DiffuseColor", refColor);
+                pRef->materials[0].Set<XMFLOAT4>("$DiffuseColor", XMFLOAT4(0.1f, 0.9f, 0.3f, 1.0f));
                 pRef->materials[0].Set<float>("$Opacity", 1.0f);
                 m_RoadRenders.emplace_back().SetModel(pRef);
             }
@@ -711,8 +710,6 @@ void EditApp::SaveToJson()
                     jb["width"] = round2(b.width);
                     jb["type"] = b.type;
                     jb["speed_limit"] = b.speedLimit;
-                    if (b.backward)
-                        jb["direction"] = "backward"; // 기본값(forward)은 안 적어 기존 데이터와 diff가 안 생기게
                     jb["boundary_mark"] = markToJson(b.boundaryMark);
                     bands.push_back(jb);
                 }
@@ -723,8 +720,6 @@ void EditApp::SaveToJson()
         }
         if (r.junction != -1)
             jr["junction"] = r.junction;
-        if (r.isParking)
-            jr["parking"] = true;
         if (r.predecessor.valid || r.successor.valid)
         {
             json jlink;
@@ -862,7 +857,6 @@ void EditApp::LoadFromJson(const std::filesystem::path &path)
                 b.width = jb.value("width", 3.5f);
                 copyStr(b.type, sizeof(b.type), jb.value("type", std::string("driving")));
                 b.speedLimit = jb.value("speed_limit", 40);
-                b.backward = jb.value("direction", std::string("forward")) == "backward";
                 if (jb.contains("boundary_mark"))
                     b.boundaryMark = parseMark(jb["boundary_mark"]);
                 sec.bands.push_back(b);
@@ -870,7 +864,6 @@ void EditApp::LoadFromJson(const std::filesystem::path &path)
             r.laneSections.push_back(std::move(sec));
         }
         r.junction = jr.value("junction", -1);
-        r.isParking = jr.value("parking", false);
         if (jr.contains("link"))
         {
             const auto &jlink = jr["link"];
@@ -1248,10 +1241,7 @@ void EditApp::DrawRoadListWindow()
         for (int i = 0; i < (int)m_Roads.size(); ++i)
         {
             char label[80];
-            if (m_Roads[i].isParking)
-                snprintf(label, sizeof(label), "Road %d (%s) [parking]", m_Roads[i].id, m_Roads[i].name);
-            else
-                snprintf(label, sizeof(label), "Road %d (%s)", m_Roads[i].id, m_Roads[i].name);
+            snprintf(label, sizeof(label), "Road %d (%s)", m_Roads[i].id, m_Roads[i].name);
             bool selected = (m_Selection == Selection::Road && i == m_SelectedRoad);
 
             ImGui::PushID(i);
@@ -1310,7 +1300,6 @@ void EditApp::DrawRoadEditWindow()
         ImGui::Text("Road ID: %d", road.id);
         ImGui::InputText("name", road.name, sizeof(road.name));
         ImGui::InputInt("speed limit", &road.speedLimit);
-        ImGui::Checkbox("parking aisle (excluded from normal driving)", &road.isParking);
 
         // 마킹 편집 공통 위젯: 타입/색/폭.
         auto editMark = [](const char *label, EditBoundaryMark &mk)
@@ -1403,7 +1392,6 @@ void EditApp::DrawRoadEditWindow()
                 ImGui::SetNextItemWidth(90.0f);
                 ImGui::InputInt("spd", &b.speedLimit);
                 ImGui::InputText("type##b", b.type, sizeof(b.type));
-                ImGui::Checkbox("backward (reverse lane)", &b.backward);
                 editMark("bandmark", b.boundaryMark);
             }
             ImGui::Separator();
@@ -1608,10 +1596,10 @@ void EditApp::DrawNodeEditWindow()
         float dir[3] = {node.direction.x, node.direction.y, node.direction.z};
         if (ImGui::InputFloat3("Direction", dir))
             node.direction = XMFLOAT3(dir[0], dir[1], dir[2]);
-        ImGui::TextDisabled("(ParkSpot's target heading; unused by other types)");
+        ImGui::TextDisabled("(unused by current node types)");
 
         // RoadDataManager::GetRoadNodeTypeByName()이 인식하는 값만 골라 오타를 방지한다.
-        static const char *typeNames[] = {"unknown", "park", "park_spot", "traffic_light"};
+        static const char *typeNames[] = {"unknown", "traffic_light"};
         int typeIdx = 0;
         for (int i = 0; i < IM_ARRAYSIZE(typeNames); ++i)
         {
@@ -1625,7 +1613,7 @@ void EditApp::DrawNodeEditWindow()
             snprintf(node.type, sizeof(node.type), "%s", typeNames[typeIdx]);
 
         ImGui::Separator();
-        ImGui::Text("Children (e.g. Park -> ParkSpot ids)");
+        ImGui::Text("Children (currently unused by any node type)");
         int eraseIdx = -1;
         for (int i = 0; i < (int)node.children.size(); ++i)
         {
@@ -1916,7 +1904,7 @@ void EditApp::DrawObstacleEditWindow()
         ImGui::DragFloat("Width", &obstacle.width, 0.1f, 0.1f, 100.0f, "%.2f");
         ImGui::DragFloat("Height", &obstacle.height, 0.1f, 0.1f, 100.0f, "%.2f");
         ImGui::DragFloat("Rotation (deg)", &obstacle.rotation, 1.0f, -180.0f, 180.0f, "%.1f");
-        ImGui::TextDisabled("(0deg = +X, same atan2(z,x) convention as ReedsShepp)");
+        ImGui::TextDisabled("(0deg = +X, atan2(z,x) convention)");
     }
     ImGui::End();
 

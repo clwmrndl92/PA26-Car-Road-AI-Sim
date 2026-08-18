@@ -1,13 +1,10 @@
 #pragma once
 #include <algorithm>
 #include <memory>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 #include "TrafficSignal.h"
 
 class Car;
-struct RoadNode;
 
 class SimulationState
 {
@@ -26,23 +23,7 @@ public:
     // 역참조 없이 포인터 값만 등록부와 비교하므로, 이미 delete된 대상에도 안전하게 쓸 수 있다.
     bool IsCarAlive(const Car *car) const { return std::find(m_cars.begin(), m_cars.end(), car) != m_cars.end(); }
 
-    std::shared_ptr<RoadNode> TryReserveParkSpot(int parkNodeId, const std::unordered_set<int> &excludeIds = {});
-    void ReleaseParkSpot(int spotNodeId);
-
-    // Vehicles entering from the same road share a reservation; other approaches wait.
-    bool TryReserveJunction(int junctionId, int incomingRoadId, const Car *owner);
-    bool IsJunctionAvailable(int junctionId, int incomingRoadId, const Car *owner) const;
-    void ReleaseJunction(int junctionId, const Car *owner);
-
 private:
-    struct JunctionReservation
-    {
-        int incomingRoadId = -1;
-        std::unordered_set<const Car *> owners;
-    };
-
-    std::unordered_set<int> m_reservedParkSpotIds; // 예약된(다른 차가 목표로 잡은) ParkSpot 노드 id
     std::vector<Car *> m_cars;
-    std::unordered_map<int, JunctionReservation> m_reservedJunctionOwners;
     float m_simTime = 0.0f; // Tick()으로만 누적되는 전역 시뮬레이션 시계.
 };

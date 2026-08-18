@@ -61,11 +61,10 @@ private:
     // s의 함수로 본 도로 횡단면의 한 띠(차로 하나). RoadDataManager::LaneBand와 매칭.
     struct EditBand
     {
-        float centerOffset = 1.75f; // 참조선 기준 d (+오른쪽, -왼쪽). 방향과 무관하게 참조선 프레임.
+        float centerOffset = 1.75f; // 참조선 기준 d (+오른쪽, -왼쪽)
         float width = 3.5f;
         char type[16] = "driving"; // "driving" | "none"
         int speedLimit = 40;
-        bool backward = false;         // 참조선 s를 거슬러 달리는 차로(왕복 도로의 마주 오는 쪽)
         EditBoundaryMark boundaryMark; // 바깥쪽 경계(|d| 큰 쪽)에 그려지는 마킹
     };
 
@@ -106,8 +105,7 @@ private:
         bool hasCenterMark = false;
         EditBoundaryMark centerMark; // 참조선 위 중앙선 마킹
         std::vector<EditLaneSection> laneSections;
-        int junction = -1;      // -1=일반 도로, 아니면 소속 junction(내부 연결도로)
-        bool isParking = false; // 주차장 통로(진입로)면 true. 저장 시 "parking":true (기본값 false는 안 적음).
+        int junction = -1; // -1=일반 도로, 아니면 소속 junction(내부 연결도로)
         EditRoadLink predecessor;
         EditRoadLink successor;
     };
@@ -137,11 +135,10 @@ private:
     {
         int id = -1;
         DirectX::XMFLOAT3 position{0.0f, 0.0f, 0.0f};
-        // Park/ParkSpot처럼 자기만의 목표 heading이 필요한 노드용. RoadDataManager의 RoadNode와
+        // 자기만의 목표 heading이 필요한 노드용. RoadDataManager의 RoadNode와
         // 필드를 맞춘 것 (기본값도 로더의 fallback인 +X와 동일).
         DirectX::XMFLOAT3 direction{1.0f, 0.0f, 0.0f};
-        char type[32] = "unknown"; // "unknown" | "park" | "park_spot" | "traffic_light" (RoadNodeType과 매칭)
-        // 예: Park 노드가 자기 소유의 ParkSpot 노드 id들을 참조 (RoadNode::children과 같은 개념).
+        char type[32] = "unknown"; // "unknown" | "traffic_light" (RoadNodeType과 매칭)
         std::vector<int> children;
         // traffic_light 노드 전용: 이 신호가 걸린 road id들 (RoadDataManager가 m_roadSignals로 역참조).
         std::vector<int> roads;
@@ -171,7 +168,7 @@ private:
     };
 
     // 회전된 사각형 장애물. RoadDataManager/VehicleCollision::Obstacle과 필드를 맞췄다(length=heading
-    // 방향 전체 길이, width=수직 방향 전체 폭, rotation=도, atan2(z,x) 규약, ReedsShepp와 동일).
+    // 방향 전체 길이, width=수직 방향 전체 폭, rotation=도, atan2(z,x) 규약).
     struct EditObstacle
     {
         int id = -1;

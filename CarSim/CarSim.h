@@ -33,9 +33,9 @@ private:
     void InitRoadColliders();
     void InitObstacleColliders();
     void InitDynamicObstacleRenders();
-    void SpawnCar(CarType type, CarPersonalityType personality, bool roaming);
+    void SpawnCar(CarType type, CarPersonalityType personality);
     std::shared_ptr<Car> SpawnCarAt(const Vec3 &position, const Vec3 &direction, CarType type,
-                                    CarPersonalityType personality, bool roaming);
+                                    CarPersonalityType personality);
     void SpawnAllCars();
     void SpawnAllNodes();
     void RemoveCar(const std::shared_ptr<Car> &car);
@@ -59,7 +59,6 @@ private:
     std::weak_ptr<Car> m_pPickedObject;
     int m_carIDCounter = 1;
     int m_SpawnPersonalityIndex = 0;
-    bool m_SpawnRoaming = false;
 
     std::shared_ptr<Car> m_ManualCar;
     int m_ManualCarTypeIndex = 0;
