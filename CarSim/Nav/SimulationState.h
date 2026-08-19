@@ -20,6 +20,7 @@ public:
     {
         m_simTime += dt; // 전역 시뮬레이션 시계 누적
         UpdateStandings();
+        SampleOvertakeGates();
     }
     float GetSimTime() const { return m_simTime; }
     // durations는 신호(RoadNode)마다 다르게 줄 수 있다 -- 이 클래스는 전역 시계(m_simTime)만 들고 있다.
@@ -55,6 +56,8 @@ public:
     // 같은 접촉이 매 스텝 반복 기록되지 않게 쌍 단위로 쿨다운을 둔다.
     bool ShouldLogContact(int idA, int idB);
     int GetContactCount() const { return m_contactCount; }
+    // 추월이 왜 자주 안 일어나는지 보려고 상태/차단사유 분포를 주기적으로 남긴다.
+    void SampleOvertakeGates();
 
 private:
     void OpenLogs();
@@ -64,6 +67,8 @@ private:
     std::map<std::pair<int, int>, float> m_contactCooldown;
     int m_contactCount = 0;
     float m_lastStandingsTime = -1000.0f;
+    std::ofstream m_gateLog;
+    float m_lastGateSampleTime = -1000.0f;
     std::vector<RaceLine> m_raceLines;
     std::vector<Car *> m_cars;
     float m_simTime = 0.0f; // Tick()으로만 누적되는 전역 시뮬레이션 시계.

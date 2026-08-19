@@ -55,8 +55,15 @@ void SimulationState::OpenLogs()
     m_contactLog.open("race_contacts.csv");
     m_contactLog << "time,carA,carB,posA,posB,s,radius,"
                     "stateA,sideA,offsetA,speedA,stateB,sideB,offsetB,speedB,"
-                    "deltaS,lateral,bodyGap,aTargetsB,bTargetsA"
+                    "deltaS,lateral,bodyGap,aTargetsB,bTargetsA,"
+                    "aLeaderIsB,aGap,aClosing,bLeaderIsA,bGap,bClosing,aYieldsB,bYieldsA"
                  << std::endl;
+
+    m_gateLog.open("race_gates.csv");
+    m_gateLog << "time,None,Follow,Setup,Attack,Return,"
+                 "bCooldown,bGap,bCorner,bPace,bTooSlow,bRoom,bOpen,attempts,aborts,overtakes,"
+                 "abSetup,abClearance,abStall,passSuccess"
+              << std::endl;
 
     m_lapLog.open("race_laps.csv");
     m_lapLog << "time,car,lap,lapTime,bestLap,position,overtakes,overtakenBy" << std::endl;
@@ -102,11 +109,57 @@ void SimulationState::LogContact(const Car &a, const Car &b)
                  << b.GetRaceLateralOffset() << "," << b.GetSpeed() * 3.6f << ","
                  << deltaS << "," << lateral << "," << bodyGap << ","
                  << (a.GetOvertakeTarget() == &b ? 1 : 0) << ","
-                 << (b.GetOvertakeTarget() == &a ? 1 : 0) << std::endl;
+                 << (b.GetOvertakeTarget() == &a ? 1 : 0) << ","
+                 << (a.GetLeaderCar() == &b ? 1 : 0) << "," << a.GetLeaderGap() << ","
+                 << a.GetLeaderClosing() << ","
+                 << (b.GetLeaderCar() == &a ? 1 : 0) << "," << b.GetLeaderGap() << ","
+                 << b.GetLeaderClosing() << ","
+                 << (a.GetYieldTarget() == &b ? 1 : 0) << ","
+                 << (b.GetYieldTarget() == &a ? 1 : 0) << std::endl;
 
     DebugConsole::Log("CONTACT " + a.GetName() + "(" + a.GetOvertakeStateName() + ") <-> " +
                       b.GetName() + "(" + b.GetOvertakeStateName() + ") @ s=" +
                       ToString(static_cast<int>(a.GetRaceS())) + " R=" + ToString(static_cast<int>(radius)));
+}
+
+void SimulationState::SampleOvertakeGates()
+{
+    constexpr float GATE_SAMPLE_INTERVAL = 2.0f;
+    if (m_cars.empty() || m_simTime - m_lastGateSampleTime < GATE_SAMPLE_INTERVAL)
+        return;
+    m_lastGateSampleTime = m_simTime;
+    OpenLogs();
+
+    std::map<std::string, int> states;
+    std::map<std::string, int> blocks;
+    int attempts = 0, aborts = 0, overtakes = 0;
+    int abSetup = 0, abClearance = 0, abStall = 0, passSuccess = 0;
+    for (const Car *car : m_cars)
+    {
+        ++states[car->GetOvertakeStateName()];
+        const char *block = car->GetOvertakeBlock();
+        ++blocks[(block == nullptr || block[0] == 0) ? "open" : block];
+        attempts += car->GetOvertakeAttempts();
+        aborts += car->GetOvertakeAborts();
+        overtakes += car->GetOvertakes();
+        abSetup += car->GetAbortSetup();
+        abClearance += car->GetAbortClearance();
+        abStall += car->GetAbortStall();
+        passSuccess += car->GetOvertakeSuccess();
+    }
+
+    auto at = [](const std::map<std::string, int> &table, const char *key)
+    {
+        auto found = table.find(key);
+        return found == table.end() ? 0 : found->second;
+    };
+    m_gateLog << m_simTime << "," << at(states, "None") << "," << at(states, "Follow") << ","
+              << at(states, "Setup") << "," << at(states, "Attack") << "," << at(states, "Return")
+              << "," << at(blocks, "cooldown") << "," << at(blocks, "gap") << ","
+              << at(blocks, "corner") << "," << at(blocks, "pace") << "," << at(blocks, "tooSlow")
+              << "," << at(blocks, "room") << "," << at(blocks, "open") << "," << attempts << ","
+              << aborts << "," << overtakes << "," << abSetup << "," << abClearance << ","
+              << abStall << "," << passSuccess << std::endl;
 }
 
 void SimulationState::LogLap(const Car &car, float lapTime)

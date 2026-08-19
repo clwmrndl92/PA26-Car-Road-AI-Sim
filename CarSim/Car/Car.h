@@ -17,7 +17,6 @@ class SimulationState;
 class Spline;
 class VehicleSegment;
 
-
 // 레이싱 라인 위로 투영해 찾은 "같은 라인 앞차". 종방향 갭 유지의 기준점이자,
 // 이후 추월 판단(오버랩 확보 여부, 기회 탐색)이 얹힐 자리다.
 struct LeaderInfo
@@ -37,6 +36,7 @@ struct LeaderInfo
 struct RaceNeighbors
 {
     LeaderInfo leader;
+    bool selfProjected = false; // leader 유무와 무관하게 내 (s, d) 투영이 유효한가
     float slipstream = 0.0f;    // 0=클린에어 ~ 1=앞차 바로 뒤
     float slipstreamGap = 0.0f; // 와류를 준 차와의 갭(m). 디버그용
 
@@ -46,12 +46,26 @@ struct RaceNeighbors
     float targetDeltaS = 0.0f;  // 양수면 아직 앞에 있다
     float targetLateral = 0.0f; // 내 기준 상대 횡오프셋
     float targetSpeed = 0.0f;   // 물러날 때 이 속도 밑으로 내려가야 겹침이 풀린다
+    // 추월 대상과 나란히 서려면 실제로 필요한 횡간격(요각 반영). Setup 통과 판정과
+    // Attack 중 재검사가 같은 기준을 쓰도록 여기서 한 번만 구해 둔다.
+    float targetRequiredLateral = 0.0f;
 
-    // 종방향으로 겹쳐 나란히 달리는 차 중 가장 가까운 쪽. 추월하는 쪽과 당하는 쪽 모두
-    // 이걸 보고 서로를 밀지 않는다 -- 레이싱 라인이 코너에서 옆으로 흐르며 상대를
-    // 밀어내는 게 접촉의 주된 원인이다.
-    float alongsideSide = 0.0f;      // -1=왼쪽에 있음, +1=오른쪽에 있음, 0=없음
-    float alongsideClearance = 0.0f; // 차체 사이 여유(m). alongsideSide가 0이면 무의미
+    // 나를 추월 중인 뒤차. 뒤차가 절반 길이 이상 들어오면 공간을 받을 권리를 얻고,
+    // 앞차는 이 정보를 잠가 추월이 끝날 때까지 해당 쪽 라인을 침범하지 않는다.
+    Car *yieldChallenger = nullptr;
+    float yieldChallengerSide = 0.0f;
+    float yieldChallengerOverlap = 0.0f;
+    float yieldChallengerLateral = 0.0f;
+
+    // 이미 권리를 준 차는 추월 FSM이 Return으로 바뀐 뒤에도 종방향 겹침이 풀릴 때까지 본다.
+    bool yieldTargetSeen = false;
+    float yieldTargetDeltaS = 0.0f;
+    float yieldTargetLateral = 0.0f;
+
+    // 종방향으로 곧 겹칠 수 있는 주변 차량들이 허용하는 내 중심의 횡오프셋 범위.
+    // 전술이 어떤 값을 만들든 마지막에 이 구간으로 잘라 차량 쪽으로 이동하지 않게 한다.
+    float safeOffsetMin = -std::numeric_limits<float>::max();
+    float safeOffsetMax = std::numeric_limits<float>::max();
 };
 
 class Car : public GameObject
@@ -72,6 +86,10 @@ public:
     // 트랙 전체 레이싱 라인을 전략별로 한 번 풀어 SimulationState에 넣는다.
     // 도로를 다 읽은 뒤, 차를 스폰하기 전에 한 번만 부를 것.
     static void BuildSharedRaceLines(SimulationState &simState);
+    // 차 인스턴스 없이도 레이싱 라인을 그릴 수 있도록 렌더 오브젝트만 따로 뽑아내는 헬퍼.
+    // Car::RebuildRacingLineRender와 CarSim의 상시 표시가 이 하나를 같이 쓴다.
+    static void BuildRaceLineRenderObject(const RaceLine &line, const std::string &modelKey,
+                                          RenderObject &out);
     // 공유 라인을 만들 때 쓴 횡방향 여유(차선 반폭 - 최대 차폭 - 여유).
     // 추월 오프셋 클램프도 같은 값을 써야 라인이 도로 밖으로 안 나간다.
     static float SharedLineRoom();
@@ -97,6 +115,19 @@ public:
     float GetOvertakeSide() const { return m_overtakeSide; }
     float GetRaceLateralOffset() const { return m_raceLateralOffset; }
     const Car *GetOvertakeTarget() const { return m_overtakeTarget; }
+    // 후방충돌 진단용 -- IDM이 이 차를 아예 못 봤는지, 봤는데 늦었는지 가르는 값
+    const Car *GetLeaderCar() const { return m_leader.car; }
+    float GetLeaderGap() const { return m_leader.gap; }
+    float GetLeaderClosing() const { return m_leader.closingSpeed; }
+    const Car *GetYieldTarget() const { return m_yieldTarget; }
+    // 추월이 왜 안 일어나는지 집계용 -- 어떤 게이트가 막고 있는지, 시도/포기가 몇 번인지
+    const char *GetOvertakeBlock() const { return m_overtakeBlock; }
+    int GetOvertakeAttempts() const { return m_overtakeAttempts; }
+    int GetOvertakeAborts() const { return m_overtakeAborts; }
+    int GetAbortSetup() const { return m_abortSetup; }
+    int GetAbortClearance() const { return m_abortClearance; }
+    int GetAbortStall() const { return m_abortStall; }
+    int GetOvertakeSuccess() const { return m_overtakeSuccess; }
     JPH::BodyID GetBodyID() const { return m_rigidbody.GetBodyID(); }
 #pragma endregion
 
@@ -140,7 +171,6 @@ public:
     bool IsReverse() const { return m_isReverse; }
 
     void DriveControl();
-    float Stanley(Vec3 pathPoint, Vec3 pathDirection);
 
 private:
     bool IsAiDelayed() const { return !m_isControl && m_aiDelayTimer < m_aiStartDelay; }
@@ -284,11 +314,16 @@ private:
     float LeaderFollowAccel(const LeaderInfo &leader, float brakeAvailNow, float headwayScale) const;
     // 접근속도 0일 때 유지하려는 갭. 추월 트리거 기준으로도 쓴다
     float DesiredFollowGap(float headwayScale) const;
+    // 상대 대비 진짜 페이스 우위(m/s). 같은 라인 같은 곡률 위에 있으므로 코너에서는
+    // 그립 차이, 직선에서는 최고속 차이가 그대로 속도 차이가 된다.
+    float PaceAdvantageOver(const Car &other, float curvature) const;
+    // 뒤차가 절반 길이 이상 오버랩하면 그쪽에 한 대가 지나갈 공간을 보장한다.
+    void ApplyYieldRule(const RaceNeighbors &neighbors, float &desiredOffset);
 #pragma endregion
 
 #pragma region Avoid
     void UpdateSensors(); // 장애물 목록 수집
-    // 부채꼴 슬롯 interest/danger로 매프레임 조향각 생성
+    // 레이싱라인 조향을 유지하되, 짧은 시간 안에 실제 차체 충돌이 예측될 때만 최소 보정
     float ComputeContextSteer(const Vec3 &pursuitTarget, float pursuitSteer) const;
     Vec3 GetBodyCenter() const;                             // OBB 판정 기준점
     VehicleCollision::Obstacle MakeVehicleObstacle() const; // 이 차의 차체 OBB를 장애물 하나로
@@ -310,7 +345,9 @@ private:
     // 항력 모델을 따로 두지 않고 상한에 배수를 먹이는 근사다.
     // 추종 차간(LeaderFollowAccel의 TIME_HEADWAY)보다 넉넉히 넓어야 한다. 좁으면 IDM이
     // 와류 밖에 차를 세워둬서 토우가 영영 걸리지 않는다. 320km/h * 0.3s = 약 27m가 기준.
-    static constexpr float SLIPSTREAM_RANGE = 60.0f;          // 이보다 뒤면 와류가 닿지 않는다
+    // 차간을 0.45초로 늘리면서 평형 갭이 320km/h에서 약 42m가 됐다. 범위가 60m면
+    // 토우가 0.3밖에 안 걸려 따라잡지를 못한다(로그: 추월 차단 사유의 69%가 "갭이 멀다").
+    static constexpr float SLIPSTREAM_RANGE = 90.0f;          // 이보다 뒤면 와류가 닿지 않는다
     static constexpr float SLIPSTREAM_LATERAL_SPAN = 2.5f;    // 차폭 합의 몇 배까지 옆으로 남는가
     static constexpr float SLIPSTREAM_MIN_SPEED = 30.0f;      // m/s. 항력은 v^2이라 저속에선 무의미
     static constexpr float SLIPSTREAM_TOP_SPEED_GAIN = 0.06f; // 바로 뒤에 붙었을 때 최고속 +6%
@@ -318,19 +355,19 @@ private:
     static constexpr float SLIPSTREAM_RESPONSE = 3.0f;        // 와류가 붙고 떨어지는 응답(1/s)
 
     // 추종 갭. 추월 트리거도 이 값을 기준으로 잡아야 personality/속도에 같이 따라간다.
-    static constexpr float FOLLOW_STANDSTILL_GAP = 1.5f; // 정지 시 유지할 최소 갭(m). 레이싱이라 짧다
+    static constexpr float FOLLOW_STANDSTILL_GAP = 1.0f; // 정지 시 유지할 최소 갭(m). 레이싱이라 짧다
     // 0.5s는 일반도로 값이라 320km/h에서 45m가 나온다 -- SLIPSTREAM_RANGE 밖이라
     // 토우가 절대 안 걸린다. 실제 레이싱의 추종 간격(0.2~0.3s)에 맞춰 좁혔다.
-    static constexpr float FOLLOW_TIME_HEADWAY = 0.3f;   // 목표 차간시간(s)
+    static constexpr float FOLLOW_TIME_HEADWAY = 0.2f; // 목표 차간시간(s)
 
     // 추월 판단
     // 얼리 에이펙스 라인이 이만큼은 안쪽으로 들어가야 "다이브할 코너"로 본다.
     // 측정값: 직선에서 두 라인 차이는 0.03m, 코너 평균 1.33m, 최대 3.61m.
     static constexpr float OVERTAKE_EARLY_MIN_DELTA = 0.8f;
-    static constexpr float OVERTAKE_PACE_MARGIN = 1.5f;   // 앞차보다 이만큼 빨라야 시도한다(m/s)
+    static constexpr float OVERTAKE_PACE_MARGIN = 1.5f; // 앞차보다 이만큼 빨라야 시도한다(m/s)
     // 트리거를 고정 거리로 두면 안 된다. 차간이 넓은(headwayFactor가 큰) 드라이버는
     // 평형 갭이 그 거리보다 멀어서 영영 시도조차 못 하게 된다.
-    static constexpr float OVERTAKE_TRIGGER_SCALE = 1.4f; // 평형 추종 갭의 이 배 안이면 시도
+    static constexpr float OVERTAKE_TRIGGER_SCALE = 2.0f; // 평형 추종 갭의 이 배 안이면 시도
     // 두 차가 나란히 서고도 여유가 남을 만큼은 있어야 한다(차폭 합 2.7m + 여유).
     static constexpr float OVERTAKE_MIN_ROOM = 3.6f;
     // 지금 열려 있어도 코너에서 레이싱 라인이 그쪽으로 흐르면 공간이 사라진다.
@@ -340,25 +377,29 @@ private:
     // 코너로 가지고 들어가는 것이지, 굽은 한가운데서 나란히 서는 게 아니다.
     // (시작 조건에만 건다 -- 일단 걸린 추월은 코너 안까지 이어져야 한다)
     static constexpr float OVERTAKE_MAX_CURVATURE = 1.0f / 250.0f;
-    static constexpr float OVERTAKE_STALL_TIME = 2.5f;    // 진전 없이 이만큼 지나면 접는다
-    static constexpr float OVERTAKE_PROGRESS_EPS = 0.5f;  // 이만큼은 줄어야 '진전'으로 본다
-    static constexpr float SIDE_SAFE_CLEARANCE = 1.0f;    // 나란히 있을 때 유지할 차체 간 여유
-    static constexpr float SIDE_PUSH_MAX = 2.0f;          // 밀어내기 최대 폭(m)
+    static constexpr float OVERTAKE_STALL_TIME = 3.5f;   // 진전 없이 이만큼 지나면 접는다
+    static constexpr float OVERTAKE_PROGRESS_EPS = 0.5f; // 이만큼은 줄어야 '진전'으로 본다
+    // 차체 요각은 LateralHalfExtent가 이미 반영하므로, 여기 값은 순수한 여유분이다.
+    static constexpr float SIDE_SAFE_CLEARANCE = 0.8f; // 나란히 있을 때 유지할 차체 간 여유
     // 완전히 겹친 뒤에 밀기 시작하면 늦다. 다가붙는 동안부터 벌린다.
     static constexpr float ALONGSIDE_APPROACH = 4.0f;
     // 명령한 오프셋과 실제 위치는 다르다. 로그를 보면 4.3m를 명령했는데 실제로는 2.0m만
     // 벌어진 채로 나란히 서서 부딪혔다(달성률 28~56%). 그래서 "실제로 이만큼 벌어졌는가"를
     // 확인한 뒤에야 붙기 시작한다. 오버랩 판정 폭(반폭 합 + 0.3)보다 0.4m 더 확보한다.
-    static constexpr float OVERTAKE_SETUP_CLEARANCE = 0.7f;
+    // leader 판정 임계(LATERAL_MARGIN)보다 커야 한다. 작으면 Setup을 통과하고도
+    // 여전히 leader로 잡혀 앞차 뒤에 눌린 채 옆에만 서 있게 된다.
+    static constexpr float OVERTAKE_SETUP_CLEARANCE = 1.4f;
     static constexpr float OVERTAKE_SETUP_TIMEOUT = 4.0f; // 그 안에 못 벌리면 접는다
-    static constexpr float OVERTAKE_TIMEOUT = 6.0f;       // 이 시간 안에 못 지나가면 포기
+    static constexpr float OVERTAKE_TIMEOUT = 8.0f;       // 이 시간 안에 못 지나가면 포기
     static constexpr float OVERTAKE_COOLDOWN = 2.0f;      // 포기 후 재시도 금지 시간
     // 내 뒤범퍼가 상대 앞범퍼보다 이만큼 앞서야 통과다. 중심간 거리로 재면 차 길이만큼
     // 아직 겹쳐 있는 상태에서 라인으로 복귀해 옆구리를 긁는다.
     static constexpr float OVERTAKE_CLEAR_MARGIN = 3.0f;
     static constexpr float OVERTAKE_HEADWAY_SCALE = 0.7f; // 나간 동안엔 차간을 이만큼 좁힌다
+    static constexpr float YIELD_ACQUIRE_OVERLAP = 0.5f;  // 뒤차 길이의 절반이 들어오면 권리 획득
+    static constexpr float YIELD_RELEASE_OVERLAP = 0.25f; // 이 아래로 후퇴해야 권리 해제(히스테리시스)
     // 접촉 회피가 이 응답을 타므로 너무 느리면 밀어내기가 제때 안 먹는다.
-    static constexpr float LATERAL_RESPONSE = 2.5f;       // 목표 오프셋으로 옮겨가는 응답(1/s)
+    static constexpr float LATERAL_RESPONSE = 2.5f; // 목표 오프셋으로 옮겨가는 응답(1/s)
 
     float m_maxSpeed = BASE_MAX_SPEED;
     float m_maxAccel = BASE_MAX_ACCEL;
@@ -366,17 +407,15 @@ private:
     float m_gripAccel = BASE_GRIP_ACCEL; // 조향 포화와 마찰원이 공유하는 그립
     // 슬립스트림이 얹힌 현재 속도 상한. m_maxSpeed로 직접 클램프하면 와류 이득이 잘려나간다.
     float m_speedCap = BASE_MAX_SPEED;
-    float m_speedGain = 3.5f;            // 목표속도 변화에 빠르게 풀스로틀/브레이크
-    float m_jerkUp = 30.0f;              // 가속 저크 상한 (m/s^3)
-    float m_jerkDown = 60.0f;            // 제동 저크 상한 (m/s^3)
+    float m_speedGain = 3.5f; // 목표속도 변화에 빠르게 풀스로틀/브레이크
+    float m_jerkUp = 30.0f;   // 가속 저크 상한 (m/s^3)
+    float m_jerkDown = 60.0f; // 제동 저크 상한 (m/s^3)
     CarPersonality m_personality;
 
     float m_wheelbase = 0.0f;
     float m_mass = 1.0f;
     Vec3 m_halfExtents = Vec3::sZero();       // x=반폭 z=반길이
     float m_maxSteerAngle = ToRadians(35.0f); // 저속 최대 조향각
-    float m_stanleyGain = 2.5f;               // 고속에서도 레이싱 라인을 붙잡는 횡오차 게인
-    float m_stanleySoft = 2.0f;               // 저속 조향 진동 억제
 
     float m_speed = 0.0f;
     float m_acceleration = 0.0f;
@@ -416,18 +455,18 @@ private:
     float m_lastBehaviorPlanTime = -1000.0f; // 첫 판단 즉시 실행되게
     float m_planAccelDebug = 0.0f;           // 매프레임 가속도
     std::vector<VehicleCollision::Obstacle> m_obstacles;
-    std::vector<Car *> m_nearbyCars;                  // 재수집 비용 회피 캐시
-    LeaderInfo m_leader;                              // 매 DriveControl마다 갱신
+    std::vector<Car *> m_nearbyCars; // 재수집 비용 회피 캐시
+    LeaderInfo m_leader;             // 매 DriveControl마다 갱신
     // 레이스 계측
     int m_lap = 0;
     float m_lapLength = 0.0f;
     float m_lapStartTime = -1.0f; // 첫 결승선 통과 전에는 랩타임을 재지 않는다
     float m_lastLapTime = 0.0f;
     float m_bestLapTime = 0.0f;
-    float m_raceS = -1.0f;        // 공유 라인 위 호길이. 음수면 아직 한 번도 못 잡았다
-    float m_raceD = 0.0f;         // 그 지점 기준 내 횡오프셋
+    float m_raceS = -1.0f; // 공유 라인 위 호길이. 음수면 아직 한 번도 못 잡았다
+    float m_raceD = 0.0f;  // 그 지점 기준 내 횡오프셋
     float m_raceCurvature = 0.0f;
-    int m_racePosition = 0;       // 1부터. 0이면 아직 미확정
+    int m_racePosition = 0; // 1부터. 0이면 아직 미확정
     int m_pendingPosition = 0;
     float m_pendingPositionSince = 0.0f;
     int m_overtakes = 0;
@@ -435,20 +474,29 @@ private:
     Car *m_lastContactCar = nullptr;
     float m_lastContactTime = -1000.0f;
 
-    float m_slipstream = 0.0f;                        // 감쇠를 거친 현재 와류 세기
-    float m_slipstreamGapDebug = 0.0f;                // 와류를 준 차와의 갭(디버그)
+    float m_slipstream = 0.0f;         // 감쇠를 거친 현재 와류 세기
+    float m_slipstreamGapDebug = 0.0f; // 와류를 준 차와의 갭(디버그)
 
     OvertakeState m_overtakeState = OvertakeState::None;
-    Car *m_overtakeTarget = nullptr;   // Attack 중 추적 대상. leader에서 빠져도 계속 본다
-    float m_overtakeSide = 0.0f;       // -1=왼쪽, +1=오른쪽. 진입 시 한 번 정하고 유지한다
-    float m_overtakeTimer = 0.0f;      // 현재 상태 유지 시간
-    float m_overtakeCooldown = 0.0f;   // 포기 후 재시도 금지 잔여 시간
-    float m_overtakeBestDeltaS = 0.0f; // Attack 중 관측한 최소 상대 s(진전 판단용)
-    float m_overtakeStall = 0.0f;      // 진전 없이 흐른 시간
-    const char *m_overtakeBlock = "";  // 시작을 막고 있는 조건(디버그)
-    bool m_overtakeHoldOffset = false; // 물러나는 중 겹침이 안 풀려 오프셋을 붙잡고 있다
-    bool m_overtakeBackOff = false;    // 겹침을 풀려고 감속해야 한다
-    float m_raceLateralOffset = 0.0f;  // 레이싱 라인 기준 목표 횡오프셋(감쇠 적용된 현재값)
+    Car *m_overtakeTarget = nullptr;                  // Attack 중 추적 대상. leader에서 빠져도 계속 본다
+    float m_overtakeSide = 0.0f;                      // -1=왼쪽, +1=오른쪽. 진입 시 한 번 정하고 유지한다
+    float m_overtakeTimer = 0.0f;                     // 현재 상태 유지 시간
+    float m_overtakeCooldown = 0.0f;                  // 포기 후 재시도 금지 잔여 시간
+    float m_overtakeBestDeltaS = 0.0f;                // Attack 중 관측한 최소 상대 s(진전 판단용)
+    float m_overtakeStall = 0.0f;                     // 진전 없이 흐른 시간
+    const char *m_overtakeBlock = "";                 // 시작을 막고 있는 조건(디버그)
+    int m_overtakeAttempts = 0;                       // Follow -> Setup 진입 횟수
+    int m_overtakeAborts = 0;                         // 완주 못 하고 Return으로 접은 횟수
+    int m_abortSetup = 0;                             // 옆으로 못 벌려서
+    int m_abortClearance = 0;                         // 벌린 간격을 다시 잃어서
+    int m_abortStall = 0;                             // 진전이 없어서/시간 초과
+    int m_overtakeSuccess = 0;                        // 실제로 앞질러서 끝난 횟수
+    bool m_overtakeHoldOffset = false;                // 물러나는 중 겹침이 안 풀려 오프셋을 붙잡고 있다
+    bool m_overtakeBackOff = false;                   // 레거시 UI 플래그. 종방향 back-off는 사용하지 않는다
+    Car *m_yieldTarget = nullptr;                     // 내 뒤에서 권리를 얻어 공간을 보장 중인 추월차
+    float m_yieldSide = 0.0f;                         // 추월차가 들어온 쪽(-1=왼쪽, +1=오른쪽)
+    float m_raceLateralOffset = 0.0f;                 // 레이싱 라인 기준 목표 횡오프셋(감쇠 적용된 현재값)
+    bool m_raceLateralOffsetInitialized = false;      // 시작 위치를 0으로 당기지 않도록 실제 d로 한 번 초기화
     mutable float m_ctxSteerDebugRad = 0.0f;          // 반응형 조향이 고른 슬롯각
     mutable float m_ctxSteerDebugDanger = 0.0f;       // 그 슬롯의 danger
     mutable std::vector<Vec3> m_ctxSteerOpenLines;    // 안전 슬롯 레이(초록)
@@ -468,12 +516,12 @@ private:
     RenderObject m_splineRender;
     RenderObject m_ctxSteerOpenRender;    // 반응형 조향 안전 레이(디버그)
     RenderObject m_ctxSteerBlockedRender; // 반응형 조향 위험 레이(디버그)
-    RenderObject m_racingLineRender;                 // 레이싱 라인(디버그)
-    const RaceLine *m_raceLine = nullptr;            // SimulationState가 소유한 공유 라인
+    RenderObject m_racingLineRender;      // 레이싱 라인(디버그)
+    const RaceLine *m_raceLine = nullptr; // SimulationState가 소유한 공유 라인
     // 추월할 때 참고하는 얼리 에이펙스 라인. 갈아타는 게 아니라 "얼마나 안쪽으로
     // 파고들 수 있는가"의 기준으로만 쓴다 -- 라인만 바꿔서는 간격이 안 나온다.
     const RaceLine *m_attackLine = nullptr;
-    size_t m_raceLineCursor = 0;                     // 최근접점 탐색 시작 위치(전체 훑기 방지)
+    size_t m_raceLineCursor = 0; // 최근접점 탐색 시작 위치(전체 훑기 방지)
     ApexStrategy m_apexStrategy = ApexStrategy::Late;
     ApexStrategy m_boundStrategy = ApexStrategy::Count; // m_raceLine이 가리키는 전략
 };

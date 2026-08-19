@@ -573,6 +573,20 @@ namespace
         return std::min(i, line.points.size() - 1);
     }
 
+    // 차체가 라인과 나란하지 않으면 옆으로 차지하는 폭이 반폭보다 넓다.
+    // 5.67m짜리 차가 5도만 틀어져도 0.25m를 더 먹고, 두 대면 0.5m다 -- 반폭만으로
+    // 판정하면 "여유 0.3m 확보"라고 믿으면서 실제로는 스친다.
+    float LateralHalfExtent(const Car &car, const Vec3 &tangent)
+    {
+        Vec3 forward = car.GetForwardAxis();
+        // tangent의 오른쪽 법선에 차체 축을 투영한다.
+        const float normalX = tangent.GetZ();
+        const float normalZ = -tangent.GetX();
+        const float alongForward = std::fabs(forward.GetX() * normalX + forward.GetZ() * normalZ);
+        const float alongRight = std::fabs(forward.GetZ() * normalX - forward.GetX() * normalZ);
+        return alongForward * car.GetLength() * 0.5f + alongRight * car.GetHalfWidth();
+    }
+
     // 레이싱 라인 기준 프레네 좌표. d는 ComputeReferenceOffset과 같은 규약(오른쪽 법선 부호).
     struct FrenetPoint
     {
@@ -930,8 +944,11 @@ void Car::UpdateStop()
     m_overtakeTarget = nullptr;
     m_overtakeSide = 0.0f;
     m_raceLateralOffset = 0.0f;
+    m_raceLateralOffsetInitialized = false;
     m_overtakeHoldOffset = false;
     m_overtakeBackOff = false;
+    m_yieldTarget = nullptr;
+    m_yieldSide = 0.0f;
     Steer(0.0f);
     AccelerateVel(0.0f);
 }
@@ -1034,42 +1051,17 @@ bool Car::IsOutsideDrivingBands() const
         return false;
 
     Vec3 center = GetBodyCenter();
-    float t = std::clamp(referenceLine.GetSplinePosition(center), 0.0f, 1.0f);
-    float s = t * referenceLine.GetLength();
-    const LaneSection *section = RoadDataManager::Get().GetLateralProfile(m_currentRoad, s);
-    if (section == nullptr)
-        return false;
-
-    float minOffset = std::numeric_limits<float>::max();
-    float maxOffset = -std::numeric_limits<float>::max();
-    bool hasDrivingBand = false;
-    for (const LaneBand &band : section->bands)
-    {
-        if (band.type != LaneType::Driving)
-            continue;
-        minOffset = std::min(minOffset, band.centerOffset - band.width * 0.5f);
-        maxOffset = std::max(maxOffset, band.centerOffset + band.width * 0.5f);
-        hasDrivingBand = true;
-    }
-    if (!hasDrivingBand)
-        return false;
-
+    float minOffset = 0.0f;
+    float maxOffset = 0.0f;
+    ComputeDrivableRange(CurrentRoadRef(), minOffset, maxOffset);
     float centerOffset = ComputeReferenceOffset(referenceLine, center);
     return centerOffset < minOffset || centerOffset > maxOffset;
 }
 
 void Car::DriveControl()
 {
-    // if (IsOutsideDrivingBands())
-    // {
-    //     SetSpeed(0.0f);
-    //     m_acceleration = 0.0f;
-    //     m_planAccelDebug = 0.0f;
-    //     Steer(0.0f);
-    //     return;
-    // }
-
     const Vec3 position = GetRigidbodyPosition();
+    const bool outsideRoad = IsOutsideDrivingBands();
 
     // 레이싱 라인은 시작할 때 전략별로 한 번 푼 트랙 전체 라인을 공유한다.
     // 전략을 바꿨을 때만 다른 라인으로 갈아끼우면 되고, 여기서 QP를 돌리지 않는다.
@@ -1083,6 +1075,7 @@ void Car::DriveControl()
         m_attackLine = m_SimState->GetRaceLine(static_cast<int>(ApexStrategy::Early));
         m_boundStrategy = m_apexStrategy;
         m_raceLineCursor = 0; // 새 라인에서 다시 찾게 한다
+        m_raceLateralOffsetInitialized = false;
         RebuildRacingLineRender();
     }
     const RaceLine &raceLine = *m_raceLine;
@@ -1096,8 +1089,12 @@ void Car::DriveControl()
     // 와류는 직전 프레임 값을 쓴다. 계획을 세우려면 속도 상한이 먼저 필요한데, 그 상한을
     // 정하는 와류 세기는 계획이 내놓는 (s, d)로 찾기 때문이다. 아래에서 감쇠를 걸어 천천히
     // 변하게 만들었으므로 한 프레임 지연은 드러나지 않는다.
-    m_speedCap = m_maxSpeed * (1.0f + SLIPSTREAM_TOP_SPEED_GAIN * m_slipstream);
-    const float slipMaxAccel = m_maxAccel * (1.0f + SLIPSTREAM_ACCEL_GAIN * m_slipstream);
+    m_speedCap = outsideRoad
+                     ? m_maxSpeed * 0.5f
+                     : m_maxSpeed * (1.0f + SLIPSTREAM_TOP_SPEED_GAIN * m_slipstream);
+    const float slipMaxAccel = outsideRoad
+                                   ? m_maxAccel * 0.5f
+                                   : m_maxAccel * (1.0f + SLIPSTREAM_ACCEL_GAIN * m_slipstream);
 
     RacingPlan racing = BuildRacingPlan(raceLine, position, m_raceLineCursor, lookaheadDistance,
                                         RoadTargetSpeed(m_currentRoad, m_speedCap), m_speed,
@@ -1125,14 +1122,35 @@ void Car::DriveControl()
     float laneOffsetAtCar = racing.closestIndex < raceLine.laneOffset.size()
                                 ? raceLine.laneOffset[racing.closestIndex]
                                 : 0.0f;
+    // 출발 그리드의 실제 횡위치를 첫 목표로 삼는다. 0에서 시작하면 모든 차가 출발과 동시에
+    // 같은 레이싱 라인으로 수렴해, 가속하기도 전에 옆 차와 서로 교차한다.
+    if (!m_raceLateralOffsetInitialized && neighbors.selfProjected)
+    {
+        m_raceLateralOffset = neighbors.leader.myLateralOffset;
+        m_raceLateralOffsetInitialized = true;
+    }
     // 페이스 비교는 "지금 이 지점에서 낼 수 있는 속도"로 해야 한다(racing.targetSpeed).
     // 곡률은 시작 조건에만 쓴다 -- 코너 한복판에서 나란히 서지 않게.
     float curvatureAtCar = racing.closestIndex < raceLine.curvature.size()
                                ? raceLine.curvature[racing.closestIndex]
                                : 0.0f;
     m_raceCurvature = curvatureAtCar;
-    UpdateOvertake(raceLine, racing.closestIndex, neighbors, lineRoom, laneOffsetAtCar,
-                   racing.targetSpeed, curvatureAtCar);
+    if (outsideRoad)
+    {
+        // 도로 밖에서는 추월보다 복귀가 우선이다. 이전 추월 상태가 복귀 목표를 다시
+        // 바깥쪽으로 밀지 않도록 전술 상태를 해제한다.
+        m_overtakeState = OvertakeState::None;
+        m_overtakeTarget = nullptr;
+        m_overtakeSide = 0.0f;
+        m_overtakeHoldOffset = false;
+        m_yieldTarget = nullptr;
+        m_yieldSide = 0.0f;
+    }
+    else
+    {
+        UpdateOvertake(raceLine, racing.closestIndex, neighbors, lineRoom, laneOffsetAtCar,
+                       racing.targetSpeed, curvatureAtCar);
+    }
 
     // 경로 레이어: QP를 다시 풀지 않고 추종 점만 옆으로 민다. 라인을 벗어난 만큼
     // 코너 속도를 손해 보는 건 실제로도 맞다(속도 계획은 원래 라인 곡률 기준이다).
@@ -1144,8 +1162,40 @@ void Car::DriveControl()
         racing.target = racing.target + farRight * m_raceLateralOffset;
     }
 
+    if (outsideRoad && m_currentRoad != nullptr)
+    {
+        // 현재 도로의 가장 가까운 안쪽 경계로 복귀한다. 경계에 정확히 붙이면 수치 오차로
+        // on/off가 반복되므로 차체 중심 목표를 0.5m 더 안쪽에 둔다.
+        const Spline &referenceLine = m_currentRoad->GetReferenceLine();
+        float minOffset = 0.0f;
+        float maxOffset = 0.0f;
+        ComputeDrivableRange(CurrentRoadRef(), minOffset, maxOffset);
+
+        const Vec3 frontAxle = GetPosition();
+        const float actualOffset = ComputeReferenceOffset(referenceLine, GetBodyCenter());
+        constexpr float RECOVERY_INSET = 0.5f;
+        const float inset = std::min(RECOVERY_INSET, std::max(0.0f, (maxOffset - minOffset) * 0.25f));
+        const float recoveryOffset = actualOffset < minOffset ? minOffset + inset : maxOffset - inset;
+
+        const float t = std::clamp(referenceLine.GetSplinePosition(frontAxle), 0.0f, 1.0f);
+        Vec3 recoveryDirection = referenceLine.GetDirectionAt(t);
+        if (recoveryDirection.LengthSq() > 0.000001f)
+            recoveryDirection = recoveryDirection.Normalized();
+        else
+            recoveryDirection = GetForwardAxis();
+        Vec3 recoveryRight(recoveryDirection.GetZ(), 0.0f, -recoveryDirection.GetX());
+
+        racing.pathPoint = referenceLine.GetPositionAt(t) + recoveryRight * recoveryOffset;
+        racing.pathDirection = recoveryDirection;
+        racing.target = OffsetLookaheadPoint(referenceLine, frontAxle,
+                                             std::max(10.0f, lookaheadDistance), recoveryOffset, false);
+    }
+
     Vec3 target = racing.target;
-    float targetSteer = ComputeContextSteer(target, Stanley(racing.pathPoint, racing.pathDirection));
+    float headingRad = DirectionToAngleRad(GetForwardAxis());
+    float pursuitSteer = std::clamp(PurePursuitSteerAt(position, headingRad, target, m_wheelbase),
+                                    -m_maxSteerAngle, m_maxSteerAngle);
+    float targetSteer = ComputeContextSteer(target, pursuitSteer);
     RebuildCtxSteerRender();
 
     Steer(targetSteer);
@@ -1162,16 +1212,10 @@ void Car::DriveControl()
         // 나가기로 했으면 더 바짝 붙어야 오버랩을 만들 수 있다.
         float headwayScale = m_overtakeState == OvertakeState::Attack ? OVERTAKE_HEADWAY_SCALE : 1.0f;
         desiredAccel = std::min(desiredAccel,
-                                LeaderFollowAccel(m_leader, racing.brakeAvailNow, headwayScale));
+                                 LeaderFollowAccel(m_leader, racing.brakeAvailNow, headwayScale));
     }
-    // 추월을 접었는데 아직 옆에 겹쳐 있으면, 상대보다 느려져야 겹침이 풀린다.
-    // 이게 없으면 나란히 붙은 채로 코너까지 끌고 가 결국 부딪힌다.
-    if (m_overtakeBackOff)
-    {
-        constexpr float BACK_OFF_SPEED_DROP = 2.0f; // m/s
-        float backOffSpeed = std::max(0.0f, neighbors.targetSpeed - BACK_OFF_SPEED_DROP);
-        desiredAccel = std::min(desiredAccel, m_speedGain * (backOffSpeed - m_speed));
-    }
+    if (outsideRoad && desiredAccel > 0.0f)
+        desiredAccel = std::min(desiredAccel, m_maxAccel * 0.5f);
     Accelerate(desiredAccel);
 
     DirectX::XMFLOAT3 targetMarkerPos = ToXMFLOAT3(target);
@@ -1186,7 +1230,9 @@ void Car::DriveControl()
 void Car::ComputeDrivableRange(const RoadRef &road, float &outMin, float &outMax) const
 {
 
-    float halfW = GetHalfWidth() * 0.5f;
+    // GetHalfWidth()는 이미 반폭이다. 다시 절반으로 줄이면 차체 절반이 도로 밖에 나가도
+    // 안쪽으로 판정되어 복귀가 늦어진다.
+    float halfW = GetHalfWidth();
 
     outMin = -(RoadDataManager::ROAD_WIDTH - halfW);
     outMax = RoadDataManager::ROAD_WIDTH - halfW;
@@ -1317,7 +1363,11 @@ void Car::BuildSharedRaceLines(SimulationState &simState)
 RaceNeighbors Car::FindRaceNeighbors(const RaceLine &line, size_t myIndex, float myS) const
 {
     constexpr float LEADER_RANGE = 80.0f;  // 이보다 먼 앞차는 종방향에 영향 없음
-    constexpr float LATERAL_MARGIN = 0.3f; // 차폭 합에 더하는 오버랩 여유
+    // "옆으로 지나갈 수 있다"고 판단하는 기준. 이 값이 작으면 아직 안 벌어진 상태로
+    // 옆에 서게 되고, 나란히 겹친 뒤에야 leader로 인식된다 -- 그 시점엔 제동으로
+    // 횡방향 공간이 생기지 않는다(로그의 접촉 전부가 gap=0에서 났다).
+    // 확실히 비켜서지 못한 차는 그냥 뒤에 줄을 서는 게 맞다.
+    constexpr float LATERAL_MARGIN = 1.0f;
     // 앞지른 뒤에도 대상이 이 구간 안에 남아 있어야 "통과했다"를 판정할 수 있다.
     constexpr size_t BACK_WINDOW = 25;     // 뒤쪽으로 볼 샘플 수(약 1m 간격)
     // 회피 조향이 옆으로 밀어내는 순간 leader가 풀리고, 라인으로 되돌아오면 다시 걸린다.
@@ -1335,7 +1385,11 @@ RaceNeighbors Car::FindRaceNeighbors(const RaceLine &line, size_t myIndex, float
     FrenetPoint mine;
     if (!ProjectOnRaceLine(line, GetBodyCenter(), windowBegin, windowEnd, mine))
         return neighbors;
+    neighbors.selfProjected = true;
     neighbors.leader.myLateralOffset = mine.d;
+
+    // 내 차체가 라인 기준으로 옆으로 차지하는 폭. 매 상대마다 다시 구할 필요는 없다.
+    const float myLateralExtent = LateralHalfExtent(*this, mine.tangent);
 
     const Car *previousLeader = m_leader.car; // 호출자가 반환값을 대입하기 전이라 아직 직전 프레임 값
     float bestGap = std::numeric_limits<float>::max();
@@ -1358,19 +1412,81 @@ RaceNeighbors Car::FindRaceNeighbors(const RaceLine &line, size_t myIndex, float
             neighbors.targetDeltaS = deltaS;
             neighbors.targetLateral = theirs.d - mine.d;
             neighbors.targetSpeed = other->GetSpeed();
+            neighbors.targetRequiredLateral = myLateralExtent +
+                                              LateralHalfExtent(*other, theirs.tangent) +
+                                              OVERTAKE_SETUP_CLEARANCE;
+        }
+
+        if (other == m_yieldTarget)
+        {
+            neighbors.yieldTargetSeen = true;
+            neighbors.yieldTargetDeltaS = deltaS;
+            neighbors.yieldTargetLateral = theirs.d - mine.d;
         }
 
         // 종방향으로 겹쳐 있으면 나란히 달리는 중이다. 앞/뒤 구분 없이 잡아야 한다 --
         // 추월당하는 쪽에게 상대는 "뒤차"라 leader 경로로는 영영 안 보인다.
         const float halfLengthSum = (GetLength() + other->GetLength()) * 0.5f;
-        if (std::fabs(deltaS) < halfLengthSum + ALONGSIDE_APPROACH)
+        const float sideLateral = theirs.d - mine.d;
+
+        // 현재 겹친 차뿐 아니라 횡이동이 끝나기 전에 종방향으로 만날 차까지 점유 구간에 넣는다.
+        // 목적지만 검사하면 이동 중 옆 차를 가로지를 수 있으므로, 현재 상대가 있는 쪽의 경계를
+        // 통째로 닫아 그 차 반대편으로 순간이동하는 목표도 만들지 않는다.
+        Vec3 otherForward = other->GetForwardAxis();
+        const bool sameDirection = otherForward.GetX() * theirs.tangent.GetX() +
+                                       otherForward.GetZ() * theirs.tangent.GetZ() >
+                                   0.0f;
+        constexpr float OFFSET_SIDE_EPS = 0.2f;
+        constexpr float OFFSET_SAFETY_TIME = 1.0f;
+        constexpr float OFFSET_MAX_APPROACH = 12.0f;
+        const float longitudinalClearance = std::fabs(deltaS) - halfLengthSum;
+        const float approachPreview = ALONGSIDE_APPROACH +
+                                      std::min(OFFSET_MAX_APPROACH,
+                                               std::fabs(m_speed - other->GetSpeed()) *
+                                                   OFFSET_SAFETY_TIME);
+        if (sameDirection && longitudinalClearance < approachPreview)
         {
-            float sideLateral = theirs.d - mine.d;
-            float clearance = std::fabs(sideLateral) - (GetHalfWidth() + other->GetHalfWidth());
-            if (neighbors.alongsideSide == 0.0f || clearance < neighbors.alongsideClearance)
+            const float required =
+                myLateralExtent + LateralHalfExtent(*other, theirs.tangent) + SIDE_SAFE_CLEARANCE;
+
+            // 거의 같은 선에 겹쳐 있으면 어느 쪽으로 비킬지 부호를 정할 수 없다. 예전엔
+            // 이 경우 제약을 통째로 걸지 않았는데, 그러면 두 대가 같은 레이싱 라인으로
+            // 나란히 수렴하다 그대로 박는다(출발 직후가 정확히 이 상황이다).
+            // id로 방향을 갈라 서로 반대쪽으로 비키게 한다.
+            float side = sideLateral;
+            if (std::fabs(side) <= OFFSET_SIDE_EPS)
+                side = GetId() < other->GetId() ? 1.0f : -1.0f;
+
+            // 두 차가 모두 상대의 현재 위치만 보고 중앙으로 움직이면 각자의 목표는 안전해도
+            // 이동 경로가 중앙에서 겹친다. 상대 쪽으로는 현재 d를 한 발짝도 넘지 못하게 해서
+            // 기존 횡순서를 보존한다. 이미 너무 가까우면 required 경계가 바깥으로 밀어낸다.
+            if (side > 0.0f) // 상대가 오른쪽 -- 나는 그 왼쪽에 머문다
+                neighbors.safeOffsetMax = std::min(
+                    neighbors.safeOffsetMax, std::min(mine.d, theirs.d - required));
+            else
+                neighbors.safeOffsetMin = std::max(
+                    neighbors.safeOffsetMin, std::max(mine.d, theirs.d + required));
+        }
+
+        // 상대가 실제로 나를 추월 중이고 아직 뒤에 있을 때만 권리 후보로 본다. 같은 라인에서
+        // 단순 추종 중인 차 때문에 앞차가 임의의 방향으로 비키면 안 된다.
+        const bool activePass = other->m_overtakeTarget == this &&
+                                (other->m_overtakeState == OvertakeState::Setup ||
+                                 other->m_overtakeState == OvertakeState::Attack);
+        const float longitudinalOverlap = halfLengthSum - std::fabs(deltaS);
+        if (activePass && deltaS < 0.0f && longitudinalOverlap > 0.0f)
+        {
+            // 실제 횡위치를 우선한다. 아직 거의 같은 선이면 추월자가 고정한 방향을 써서
+            // 오버랩 임계에서 부호가 프레임마다 바뀌는 일을 막는다.
+            float passSide = std::fabs(sideLateral) > 0.1f
+                                 ? (sideLateral > 0.0f ? 1.0f : -1.0f)
+                                 : other->m_overtakeSide;
+            if (passSide != 0.0f && longitudinalOverlap > neighbors.yieldChallengerOverlap)
             {
-                neighbors.alongsideClearance = clearance;
-                neighbors.alongsideSide = sideLateral > 0.0f ? 1.0f : -1.0f;
+                neighbors.yieldChallenger = other;
+                neighbors.yieldChallengerSide = passSide;
+                neighbors.yieldChallengerOverlap = longitudinalOverlap;
+                neighbors.yieldChallengerLateral = sideLateral;
             }
         }
 
@@ -1403,7 +1519,7 @@ RaceNeighbors Car::FindRaceNeighbors(const RaceLine &line, size_t myIndex, float
 
         // --- leader: 내 라인을 실제로 막고 있는 차 ---
         // 횡으로 겹치지 않으면 막고 있는 게 아니다 -- 나란히 달리는 차는 leader가 아니다
-        float overlapLimit = GetHalfWidth() + other->GetHalfWidth() + LATERAL_MARGIN;
+        float overlapLimit = myLateralExtent + LateralHalfExtent(*other, theirs.tangent) + LATERAL_MARGIN;
         // 추월 대상에게는 히스테리시스를 걸지 않는다. 넓혀두면 옆에 나란히 선 뒤에도
         // 계속 leader로 남아 그 차 속도에 눌리고, 추월이 영영 완성되지 않는다.
         // 떨림 걱정은 추월 FSM이 방향을 붙잡아 주므로 여기선 필요 없다.
@@ -1450,6 +1566,24 @@ float Car::LeaderFollowAccel(const LeaderInfo &leader, float brakeAvailNow, floa
     float gap = std::max(0.1f, leader.gap);
     float ratio = desiredGap / gap;
     return std::max(-brakeAvailNow, m_maxAccel * (1.0f - ratio * ratio));
+}
+
+// 상대와 나의 "방해받지 않았을 때 속도"를 같은 기준으로 비교한다.
+//
+// 계획 목표속도(racing.targetSpeed)와 상대의 현재 속도를 비교하면 안 된다. 목표속도는
+// 앞의 직선을 내다본 값이라, 코너를 빠져나오는 중에는 내 목표가 이미 직선 값으로 올라가
+// 있어서 차이가 50m/s로 잡힌다. 그 결과 "끝낼 수 없는 추월"이 계속 시작됐고, 두 대가
+// 레이스 내내 나란히 맞물린 채 서로를 긁었다.
+float Car::PaceAdvantageOver(const Car &other, float curvature) const
+{
+    const float absCurvature = std::fabs(curvature);
+    if (absCurvature > 1e-4f)
+    {
+        const float mine = std::sqrt(m_gripAccel * PLAN_GRIP_RATIO / absCurvature);
+        const float theirs = std::sqrt(other.m_gripAccel * PLAN_GRIP_RATIO / absCurvature);
+        return std::min(mine, m_speedCap) - std::min(theirs, other.m_speedCap);
+    }
+    return m_speedCap - other.m_speedCap;
 }
 
 // 접근속도 0에서의 평형 갭. LeaderFollowAccel의 예측항을 뺀 값과 같다.
@@ -1551,6 +1685,58 @@ float Car::OvertakeOffset(size_t myIndex, float lineRoom, float laneOffsetAtCar)
     return m_overtakeSide * std::clamp(need, 0.0f, std::max(0.0f, room));
 }
 
+void Car::ApplyYieldRule(const RaceNeighbors &neighbors, float &desiredOffset)
+{
+    auto release = [this]()
+    {
+        m_yieldTarget = nullptr;
+        m_yieldSide = 0.0f;
+    };
+
+    if (m_yieldTarget != nullptr)
+    {
+        if (!m_SimState->IsCarAlive(m_yieldTarget) || !neighbors.yieldTargetSeen)
+            release();
+        else
+        {
+            const float halfLengthSum = (GetLength() + m_yieldTarget->GetLength()) * 0.5f;
+            const float deltaS = neighbors.yieldTargetDeltaS;
+            const float overlap = halfLengthSum - std::fabs(deltaS);
+            const bool passedClear = deltaS - halfLengthSum > OVERTAKE_CLEAR_MARGIN;
+            const bool fellBackClear = deltaS < 0.0f &&
+                                       overlap < m_yieldTarget->GetLength() * YIELD_RELEASE_OVERLAP;
+            if (passedClear || fellBackClear)
+                release();
+        }
+    }
+
+    bool targetSeen = neighbors.yieldTargetSeen;
+    float targetLateral = neighbors.yieldTargetLateral;
+    if (m_yieldTarget == nullptr && neighbors.yieldChallenger != nullptr &&
+        neighbors.yieldChallengerOverlap >=
+            neighbors.yieldChallenger->GetLength() * YIELD_ACQUIRE_OVERLAP)
+    {
+        m_yieldTarget = neighbors.yieldChallenger;
+        m_yieldSide = neighbors.yieldChallengerSide;
+        targetSeen = true;
+        targetLateral = neighbors.yieldChallengerLateral;
+    }
+
+    if (m_yieldTarget == nullptr || !targetSeen)
+        return;
+
+    // 양쪽 차체와 측면 안전 여유가 들어갈 경계를 계산해 앞차의 목표 오프셋을 제한한다.
+    // 속도를 양보하는 게 아니라 추월차 쪽 라인을 닫지 않는 규칙이다.
+    const float requiredSeparation =
+        GetHalfWidth() + m_yieldTarget->GetHalfWidth() + SIDE_SAFE_CLEARANCE;
+    const float challengerOffset =
+        neighbors.leader.myLateralOffset + targetLateral;
+    if (m_yieldSide > 0.0f)
+        desiredOffset = std::min(desiredOffset, challengerOffset - requiredSeparation);
+    else
+        desiredOffset = std::max(desiredOffset, challengerOffset + requiredSeparation);
+}
+
 // 추월 전술 레이어. 결과는 m_raceLateralOffset 하나로 나가고, 경로 레이어가 그걸 레이싱
 // 라인 위에 얹는다. 조향을 직접 만들지 않는 게 핵심이다 -- 조향까지 여기서 건드리면
 // 반응형 회피와 매 프레임 싸운다.
@@ -1607,9 +1793,23 @@ void Car::UpdateOvertake(const RaceLine &line, size_t myIndex, const RaceNeighbo
         // 여기서 최고속(m_speedCap)을 쓰면 안 된다. 139km/h로 도는 코너에서도 차이가
         // 190km/h로 잡혀 게이트가 무조건 통과한다. 지금 이 지점에서 낼 수 있는 속도
         // (곡률·마찰원이 반영된 계획 목표속도)와 비교해야 진짜 페이스 우위가 드러난다.
-        if (paceSpeed - neighbors.leader.speed < OVERTAKE_PACE_MARGIN)
+        const float paceDelta = PaceAdvantageOver(*neighbors.leader.car, curvature);
+        if (paceDelta < OVERTAKE_PACE_MARGIN)
         {
             m_overtakeBlock = "pace";
+            break;
+        }
+
+        // 그리고 "빠르다"만으로는 부족하다. 주어진 시간 안에 실제로 앞지를 수 있어야 한다.
+        // 로그에서 1.5m/s 차이로 20m 뒤에서 시작한 추월이 19초를 필요로 했는데 예산은
+        // 10초였고, 그 결과 두 대가 레이스 내내 나란히 맞물린 채 계속 긁었다.
+        // 끝낼 수 없는 추월은 시작하지 않는다.
+        const float needGain = neighbors.leader.gap +
+                               (GetLength() + neighbors.leader.car->GetLength()) * 0.5f +
+                               OVERTAKE_CLEAR_MARGIN;
+        if (needGain / paceDelta > OVERTAKE_SETUP_TIMEOUT + OVERTAKE_TIMEOUT)
+        {
+            m_overtakeBlock = "tooSlow";
             break;
         }
 
@@ -1622,6 +1822,7 @@ void Car::UpdateOvertake(const RaceLine &line, size_t myIndex, const RaceNeighbo
 
         m_overtakeTarget = neighbors.leader.car;
         m_overtakeSide = side;
+        ++m_overtakeAttempts;
         enter(OvertakeState::Setup);
         break;
     }
@@ -1638,9 +1839,9 @@ void Car::UpdateOvertake(const RaceLine &line, size_t myIndex, const RaceNeighbo
         // 여기서는 오프셋만 벌리고 차간은 평소대로 둔다(headwayScale 1.0). 옆으로 나가는
         // 것과 앞차에 붙는 걸 동시에 하면, 횡이동이 조향 지연 때문에 훨씬 느려서
         // 아직 2m밖에 안 벌어진 상태로 나란히 서게 된다 -- 측면 접촉의 주원인이었다.
-        const float required =
-            GetHalfWidth() + m_overtakeTarget->GetHalfWidth() + OVERTAKE_SETUP_CLEARANCE;
-        if (neighbors.targetSeen && std::fabs(neighbors.targetLateral) >= required)
+        const float required = neighbors.targetRequiredLateral;
+        if (neighbors.targetSeen && required > 0.0f &&
+            std::fabs(neighbors.targetLateral) >= required)
         {
             // 명령값이 아니라 실제로 벌어진 걸 확인하고 넘어간다.
             m_overtakeBestDeltaS = neighbors.targetDeltaS;
@@ -1661,6 +1862,8 @@ void Car::UpdateOvertake(const RaceLine &line, size_t myIndex, const RaceNeighbo
         if (m_overtakeTimer > OVERTAKE_SETUP_TIMEOUT) // 공간이 없어 못 벌린 것이다
         {
             m_overtakeCooldown = OVERTAKE_COOLDOWN;
+            ++m_overtakeAborts;
+            ++m_abortSetup;
             enter(OvertakeState::Return);
         }
         break;
@@ -1681,9 +1884,28 @@ void Car::UpdateOvertake(const RaceLine &line, size_t myIndex, const RaceNeighbo
                         (GetLength() + m_overtakeTarget->GetLength()) * 0.5f;
         if (neighbors.targetSeen && rearGap > OVERTAKE_CLEAR_MARGIN)
         {
+            ++m_overtakeSuccess;
             enter(OvertakeState::Return);
             break;
         }
+        // Setup에서 확보한 간격이 Attack 도중 다시 좁혀질 수 있다(로그: 4.1m로 진입해
+        // 1.5m까지 줄어든 채로 접촉). 종방향으로 겹친 상태에서 간격을 잃으면 밀어붙이지
+        // 말고 물러난다 -- Return이 오프셋을 붙잡은 채 뒤로 빼준다.
+        const float halfLengthSum = (GetLength() + m_overtakeTarget->GetLength()) * 0.5f;
+        const bool longitudinallyOverlapping =
+            neighbors.targetSeen && std::fabs(neighbors.targetDeltaS) < halfLengthSum;
+        constexpr float ATTACK_ABORT_HYSTERESIS = 0.8f;
+        if (longitudinallyOverlapping && neighbors.targetRequiredLateral > 0.0f &&
+            std::fabs(neighbors.targetLateral) <
+                neighbors.targetRequiredLateral * ATTACK_ABORT_HYSTERESIS)
+        {
+            m_overtakeCooldown = OVERTAKE_COOLDOWN;
+            ++m_overtakeAborts;
+            ++m_abortClearance;
+            enter(OvertakeState::Return);
+            break;
+        }
+
         // 진전이 없으면 6초를 다 기다리지 않고 접는다. 나란히 붙어 있는 시간이 길수록
         // 접촉 확률만 올라간다.
         if (neighbors.targetSeen)
@@ -1699,6 +1921,8 @@ void Car::UpdateOvertake(const RaceLine &line, size_t myIndex, const RaceNeighbo
         if (m_overtakeStall > OVERTAKE_STALL_TIME || m_overtakeTimer > OVERTAKE_TIMEOUT)
         {
             m_overtakeCooldown = OVERTAKE_COOLDOWN;
+            ++m_overtakeAborts;
+            ++m_abortStall;
             enter(OvertakeState::Return);
         }
         break;
@@ -1709,17 +1933,15 @@ void Car::UpdateOvertake(const RaceLine &line, size_t myIndex, const RaceNeighbo
         // 스티어링해 들어간다. 실패한 추월이 반드시 접촉으로 끝나던 원인이 이것이다.
         // 종방향 겹침이 풀릴 때까지는 옆으로 벌린 상태를 유지한다.
         bool overlapping = false;
-        bool targetAhead = false;
         if (m_overtakeTarget != nullptr && m_SimState->IsCarAlive(m_overtakeTarget) &&
             neighbors.targetSeen)
         {
             float halfLengthSum = (GetLength() + m_overtakeTarget->GetLength()) * 0.5f;
             overlapping = std::fabs(neighbors.targetDeltaS) - halfLengthSum < OVERTAKE_CLEAR_MARGIN;
-            targetAhead = neighbors.targetDeltaS > 0.0f;
         }
         m_overtakeHoldOffset = overlapping;
-        // 상대가 아직 앞이면 뒤로 빠져야 겹침이 풀린다. 앞질러 있는 중이면 그대로 간다.
-        m_overtakeBackOff = overlapping && targetAhead;
+        // 종방향 속도에는 손대지 않는다. 겹침이 풀릴 때까지 횡오프셋만 유지한다.
+        m_overtakeBackOff = false;
 
         if (!overlapping)
         {
@@ -1740,19 +1962,30 @@ void Car::UpdateOvertake(const RaceLine &line, size_t myIndex, const RaceNeighbo
     else
         desired = 0.0f;
 
-    // 옆에 나란히 붙은 차가 있으면 그쪽으로는 못 간다. 추월당하는 쪽도 이 규칙을 지켜야
-    // 한다 -- 방어를 안 하더라도, 최소한 코너에서 레이싱 라인을 따라 옆으로 흐르며
-    // 상대를 밀어내는 일은 없어야 접촉이 준다.
-    if (neighbors.alongsideSide != 0.0f && neighbors.alongsideClearance < SIDE_SAFE_CLEARANCE)
+    // 뒷차가 절반 길이 이상 들어왔으면 앞차도 수동적인 장애물이 아니다. 일반 근접 회피가
+    // 만든 값에 최종 경계를 걸어, 같은 여유를 두 번 더해 과도하게 밀려나는 것도 막는다.
+    ApplyYieldRule(neighbors, desired);
+    // 도로 경계와 모든 주변 차량의 점유 경계를 동시에 만족하는 구간만 허용한다.
+    const float roadMin = -(lineRoom + laneOffsetAtCar);
+    const float roadMax = lineRoom - laneOffsetAtCar;
+    const float safeMin = std::max(roadMin, neighbors.safeOffsetMin);
+    const float safeMax = std::min(roadMax, neighbors.safeOffsetMax);
+    if (safeMin <= safeMax)
     {
-        // clearance가 음수면(차체가 이미 겹침) 그만큼 더 크게 밀어낸다.
-        float push = std::min(SIDE_PUSH_MAX, SIDE_SAFE_CLEARANCE - neighbors.alongsideClearance);
-        desired -= neighbors.alongsideSide * push;
+        // 이전 프레임 목표가 새로 점유된 구간 안에 남아 있으면 감쇠를 기다리지 않고 취소한다.
+        // desired만 자르면 기존 m_raceLateralOffset이 몇 프레임 동안 계속 옆 차를 향한다.
+        m_raceLateralOffset = std::clamp(m_raceLateralOffset, safeMin, safeMax);
+        desired = std::clamp(desired, safeMin, safeMax);
     }
-    // 무슨 이유로 밀렸든 도로 밖으로는 못 나간다.
-    desired = std::clamp(desired, -(lineRoom + laneOffsetAtCar), lineRoom - laneOffsetAtCar);
+    else
+    {
+        // 양쪽이 모두 막히면 전술 목표를 버리고 실제 위치를 그대로 유지한다.
+        const float hold = std::clamp(neighbors.leader.myLateralOffset, roadMin, roadMax);
+        m_raceLateralOffset = hold;
+        desired = hold;
+    }
 
-    // 목표 오프셋으로 감쇠 이동. 한 프레임에 꺾어버리면 Stanley가 과조향한다.
+    // 목표 오프셋으로 감쇠 이동. 한 프레임에 꺾어버리면 Pure Pursuit이 과조향한다.
     m_raceLateralOffset += (desired - m_raceLateralOffset) * std::min(1.0f, dt * LATERAL_RESPONSE);
 }
 
@@ -1786,13 +2019,129 @@ Vec3 Car::GetBodyCenter() const
 // 매 프레임 돌며 연속적인 조향을 만든다
 float Car::ComputeContextSteer(const Vec3 &pursuitTarget, float pursuitSteer) const
 {
+    // Keep the racing-line steering unless its actual swept OBB will collide shortly.
+    // The old fan/slot search below is intentionally disabled: nearby cars alone must
+    // not pull this car away from the racing line.
+    constexpr float COLLISION_HORIZON = 0.45f;
+    constexpr float MAX_SWEEP_STEP = 2.0f;
+    constexpr float STEER_RATE = 1.0f;
+    constexpr float CORRECTIONS[] = {
+        ToRadians(4.0f),
+        ToRadians(8.0f),
+        ToRadians(12.0f),
+    };
+
+    (void)pursuitTarget;
+    m_ctxSteerDebugRad = 0.0f;
+    m_ctxSteerDebugDanger = 0.0f;
+    m_ctxSteerOpenLines.clear();
+    m_ctxSteerBlockedLines.clear();
+
+    if (m_speed < 0.1f || m_obstacles.empty())
+        return pursuitSteer;
+
+    // Vehicle entries are cached for sensor membership, but collision prediction
+    // must start from their current transforms.
+    std::vector<VehicleCollision::Obstacle> threats;
+    threats.reserve(m_obstacles.size());
+    for (const VehicleCollision::Obstacle &stored : m_obstacles)
+    {
+        if (stored.sourceCar == nullptr)
+        {
+            threats.push_back(stored);
+            continue;
+        }
+        if (m_SimState->IsCarAlive(stored.sourceCar))
+            threats.push_back(stored.sourceCar->MakeVehicleObstacle());
+    }
+    if (threats.empty())
+        return pursuitSteer;
+
+    const Vec3 startPosition = GetRigidbodyPosition();
+    const float startHeading = DirectionToAngleRad(GetForwardAxis());
+    const VehicleCollision::VehicleShape shape = BuildVehicleShape();
+    const int sweepSteps = std::clamp(
+        static_cast<int>(std::ceil(m_speed * COLLISION_HORIZON / MAX_SWEEP_STEP)), 3, 24);
+    const float dt = COLLISION_HORIZON / static_cast<float>(sweepSteps);
+    std::vector<VehicleCollision::Obstacle> predicted = threats;
+
+    auto collisionTime = [&](float targetSteer)
+    {
+        Vec3 position = startPosition;
+        float heading = startHeading;
+        float steer = m_steerAngle;
+
+        for (int step = 1; step <= sweepSteps; ++step)
+        {
+            const float maxSteerDelta = STEER_RATE * dt;
+            if (steer < targetSteer)
+                steer = std::min(steer + maxSteerDelta, targetSteer);
+            else
+                steer = std::max(steer - maxSteerDelta, targetSteer);
+
+            const float distance = m_speed * dt;
+            Vec3 forward(cosf(heading), 0.0f, sinf(heading));
+            position += forward * distance;
+            heading -= distance * tanf(steer) / std::max(0.1f, m_wheelbase);
+
+            const float elapsed = step * dt;
+            predicted = threats;
+            for (VehicleCollision::Obstacle &obstacle : predicted)
+            {
+                if (obstacle.type != VehicleCollision::ObstacleType::Dynamic)
+                    continue;
+                Vec3 obstacleForward(cosf(obstacle.headingRad), 0.0f, sinf(obstacle.headingRad));
+                obstacle.center += obstacleForward * (obstacle.speed * elapsed);
+            }
+
+            if (VehicleCollision::IsColliding(position, heading, predicted, shape))
+                return elapsed;
+        }
+        return COLLISION_HORIZON + dt;
+    };
+
+    const float safeTime = COLLISION_HORIZON + dt;
+    float bestSteer = pursuitSteer;
+    float bestCollisionTime = collisionTime(pursuitSteer);
+    if (bestCollisionTime >= safeTime)
+        return pursuitSteer;
+
+    // Only after a predicted collision, try the smallest correction first.
+    for (float correction : CORRECTIONS)
+    {
+        const float candidates[2] = {
+            std::clamp(pursuitSteer - correction, -m_maxSteerAngle, m_maxSteerAngle),
+            std::clamp(pursuitSteer + correction, -m_maxSteerAngle, m_maxSteerAngle),
+        };
+        const float candidateTimes[2] = {
+            collisionTime(candidates[0]),
+            collisionTime(candidates[1]),
+        };
+
+        for (int i = 0; i < 2; ++i)
+        {
+            if (candidateTimes[i] > bestCollisionTime)
+            {
+                bestCollisionTime = candidateTimes[i];
+                bestSteer = candidates[i];
+            }
+        }
+        if (bestCollisionTime >= safeTime)
+            break;
+    }
+
+    m_ctxSteerDebugRad = bestSteer - pursuitSteer;
+    m_ctxSteerDebugDanger = 1.0f;
+    return bestSteer;
+
+#if 0 // Legacy fan/slot avoidance steering.
     // 옆(90도)까지 본다. 나란히 붙은 차는 예전 60도 부채꼴에 아예 안 잡혀서,
     // 측면 접촉에 대한 최후 방어선이 없었다.
     constexpr int SLOT_COUNT = 15; // 180도/14 ~= 12.9도per슬롯 (기존 12도와 비슷한 해상도)
     constexpr float FAN_HALF = ToRadians(90.0f);
-    // 조향 방향 선택은 예전대로 앞쪽만 본다. 옆 슬롯까지 후보로 넣으면 "전부 봉쇄" 폴백에서
-    // 90도 옆으로 꺾는 명령이 나온다.
-    constexpr float STEER_PICK_HALF = ToRadians(60.0f);
+    // 측면 감지는 ±90도로 유지하되 실제 회피 방향은 앞쪽 ±40도 안에서만 고른다.
+    // 넓게 열면 장애물을 피하려다 옆 차선으로 급격히 꺾는 명령이 나온다.
+    constexpr float STEER_PICK_HALF = ToRadians(40.0f);
     // 이 각도 밖을 '옆'으로 보고, 막혔으면 그쪽으로 꺾는 것 자체를 막는다.
     constexpr float SIDE_ZONE_BEGIN = ToRadians(50.0f);
     constexpr float SIDE_BLOCK_CUTOFF = 0.5f;
@@ -1963,6 +2312,7 @@ float Car::ComputeContextSteer(const Vec3 &pursuitTarget, float pursuitSteer) co
     float steer = std::clamp(PurePursuitSteerAt(position, headingRad, aim, m_wheelbase),
                              -m_maxSteerAngle, m_maxSteerAngle);
     return applySideVeto(steer);
+#endif
 }
 
 void Car::UpdateSensors()

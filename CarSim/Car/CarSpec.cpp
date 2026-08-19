@@ -3,19 +3,19 @@
 
 const CarSpec &GetCarSpec(CarType type)
 {
-        static const CarSpec specs[] = {
-            CarSpec("Car_0", "Model\\car_1.obj", JPH::Vec3(0.9919f, 0.9674f, 2.1204f), JPH::Vec3(0.0f, 0.0f, 1.5f),
-                    JPH::Vec3(0.0f, 0.96f, 1.5f), 3.0f, 1300.0f),
-            CarSpec("Car_1", "Model\\car_2.obj", JPH::Vec3(1.3421f, 0.9073f, 2.8342f), JPH::Vec3(0.0f, 0.0f, 1.5f),
-                    JPH::Vec3(0.0f, 0.9f, 1.5f), 3.40f, 1600.0f),
-            CarSpec("Car_Jeep", "Model\\car_jeep.obj", JPH::Vec3(1.3952f, 0.9922f, 2.5856f), JPH::Vec3(0.0f, 0.0f, 1.65f),
-                    JPH::Vec3(0.0f, 0.99f, 1.65f), 3.26f, 1900.0f),
-            CarSpec("Car_LittleTruck", "Model\\car_littletruck.obj", JPH::Vec3(1.1088f, 1.1468f, 2.6419f),
-                    JPH::Vec3(0.0f, 0.0f, 1.72f), JPH::Vec3(0.0f, 1.15f, 1.72f), 3.42f, 1850.0f),
-            CarSpec("Car_Van", "Model\\car_van.obj", JPH::Vec3(1.1859f, 0.9729f, 2.8078f), JPH::Vec3(0.0f, 0.0f, 1.8f),
-                    JPH::Vec3(0.0f, 0.97f, 1.8f), 3.58f, 2000.0f),
-        };
-        return specs[static_cast<size_t>(type)];
+    static const CarSpec specs[] = {
+        CarSpec("Car_0", "Model\\car_1.obj", JPH::Vec3(0.95f, 0.9674f, 2.1204f), JPH::Vec3(0.0f, 0.0f, 1.5f),
+                JPH::Vec3(0.0f, 0.96f, 1.5f), 3.0f, 1300.0f),
+        CarSpec("Car_1", "Model\\car_2.obj", JPH::Vec3(1.3421f, 0.9073f, 2.8342f), JPH::Vec3(0.0f, 0.0f, 1.5f),
+                JPH::Vec3(0.0f, 0.9f, 1.5f), 3.40f, 1600.0f),
+        CarSpec("Car_Jeep", "Model\\car_jeep.obj", JPH::Vec3(1.3952f, 0.9922f, 2.5856f), JPH::Vec3(0.0f, 0.0f, 1.65f),
+                JPH::Vec3(0.0f, 0.99f, 1.65f), 3.26f, 1900.0f),
+        CarSpec("Car_LittleTruck", "Model\\car_littletruck.obj", JPH::Vec3(1.1088f, 1.1468f, 2.6419f),
+                JPH::Vec3(0.0f, 0.0f, 1.72f), JPH::Vec3(0.0f, 1.15f, 1.72f), 3.42f, 1850.0f),
+        CarSpec("Car_Van", "Model\\car_van.obj", JPH::Vec3(1.1859f, 0.9729f, 2.8078f), JPH::Vec3(0.0f, 0.0f, 1.8f),
+                JPH::Vec3(0.0f, 0.97f, 1.8f), 3.58f, 2000.0f),
+    };
+    return specs[static_cast<size_t>(type)];
 }
 
 namespace
@@ -50,9 +50,9 @@ CarPersonality MakeRacerPersonality(float skill, unsigned int jitterSeed)
 
     CarPersonality personality;
     // 최고속은 직선에서만 벌어지므로 폭을 좁게 둔다. 넓히면 한 랩 만에 줄이 늘어져 배틀이 사라진다.
-    personality.topSpeedFactor = Lerp(0.95f, 1.03f, skill) + Spread(jitterSeed, 0u, 0.015f);
+    personality.topSpeedFactor = Lerp(0.93f, 1.05f, skill) + Spread(jitterSeed, 0u, 0.02f);
     // 그립은 코너 통과속도를 지배한다(v = sqrt(grip/곡률)). 랩타임 차이의 대부분이 여기서 나온다.
-    personality.gripFactor = Lerp(0.88f, 1.06f, skill) + Spread(jitterSeed, 1u, 0.03f);
+    personality.gripFactor = Lerp(0.85f, 1.09f, skill) + Spread(jitterSeed, 1u, 0.04f);
     personality.accelFactor = Lerp(0.92f, 1.05f, skill) + Spread(jitterSeed, 2u, 0.025f);
     personality.brakeFactor = Lerp(0.85f, 1.05f, skill) + Spread(jitterSeed, 3u, 0.03f);
     // 잘하는 드라이버일수록 바짝 붙어 압박한다(작을수록 좁은 차간).

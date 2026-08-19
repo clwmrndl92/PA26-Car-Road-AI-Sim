@@ -125,10 +125,24 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
     for (const std::pair<size_t, XMFLOAT4> &saved : savedDiffuse)
         m_carModel->materials[saved.first].Set<XMFLOAT4>("$DiffuseColor", saved.second);
 
+    // 레이싱 라인은 포커스 여부와 무관하게 항상 표시한다. 나머지 디버그 표시(트레일,
+    // 콜라이더, 반응형 조향 레이 등)는 여전히 포커스된 차만 그린다.
+    if (m_racingLineRender.GetModel())
+    {
+        if (auto *pBasic = dynamic_cast<BasicEffect *>(&effect))
+        {
+            pBasic->SetRenderLines();
+            m_racingLineRender.Draw(context, effect);
+            pBasic->SetRenderDefault();
+        }
+    }
+
     if (!m_drawCollider)
         return;
 
-    if (m_debugBox.GetModel())
+    // 콜라이더 와이어프레임 박스 표시를 껐다. 트레일/레이싱 라인/조향 표시는 그대로 켜져 있다.
+    constexpr bool DRAW_COLLIDER_BOX = false;
+    if (DRAW_COLLIDER_BOX && m_debugBox.GetModel())
     {
         XMVECTOR colliderOffsetWorld = XMVector3Rotate(XMLoadFloat3(&m_colliderOffset), m_transform.GetRotationQuatXM());
         XMFLOAT3 colliderPos;
@@ -146,8 +160,7 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
     }
 
     if ((m_rearTrailRender.GetModel() || m_frontTrailRender.GetModel() || m_splineRender.GetModel() ||
-         m_ctxSteerOpenRender.GetModel() || m_ctxSteerBlockedRender.GetModel() ||
-         m_racingLineRender.GetModel()))
+         m_ctxSteerOpenRender.GetModel() || m_ctxSteerBlockedRender.GetModel()))
     {
         if (auto *pBasic = dynamic_cast<BasicEffect *>(&effect))
         {
@@ -162,8 +175,6 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
                 m_ctxSteerOpenRender.Draw(context, effect);
             if (m_ctxSteerBlockedRender.GetModel())
                 m_ctxSteerBlockedRender.Draw(context, effect);
-            if (m_racingLineRender.GetModel())
-                m_racingLineRender.Draw(context, effect);
             pBasic->SetRenderDefault();
         }
     }
@@ -342,18 +353,11 @@ void Car::UpdateWithControl()
 
 void Car::ApplyMotion()
 {
-    JPH::BodyID otherId;
-    if (PhysicsSystem::Get().GetNewContact(m_rigidbody.GetBodyID(), otherId))
-    {
-        float vy = m_rigidbody.GetLinearVelocity().GetY();
-        m_rigidbody.SetLinearVelocity(JPH::Vec3(0.0f, vy, 0.0f));
-        m_rigidbody.SetAngularVelocity(JPH::Vec3::sZero());
-        m_acceleration = 0.0f;
-        m_speed = 0.0f;
-        DebugConsole::Log(GetName() + ": CRASH!!");
-        return;
-    }
-
+    // 접촉 시 속도를 0으로 만들던 처리를 뺐다.
+    //
+    // 한 프레임 만에 100km/h에서 정지해 버리면 (1) 뒤차는 물리적으로 피할 방법이 없어
+    // 연쇄 추돌이 나고, (2) 서로 닿은 채 멈춘 두 대가 영원히 못 벗어나 랩을 끝내지 못했다.
+    // 접촉 자체는 DetectContact가 기록하므로 여기서 주행을 멈출 이유가 없다.
     float angularVelocity = GetSignedSpeed() * tan(m_steerAngle) / m_wheelbase;
     m_rigidbody.SetAngularVelocity(JPH::Vec3(0.0f, angularVelocity, 0.0f));
     m_rigidbody.SetLinearVelocity(ComputeDesiredVelocity());
@@ -365,21 +369,6 @@ JPH::Vec3 Car::ComputeDesiredVelocity() const
     DirectX::XMFLOAT3 fwd = m_transform.GetForwardAxis();
     float vy = m_rigidbody.GetLinearVelocity().GetY();
     return JPH::Vec3(fwd.x * signedSpeed, vy > 0.0f ? 0.0f : vy, fwd.z * signedSpeed);
-}
-
-float Car::Stanley(Vec3 pathPoint, Vec3 pathDirection)
-{
-    Vec3 frontAxle = GetPosition();
-    Vec3 carFwd = ToVec3(m_transform.GetForwardAxis()).Normalized();
-    Vec3 carRight = ToVec3(m_transform.GetRightAxis()).Normalized();
-    Vec3 pathDir = pathDirection.LengthSq() > 0.000001f ? pathDirection.Normalized() : carFwd;
-
-    float headingError = atan2f(carRight.Dot(pathDir), carFwd.Dot(pathDir));
-
-    float crossTrackRight = (frontAxle - pathPoint).Dot(carRight);
-    float crossTrackTerm = atanf(m_stanleyGain * -crossTrackRight / (m_speed + m_stanleySoft));
-
-    return std::clamp(headingError + crossTrackTerm, -m_maxSteerAngle, m_maxSteerAngle);
 }
 
 void Car::UpdateHorn(float dt)
@@ -654,38 +643,49 @@ void Car::RebuildSplineRender()
     m_splineRender.SetModel(pModel);
 }
 
-void Car::RebuildRacingLineRender()
+void Car::BuildRaceLineRenderObject(const RaceLine &line, const std::string &modelKey, RenderObject &out)
 {
-    if (m_raceLine == nullptr || m_raceLine->points.size() < 2)
+    if (line.points.size() < 2 || line.lapPoints < 2)
     {
-        m_racingLineRender.SetModel(nullptr);
+        out.SetModel(nullptr);
         return;
     }
 
     constexpr float RACING_LINE_HEIGHT = 0.35f; // 다른 디버그선 위로
 
     // 라인이 전략별로 공유되므로 모델도 전략마다 하나면 된다. 이름을 전략으로 잡아
-    // ModelManager가 재사용하게 한다 -- 차마다 트랙 전체를 다시 만들 이유가 없다.
+    // ModelManager가 재사용하게 한다 -- 차마다(그리고 차 없이 그리는 CarSim도) 트랙
+    // 전체를 다시 만들 이유가 없다.
     std::vector<DirectX::XMFLOAT3> points;
-    points.reserve(m_raceLine->lapPoints);
-    for (size_t i = 0; i < m_raceLine->lapPoints; ++i)
+    points.reserve(line.lapPoints);
+    for (size_t i = 0; i < line.lapPoints; ++i)
     {
-        DirectX::XMFLOAT3 p = ToXMFLOAT3(m_raceLine->points[i]);
+        DirectX::XMFLOAT3 p = ToXMFLOAT3(line.points[i]);
         p.y += RACING_LINE_HEIGHT;
         points.push_back(p);
     }
     if (points.size() < 2)
     {
-        m_racingLineRender.SetModel(nullptr);
+        out.SetModel(nullptr);
         return;
     }
 
-    Model *pModel = ModelManager::Get().CreateFromGeometry(
-        "__racing_line__:" + std::to_string(static_cast<int>(m_boundStrategy)),
-        Geometry::CreatePolyline(points));
+    Model *pModel = ModelManager::Get().CreateFromGeometry("__racing_line__:" + modelKey,
+                                                           Geometry::CreatePolyline(points));
     pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(0.0f, 0.3f, 1.0f, 1.0f));
     pModel->materials[0].Set<float>("$Opacity", 1.0f);
-    m_racingLineRender.SetModel(pModel);
+    out.SetModel(pModel);
+}
+
+void Car::RebuildRacingLineRender()
+{
+    if (m_raceLine == nullptr)
+    {
+        m_racingLineRender.SetModel(nullptr);
+        return;
+    }
+    BuildRaceLineRenderObject(*m_raceLine, std::to_string(static_cast<int>(m_boundStrategy)),
+                              m_racingLineRender);
 }
 
 namespace
@@ -729,6 +729,8 @@ namespace
 
 void Car::RebuildCtxSteerRender()
 {
+    // 컨텍스트 조향 안전/위험 레이 디버그 표시를 껐다. 필요할 때 이 return만 지우면 된다.
+    return;
     constexpr float DEBUG_LINE_HEIGHT = 0.25f; // 다른 디버그 레이보다 살짝 위(겹침 방지)
     BuildLineListModel(m_ctxSteerOpenRender, m_ctxSteerOpenLines, "__ctxsteer_open__:" + GetName(),
                        DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f), DEBUG_LINE_HEIGHT);
