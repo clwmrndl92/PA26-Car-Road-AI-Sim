@@ -68,6 +68,7 @@ bool CarSim::Init()
     if (!InitResource())
         return false;
 
+    SpawnAllNodes(); // TEMP-AUTOSPAWN
     return true;
 }
 
@@ -131,6 +132,9 @@ bool CarSim::InitResource()
         road->Init(JPH::Vec3(ROAD_SIZE * 0.5f, 0.05f, ROAD_SIZE * 0.5f), Rigidbody::Type::Static);
         m_GameObjects.push_back(road);
 
+        // QP가 비싸므로 트랙 전체 레이싱 라인을 여기서 전략별로 한 번만 풀어 공유시킨다.
+        Car::BuildSharedRaceLines(m_SimState);
+
         InitRoadRenderer();
         InitMarkingRenderer();
         InitRoadColliders();
@@ -172,8 +176,14 @@ void CarSim::SpawnCar(CarType type, CarPersonalityType personality)
 std::shared_ptr<Car> CarSim::SpawnCarAt(const Vec3 &position, const Vec3 &direction, CarType type,
                                         CarPersonalityType personality)
 {
+    return SpawnCarAt(position, direction, type, GetCarPersonality(personality));
+}
+
+std::shared_ptr<Car> CarSim::SpawnCarAt(const Vec3 &position, const Vec3 &direction, CarType type,
+                                        const CarPersonality &personality)
+{
     auto car = std::make_shared<Car>();
-    car->Init(GetCarSpec(type), GetCarPersonality(personality), &m_SimState,
+    car->Init(GetCarSpec(type), personality, &m_SimState,
               JPH::Vec3(position.GetX(), 0.1f, position.GetZ()));
     car->SetRotation(direction);
     car->SetId(m_carIDCounter);
@@ -184,11 +194,18 @@ std::shared_ptr<Car> CarSim::SpawnCarAt(const Vec3 &position, const Vec3 &direct
     return car;
 }
 
+// 그리드 한 대분 드라이버. 등급 3종으로만 나누면 30대 중 열 대가 완전히 같은 성능이라
+// 갭이 영원히 안 벌어진다 -- 스킬을 연속 분포로 뽑고 개체 시드로 축마다 흔든다.
+CarPersonality CarSim::MakeGridDriver() const
+{
+    float skill = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
+    return MakeRacerPersonality(skill, static_cast<unsigned int>(m_carIDCounter) + 1u);
+}
+
 void CarSim::SpawnAllCars()
 {
-    // 차종/성격 비율 -- 사용자가 지정한 3:3:1:1.5:1.5 / 7:1.5:1.5
+    // 차종 비율 -- 사용자가 지정한 3:3:1:1.5:1.5
     static const float kCarTypeWeights[] = {3.0f, 3.0f, 1.0f, 1.5f, 1.5f}; // Car0:Car1:Jeep:LittleTruck:Van
-    static const float kPersonalityWeights[] = {7.0f, 1.5f, 1.5f};         // Normal:Aggressive:Cautious
     static_assert(IM_ARRAYSIZE(kCarTypeWeights) == static_cast<int>(CarType::Count));
 
     constexpr float kSpawnRange = 150.0f; // x, z 각각 [-150, 150] 범위에 대충 흩뿌린다
@@ -201,16 +218,14 @@ void CarSim::SpawnAllCars()
         Vec3 direction(cosf(yaw), 0.0f, sinf(yaw));
 
         CarType type = static_cast<CarType>(PickWeightedIndex(kCarTypeWeights, IM_ARRAYSIZE(kCarTypeWeights)));
-        CarPersonalityType personality =
-            static_cast<CarPersonalityType>(PickWeightedIndex(kPersonalityWeights, IM_ARRAYSIZE(kPersonalityWeights)));
-        SpawnCarAt(position, direction, type, personality);
+        SpawnCarAt(position, direction, type, MakeGridDriver());
     }
 }
 
 void CarSim::SpawnAllNodes()
 {
-    static const float kCarTypeWeights[] = {3.0f, 3.0f, 1.0f, 1.5f, 1.5f}; // Car0:Car1:Jeep:LittleTruck:Van
-    static const float kPersonalityWeights[] = {7.0f, 1.5f, 1.5f};         // Normal:Aggressive:Cautious
+    // static const float kCarTypeWeights[] = {3.0f, 3.0f, 1.0f, 1.5f, 1.5f}; // Car0:Car1:Jeep:LittleTruck:Van
+    static const float kCarTypeWeights[] = {3.0f, 0.0f, 0.0f, 0.0f, 0.0f}; // Car0:Car1:Jeep:LittleTruck:Van
 
     for (const auto &[id, node] : m_RoadDataManager.GetNodes())
     {
@@ -218,9 +233,7 @@ void CarSim::SpawnAllNodes()
             continue;
 
         CarType type = static_cast<CarType>(PickWeightedIndex(kCarTypeWeights, IM_ARRAYSIZE(kCarTypeWeights)));
-        CarPersonalityType personality =
-            static_cast<CarPersonalityType>(PickWeightedIndex(kPersonalityWeights, IM_ARRAYSIZE(kPersonalityWeights)));
-        SpawnCarAt(node->position, node->direction, type, personality);
+        SpawnCarAt(node->position, node->direction, type, MakeGridDriver());
     }
 }
 
@@ -264,7 +277,7 @@ void CarSim::SpawnManualCar(CarType type)
     }
 
     auto car = std::make_shared<Car>();
-    car->Init(GetCarSpec(type), GetCarPersonality(CarPersonalityType::Normal), &m_SimState, spawnPos);
+    car->Init(GetCarSpec(type), GetCarPersonality(CarPersonalityType::Balanced), &m_SimState, spawnPos);
     car->SetRotation(spawnDir);
     car->SetControl(true);
     car->SetId(m_carIDCounter++);
@@ -455,10 +468,67 @@ void CarSim::UpdateUI(float dt)
     }
     ImGui::End();
 
+    ImGui::SetNextWindowPos(ImVec2(10.0f, 320.0f), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Standings"))
+    {
+        ImGui::Text("t %.0f s   contacts %d", m_SimState.GetSimTime(), m_SimState.GetContactCount());
+        ImGui::Text("logs: race_contacts.csv / race_laps.csv");
+        ImGui::Separator();
+
+        std::vector<Car *> ordered;
+        ordered.reserve(m_CarObjects.size());
+        for (const std::shared_ptr<Car> &car : m_CarObjects)
+            ordered.push_back(car.get());
+        std::sort(ordered.begin(), ordered.end(),
+                  [](const Car *a, const Car *b) { return a->GetRaceProgress() > b->GetRaceProgress(); });
+
+        if (ImGui::BeginTable("standings", 7,
+                              ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_ScrollY,
+                              ImVec2(0.0f, 260.0f)))
+        {
+            ImGui::TableSetupColumn("P");
+            ImGui::TableSetupColumn("car");
+            ImGui::TableSetupColumn("lap");
+            ImGui::TableSetupColumn("last");
+            ImGui::TableSetupColumn("best");
+            ImGui::TableSetupColumn("+ovt");
+            ImGui::TableSetupColumn("-ovt");
+            ImGui::TableHeadersRow();
+            for (size_t i = 0; i < ordered.size(); ++i)
+            {
+                const Car *car = ordered[i];
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::Text("%d", static_cast<int>(i) + 1);
+                ImGui::TableNextColumn();
+                ImGui::Text("%s", car->GetName().c_str());
+                ImGui::TableNextColumn();
+                ImGui::Text("%d", car->GetLap());
+                ImGui::TableNextColumn();
+                if (car->GetLastLapTime() > 0.0f)
+                    ImGui::Text("%.2f", car->GetLastLapTime());
+                else
+                    ImGui::TextUnformatted("-");
+                ImGui::TableNextColumn();
+                if (car->GetBestLapTime() > 0.0f)
+                    ImGui::Text("%.2f", car->GetBestLapTime());
+                else
+                    ImGui::TextUnformatted("-");
+                ImGui::TableNextColumn();
+                ImGui::Text("%d", car->GetOvertakes());
+                ImGui::TableNextColumn();
+                ImGui::Text("%d", car->GetOvertakenBy());
+            }
+            ImGui::EndTable();
+        }
+    }
+    ImGui::End();
+
     ImGui::SetNextWindowPos(ImVec2(280.0f, 100.0f), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("Spawn Car"))
     {
-        static const char *kPersonalityNames[] = {"Normal", "Aggressive", "Cautious"};
+        static const char *kPersonalityNames[] = {"Ace", "Balanced", "Rookie"};
+        static_assert(IM_ARRAYSIZE(kPersonalityNames) == static_cast<int>(CarPersonalityType::Count));
         ImGui::Combo("Personality", &m_SpawnPersonalityIndex, kPersonalityNames, IM_ARRAYSIZE(kPersonalityNames));
         CarPersonalityType personality = static_cast<CarPersonalityType>(m_SpawnPersonalityIndex);
 

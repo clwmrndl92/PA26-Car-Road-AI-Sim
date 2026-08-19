@@ -12,8 +12,10 @@ add_executable(Tests
     TrafficSignalTests.cpp
     VehicleCollisionBenchmark.cpp
     CorridorSweepBenchmark.cpp
+    QPSolverBenchmark.cpp
     ${CMAKE_SOURCE_DIR}/CarSim/Nav/TrafficSignal.cpp
     ${CMAKE_SOURCE_DIR}/CarSim/Nav/VehicleCollision.cpp
+    ${CMAKE_SOURCE_DIR}/CarSim/Car/RacingLineQP.cpp
 )
 target_include_directories(Tests PRIVATE ${CMAKE_SOURCE_DIR}/CarSim)
 

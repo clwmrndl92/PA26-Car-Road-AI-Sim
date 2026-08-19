@@ -22,7 +22,15 @@ void Car::Init(const CarSpec &spec, const CarPersonality &personality, Simulatio
     SetRenderOffset(ToXMFLOAT3(spec.renderOffset));
     m_wheelbase = spec.wheelbase;
     m_halfExtents = spec.halfExtents;
+    // 개체별 성능 편차를 여기서 한 번만 굽는다. 이 차이가 랩타임 차 -> 갭 변화 -> 추월 기회가 된다.
     m_personality = personality;
+    m_maxSpeed = BASE_MAX_SPEED * personality.topSpeedFactor;
+    m_maxAccel = BASE_MAX_ACCEL * personality.accelFactor;
+    m_maxBrake = BASE_MAX_BRAKE * personality.brakeFactor;
+    m_gripAccel = BASE_GRIP_ACCEL * personality.gripFactor;
+    m_speedCap = m_maxSpeed;
+    m_jerkUp = personality.jerkUp;
+    m_jerkDown = personality.jerkDown;
 
     DirectX::XMFLOAT3 fwd = m_transform.GetForwardAxis();
     m_transform.SetPosition(position.GetX() - fwd.x * m_wheelbase,
@@ -79,6 +87,9 @@ void Car::UpdatePhysics(float dt)
     m_deltaTime = dt;
     if (IsAiDelayed())
         return;
+    // 접촉 목록은 PhysicsSystem::Update가 매 스텝 지운다. 그 Update보다 먼저 도는
+    // 여기서 읽어야 직전 스텝의 접촉을 놓치지 않는다.
+    DetectContact();
     if (m_wantSegmentTick)
         m_vehicleController.Tick(*this);
     UpdateCar();
@@ -282,9 +293,11 @@ void Car::UpdateCar()
     else
         m_speed += m_acceleration * m_deltaTime;
 
-    m_speed = std::clamp(m_speed, 0.0f, m_maxSpeed);
+    // m_maxSpeed가 아니라 m_speedCap이다 -- 슬립스트림이 얹힌 상한을 여기서 자르면
+    // 와류 이득이 통째로 사라진다. AI가 아닐 땐 m_speedCap == m_maxSpeed.
+    m_speed = std::clamp(m_speed, 0.0f, m_speedCap);
 
-    m_maxSteerAngle = CalcMaxSteerAngle(m_speed, m_wheelbase);
+    m_maxSteerAngle = CalcMaxSteerAngle(m_speed, m_wheelbase, m_gripAccel);
     m_steerAngle = std::clamp(m_steerAngle, -m_maxSteerAngle, m_maxSteerAngle);
 }
 
@@ -451,6 +464,24 @@ void Car::UpdateDebugWindow()
         ImGui::Text("Plan accel: %.2f m/s^2", m_planAccelDebug);
         ImGui::Text("Cur offset d: %.2f m", m_currentOffset);
 
+        ImGui::Text("Overtake: %s  side %+.0f  offset %+.2f m", OvertakeStateToString(m_overtakeState),
+                    m_overtakeSide, m_raceLateralOffset);
+        if (m_overtakeState == OvertakeState::Follow && m_overtakeBlock[0] != 0)
+            ImGui::Text("  blocked by: %s", m_overtakeBlock);
+        if (m_overtakeState == OvertakeState::Setup || m_overtakeState == OvertakeState::Attack)
+            ImGui::Text("  t %.1fs  stall %.1fs", m_overtakeTimer, m_overtakeStall);
+        if (m_overtakeHoldOffset)
+            ImGui::Text("  holding offset (still overlapping)%s", m_overtakeBackOff ? " + backing off" : "");
+        if (m_overtakeCooldown > 0.0f)
+            ImGui::Text("  cooldown %.1f s", m_overtakeCooldown);
+
+        if (m_leader.IsValid() && m_SimState->IsCarAlive(m_leader.car))
+            ImGui::Text("Leader: %s  gap %.1f m  closing %+.1f km/h  dOffset %+.2f m",
+                        m_leader.car->GetName().c_str(), m_leader.gap, m_leader.closingSpeed * 3.6f,
+                        m_leader.lateralOffset - m_leader.myLateralOffset);
+        else
+            ImGui::Text("Leader: none");
+
         if (UsesReactiveSteer())
             ImGui::Text("ReactiveSteer: slot %.0f deg, danger %.2f", ToDegrees(m_ctxSteerDebugRad),
                         m_ctxSteerDebugDanger);
@@ -463,11 +494,82 @@ void Car::UpdateDebugWindow()
             m_apexStrategy = static_cast<ApexStrategy>(apexIndex);
 
         ImGui::Separator();
-        ImGui::Text("Personality (notes/accel.txt A~D)");
+        ImGui::Text("Driver / Car");
+        ImGui::Text("Top speed: %.0f km/h (x%.3f)", m_maxSpeed * 3.6f, m_personality.topSpeedFactor);
+        ImGui::Text("Grip: %.2f m/s^2 (x%.3f)", m_gripAccel, m_personality.gripFactor);
+        ImGui::Text("Accel: %.2f / Brake: %.2f m/s^2", m_maxAccel, m_maxBrake);
+        ImGui::Text("Headway: x%.2f", m_personality.headwayFactor);
+        if (m_slipstream > 0.005f)
+            ImGui::Text("Slipstream: %.0f%% (gap %.1f m) -> cap %.0f km/h", m_slipstream * 100.0f,
+                        m_slipstreamGapDebug, m_speedCap * 3.6f);
+        else
+            ImGui::Text("Slipstream: clean air");
         ImGui::SliderFloat("Jerk Up Max", &m_jerkUp, 5.0f, 50.0f);
         ImGui::SliderFloat("Jerk Down Max", &m_jerkDown, 10.0f, 100.0f);
     }
     ImGui::End();
+}
+
+void Car::UpdateRacePosition(int position, float now)
+{
+    if (position != m_pendingPosition)
+    {
+        m_pendingPosition = position;
+        m_pendingPositionSince = now;
+        return;
+    }
+    if (position == m_racePosition)
+        return;
+
+    // 접전 중에는 순위가 프레임마다 뒤집힌다. 잠깐 앞섰다 돌아온 걸 추월로 세면
+    // 카운트가 의미 없이 부풀려지므로, 일정 시간 유지될 때만 확정한다.
+    constexpr float POSITION_COMMIT_TIME = 0.75f;
+    if (now - m_pendingPositionSince < POSITION_COMMIT_TIME)
+        return;
+
+    if (m_racePosition > 0)
+    {
+        const int gained = m_racePosition - position;
+        if (gained > 0)
+            m_overtakes += gained;
+        else
+            m_overtakenBy += -gained;
+    }
+    m_racePosition = position;
+}
+
+void Car::OnLapCompleted()
+{
+    const float now = m_SimState->GetSimTime();
+    if (m_lapStartTime >= 0.0f) // 스폰 지점이 결승선이 아니므로 첫 통과는 계측하지 않는다
+    {
+        m_lastLapTime = now - m_lapStartTime;
+        if (m_bestLapTime <= 0.0f || m_lastLapTime < m_bestLapTime)
+            m_bestLapTime = m_lastLapTime;
+        ++m_lap;
+        m_SimState->LogLap(*this, m_lastLapTime);
+    }
+    else
+    {
+        ++m_lap;
+    }
+    m_lapStartTime = now;
+}
+
+void Car::DetectContact()
+{
+    JPH::BodyID otherBody;
+    if (!PhysicsSystem::Get().GetNewContact(m_rigidbody.GetBodyID(), otherBody))
+        return;
+
+    Car *other = m_SimState->FindCarByBody(otherBody);
+    if (other == nullptr || other == this)
+        return; // 도로/장애물 접촉은 여기 관심사가 아니다
+
+    m_lastContactCar = other;
+    m_lastContactTime = m_SimState->GetSimTime();
+    if (m_SimState->ShouldLogContact(GetId(), other->GetId()))
+        m_SimState->LogContact(*this, *other);
 }
 
 void Car::UpdateTrail()
@@ -554,7 +656,7 @@ void Car::RebuildSplineRender()
 
 void Car::RebuildRacingLineRender()
 {
-    if (m_raceLine.points.size() < 2)
+    if (m_raceLine == nullptr || m_raceLine->points.size() < 2)
     {
         m_racingLineRender.SetModel(nullptr);
         return;
@@ -562,15 +664,13 @@ void Car::RebuildRacingLineRender()
 
     constexpr float RACING_LINE_HEIGHT = 0.35f; // 다른 디버그선 위로
 
-    // 문맥용으로만 붙인 앞뒤 도로는 빼고 그린다
+    // 라인이 전략별로 공유되므로 모델도 전략마다 하나면 된다. 이름을 전략으로 잡아
+    // ModelManager가 재사용하게 한다 -- 차마다 트랙 전체를 다시 만들 이유가 없다.
     std::vector<DirectX::XMFLOAT3> points;
-    points.reserve(m_raceLine.points.size());
-    for (size_t i = 0; i < m_raceLine.points.size(); ++i)
+    points.reserve(m_raceLine->lapPoints);
+    for (size_t i = 0; i < m_raceLine->lapPoints; ++i)
     {
-        float s = m_raceLine.arcLength[i];
-        if (s < m_raceLine.drawFromS || s > m_raceLine.drawToS)
-            continue;
-        DirectX::XMFLOAT3 p = ToXMFLOAT3(m_raceLine.points[i]);
+        DirectX::XMFLOAT3 p = ToXMFLOAT3(m_raceLine->points[i]);
         p.y += RACING_LINE_HEIGHT;
         points.push_back(p);
     }
@@ -580,8 +680,9 @@ void Car::RebuildRacingLineRender()
         return;
     }
 
-    Model *pModel = ModelManager::Get().CreateFromGeometry("__racing_line__:" + GetName(),
-                                                           Geometry::CreatePolyline(points));
+    Model *pModel = ModelManager::Get().CreateFromGeometry(
+        "__racing_line__:" + std::to_string(static_cast<int>(m_boundStrategy)),
+        Geometry::CreatePolyline(points));
     pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(0.0f, 0.3f, 1.0f, 1.0f));
     pModel->materials[0].Set<float>("$Opacity", 1.0f);
     m_racingLineRender.SetModel(pModel);

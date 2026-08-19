@@ -36,6 +36,10 @@ private:
     void SpawnCar(CarType type, CarPersonalityType personality);
     std::shared_ptr<Car> SpawnCarAt(const Vec3 &position, const Vec3 &direction, CarType type,
                                     CarPersonalityType personality);
+    // 그리드 스폰용 -- 등급 프리셋이 아니라 개체마다 다른 드라이버를 직접 넘긴다
+    std::shared_ptr<Car> SpawnCarAt(const Vec3 &position, const Vec3 &direction, CarType type,
+                                    const CarPersonality &personality);
+    CarPersonality MakeGridDriver() const;
     void SpawnAllCars();
     void SpawnAllNodes();
     void RemoveCar(const std::shared_ptr<Car> &car);
@@ -58,7 +62,7 @@ private:
     std::string m_PickedObjectName;
     std::weak_ptr<Car> m_pPickedObject;
     int m_carIDCounter = 1;
-    int m_SpawnPersonalityIndex = 0;
+    int m_SpawnPersonalityIndex = 1; // Balanced
 
     std::shared_ptr<Car> m_ManualCar;
     int m_ManualCarTypeIndex = 0;
