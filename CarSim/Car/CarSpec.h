@@ -14,7 +14,19 @@ struct CarPersonality
     float brakeFactor = 1.0f;         // IDM 쾌적감속(b)에 곱하는 계수 (클수록 더 세게 감속)
     float politeness = 0.2f;          // MOBIL 이타성 계수 (0=완전 이기주의 ~ 0.5=현실적 양보)
     float laneChangeLerpAlpha = 0.2f; // 횡오프셋 Lerp 비율 (리플랜 주기마다 목표로 이만큼 이동, 클수록 급하게 붙음)
+
+    // 아래는 레이스 모드 전용 편차. 전부 Car의 레이싱 기준값(RACE_BASE_*)에 곱해진다.
+    // 일반 주행에는 쓰이지 않으므로 기본값 1.0이면 기존 동작 그대로다. 개체마다 다른 값을
+    // 받아 랩타임 차이 -- 곧 추월 기회 -- 를 만드는 게 목적이라, 모든 항목이 "어떤 추월
+    // 상황을 만드는가"에 대응하도록 골랐다.
+    float topSpeedFactor = 1.0f; // 최고속도 배수. 직선 속도차 -> 스트레이트 추월
+    float gripFactor = 1.0f;     // 타이어 마찰원 반경 배수. 코너 통과속도 -> 랩타임 차의 대부분
+    float accelFactor = 1.0f;    // 가속 배수. 코너 탈출 가속 -> 다음 직선 진입 속도차
 };
+
+// 레이스 그리드용 연속 분포. skill 0=루키 ~ 1=에이스이고, 같은 스킬이라도 jitterSeed로
+// 축마다 조금씩 흔들어 완전히 동일한 차가 두 대 나오지 않게 한다(jitterSeed 0이면 지터 없음).
+CarPersonality MakeRacerPersonality(float skill, unsigned int jitterSeed);
 
 struct CarSpec
 {

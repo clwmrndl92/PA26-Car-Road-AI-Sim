@@ -604,6 +604,37 @@ vector<const LaneBand *> RoadDataManager::GetDrivingBands(const shared_ptr<Road>
     return bands;
 }
 
+vector<const LaneBand *> RoadDataManager::GetAllDrivingBands(const shared_ptr<Road> &road) const
+{
+    vector<const LaneBand *> bands;
+    const LaneSection *sec = GetLateralProfile(road, 0.0f);
+    if (sec == nullptr)
+        return bands;
+
+    for (const LaneBand &b : sec->bands)
+        if (b.type == LaneType::Driving)
+            bands.push_back(&b);
+    sort(bands.begin(), bands.end(), [](const LaneBand *a, const LaneBand *b)
+         { return a->centerOffset < b->centerOffset; });
+    return bands;
+}
+
+bool RoadDataManager::GetTrackExtent(const shared_ptr<Road> &road, float &outMin, float &outMax) const
+{
+    vector<const LaneBand *> bands = GetAllDrivingBands(road);
+    if (bands.empty())
+        return false;
+
+    outMin = numeric_limits<float>::max();
+    outMax = -numeric_limits<float>::max();
+    for (const LaneBand *b : bands)
+    {
+        outMin = std::min(outMin, b->centerOffset - b->width * 0.5f);
+        outMax = std::max(outMax, b->centerOffset + b->width * 0.5f);
+    }
+    return true;
+}
+
 Vec3 RoadDataManager::GetTravelEnd(const shared_ptr<Road> &road, LaneDirection direction) const
 {
     if (road == nullptr)

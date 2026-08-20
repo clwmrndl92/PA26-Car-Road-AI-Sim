@@ -211,6 +211,12 @@ public:
     const LaneBand *FindNearestBand(const shared_ptr<Road> &road, float d, LaneDirection direction) const;
     // 진행방향이 맞는 driving 밴드들을 centerOffset 오름차순으로. 없으면 빈 벡터(폴백 판단은 호출측).
     vector<const LaneBand *> GetDrivingBands(const shared_ptr<Road> &road, LaneDirection direction) const;
+    // 방향과 무관하게 driving 밴드 전부를 centerOffset 오름차순으로. 서킷처럼 노면 전체가
+    // 주행면이고 마주오는 차가 없는 경우에 쓴다 -- 방향을 안 적은 데이터는 오프셋 부호로
+    // 방향을 추정하기 때문에(참조선 왼쪽 = Backward), 방향으로 거르면 트랙이 통째로 사라진다.
+    vector<const LaneBand *> GetAllDrivingBands(const shared_ptr<Road> &road) const;
+    // 위 밴드들이 덮는 구간을 참조선 기준 [min, max] d로. 밴드가 없으면 false.
+    bool GetTrackExtent(const shared_ptr<Road> &road, float &outMin, float &outMax) const;
     // 그 방향으로 달렸을 때 road를 빠져나가는 끝점(Forward면 참조선 끝, Backward면 시작).
     Vec3 GetTravelEnd(const shared_ptr<Road> &road, LaneDirection direction) const;
 

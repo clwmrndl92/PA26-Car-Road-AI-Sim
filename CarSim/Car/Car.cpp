@@ -83,6 +83,9 @@ void Car::Update(float dt)
     case Mode::Drive:
         UpdateDrive();
         break;
+    case Mode::Race:
+        UpdateRace();
+        break;
     }
     UpdateHorn(dt);
 }
@@ -155,7 +158,8 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
 
     if ((m_rearTrailRender.GetModel() || m_frontTrailRender.GetModel() || m_splineRender.GetModel() ||
          m_sensorRender.GetModel() || m_emergRayRender.GetModel() || m_parkPathRender.GetModel() ||
-         m_parkTargetLine.GetModel() || m_ctxSteerOpenRender.GetModel() || m_ctxSteerBlockedRender.GetModel()))
+         m_parkTargetLine.GetModel() || m_ctxSteerOpenRender.GetModel() || m_ctxSteerBlockedRender.GetModel() ||
+         m_racingLineRender.GetModel()))
     {
         if (auto *pBasic = dynamic_cast<BasicEffect *>(&effect))
         {
@@ -178,6 +182,10 @@ void Car::Draw(ID3D11DeviceContext *context, IEffect &effect)
                 m_ctxSteerOpenRender.Draw(context, effect);
             if (m_ctxSteerBlockedRender.GetModel())
                 m_ctxSteerBlockedRender.Draw(context, effect);
+            // 라인은 전략별로 공유 모델이라 차 수만큼 그려도 새 지오메트리가 생기진 않는다.
+            // 그래도 선택된 차에서만 켜야 30대가 같은 선을 겹쳐 그리지 않는다.
+            if (m_isFocused && m_racingLineRender.GetModel())
+                m_racingLineRender.Draw(context, effect);
             pBasic->SetRenderDefault();
         }
     }
@@ -401,9 +409,14 @@ void Car::UpdateCar()
     else
         m_speed += m_acceleration * m_deltaTime;
 
-    m_speed = std::clamp(m_speed, 0.0f, m_maxSpeed);
+    // 레이스는 와류 이득이 최고속 위로 얹히므로 m_maxSpeed로 자르면 토우가 잘려나간다.
+    const float speedLimit = m_mode == Mode::Race ? std::max(m_maxSpeed, m_raceSpeedCap) : m_maxSpeed;
+    m_speed = std::clamp(m_speed, 0.0f, speedLimit);
 
-    m_maxSteerAngle = CalcMaxSteerAngle(m_speed);
+    // 레이스는 조향 포화도 마찰원(그립)에서 나온다 -- 그립 좋은 차가 고속에서 더 큰
+    // 조향각을 쓸 수 있어야 코너 통과속도 차이가 실제 궤적으로 드러난다.
+    m_maxSteerAngle = m_mode == Mode::Race ? CalcRaceMaxSteerAngle(m_speed, m_wheelbase, m_gripAccel)
+                                           : CalcMaxSteerAngle(m_speed);
     m_steerAngle = std::clamp(m_steerAngle, -m_maxSteerAngle, m_maxSteerAngle);
 }
 
@@ -782,6 +795,39 @@ void Car::UpdateDebugWindow()
         if (UsesReactiveSteer())
             ImGui::Text("Static block: %.2fs / %.2fs", m_staticBlockTimer, STATIC_BLOCK_TRIGGER);
 
+        if (m_mode == Mode::Race)
+        {
+            ImGui::Separator();
+            ImGui::Text("Race");
+            static const char *kStrategyNames[] = {"Early", "Apex", "Late"};
+            int strategyIndex = static_cast<int>(m_apexStrategy);
+            if (ImGui::Combo("Apex", &strategyIndex, kStrategyNames, IM_ARRAYSIZE(kStrategyNames)))
+                m_apexStrategy = static_cast<ApexStrategy>(strategyIndex);
+            ImGui::Text("Pos: %d   Lap: %d", m_racePosition, m_lap);
+            ImGui::Text("Lap time: %.2fs (best %.2fs)", m_lastLapTime, m_bestLapTime);
+            ImGui::Text("s: %.1f / %.1f m   d: %.2f m", m_raceS, m_lapLength, m_raceD);
+            ImGui::Text("Curvature: %.5f (R %.1f m)", m_raceCurvature,
+                        std::fabs(m_raceCurvature) > 1e-5f ? 1.0f / std::fabs(m_raceCurvature) : 0.0f);
+            ImGui::Text("Overtakes: +%d / -%d", m_overtakes, m_overtakenBy);
+            ImGui::Text("Overtake: %s (side %.0f, offset %.2f m)", OvertakeStateToString(m_overtakeState),
+                        m_overtakeSide, m_raceLateralOffset);
+            if (m_overtakeBlock[0] != '\0')
+                ImGui::Text("  blocked by: %s", m_overtakeBlock);
+            ImGui::Text("  attempts %d / aborts %d / passes %d", m_overtakeAttempts, m_overtakeAborts,
+                        m_overtakeSuccess);
+            // UI는 물리 틱과 다른 시점에 그려진다. 그 사이 사라진 차일 수 있으니 역참조 전 확인.
+            if (m_leader.IsValid() && m_SimState->IsCarAlive(m_leader.car))
+                ImGui::Text("Leader: %s (gap %.1f m, closing %.1f m/s)", m_leader.car->GetName().c_str(),
+                            m_leader.gap, m_leader.closingSpeed);
+            else
+                ImGui::Text("Leader: clear track");
+            if (m_slipstream > 0.01f)
+                ImGui::Text("Slipstream: %.0f%% (gap %.1f m)", m_slipstream * 100.0f, m_slipstreamGapDebug);
+            else
+                ImGui::Text("Slipstream: clean air");
+            ImGui::Text("Cap: %.0f km/h  grip %.1f m/s^2", m_raceSpeedCap * 3.6f, m_gripAccel);
+        }
+
         ImGui::Separator();
         ImGui::Text("Personality (notes/accel.txt A~D)");
         ImGui::SliderFloat("Speed Factor", &m_personality.speedFactor, 0.5f, 1.3f);
@@ -843,6 +889,79 @@ void Car::RebuildTrailRender(RenderObject &render, const std::deque<DirectX::XMF
     pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", color);
     pModel->materials[0].Set<float>("$Opacity", 1.0f);
     render.SetModel(pModel);
+}
+
+void Car::BuildRaceLineRenderObject(const RaceLine &line, const std::string &modelKey, RenderObject &out,
+                                    const DirectX::XMFLOAT4 &color)
+{
+    if (line.points.size() < 2 || line.lapPoints < 2)
+    {
+        out.SetModel(nullptr);
+        return;
+    }
+
+    constexpr float RACING_LINE_HEIGHT = 0.35f; // 다른 디버그선 위로
+
+    // 라인이 전략별로 공유되므로 모델도 전략마다 하나면 된다. 이름을 전략으로 잡아
+    // ModelManager가 재사용하게 한다 -- 차마다 트랙 전체를 다시 만들 이유가 없다.
+    std::vector<DirectX::XMFLOAT3> points;
+    points.reserve(line.lapPoints);
+    for (size_t i = 0; i < line.lapPoints; ++i)
+    {
+        DirectX::XMFLOAT3 p = ToXMFLOAT3(line.points[i]);
+        p.y += RACING_LINE_HEIGHT;
+        points.push_back(p);
+    }
+    if (points.size() < 2)
+    {
+        out.SetModel(nullptr);
+        return;
+    }
+
+    Model *pModel = ModelManager::Get().CreateFromGeometry("__racing_line__:" + modelKey,
+                                                           Geometry::CreatePolyline(points));
+    pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", color);
+    pModel->materials[0].Set<float>("$Opacity", 1.0f);
+    out.SetModel(pModel);
+}
+
+void Car::RebuildRacingLineRender()
+{
+    if (m_raceLine == nullptr)
+    {
+        m_racingLineRender.SetModel(nullptr);
+        return;
+    }
+    BuildRaceLineRenderObject(*m_raceLine, std::to_string(static_cast<int>(m_boundStrategy)),
+                              m_racingLineRender);
+}
+
+void Car::UpdateRacePosition(int position, float now)
+{
+    if (position != m_pendingPosition)
+    {
+        m_pendingPosition = position;
+        m_pendingPositionSince = now;
+        return;
+    }
+    if (position == m_racePosition)
+        return;
+
+    // 접전 중에는 순위가 프레임마다 뒤집힌다. 잠깐 앞섰다 돌아온 걸 추월로 세면
+    // 카운트가 의미 없이 부풀려지므로, 일정 시간 유지될 때만 확정한다.
+    constexpr float POSITION_COMMIT_TIME = 0.75f;
+    if (now - m_pendingPositionSince < POSITION_COMMIT_TIME)
+        return;
+
+    if (m_racePosition > 0)
+    {
+        const int gained = m_racePosition - position;
+        if (gained > 0)
+            m_overtakes += gained;
+        else
+            m_overtakenBy += -gained;
+    }
+    m_racePosition = position;
 }
 
 void Car::RebuildSplineRender()

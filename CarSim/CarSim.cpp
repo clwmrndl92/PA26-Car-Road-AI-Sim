@@ -9,6 +9,7 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 
 using namespace DirectX;
 
@@ -62,7 +63,7 @@ bool CarSim::Init()
     if (!GameApp::Init())
         return false;
 
-    m_RoadDataManager.Init(NAV_DATA_DIR "/data4.json");
+    m_RoadDataManager.Init(NAV_DATA_DIR "/data6.json");
     m_MarkingDataManager.Init(NAV_DATA_DIR "/marking.json");
 
     if (!InitResource())
@@ -512,6 +513,7 @@ void CarSim::UpdateUI(float dt)
     ImGui::End();
 
     DrawManualCarWindow();
+    DrawRaceWindow();
 
     DebugConsole::Get().Draw();
 }
@@ -539,6 +541,192 @@ void CarSim::DrawManualCarWindow()
         else
             ImGui::Text("Driving: (none)");
         ImGui::TextWrapped("Controls: Up/Down = accel/brake, Left/Right = steer, Z = gear, Space = reset");
+    }
+    ImGui::End();
+}
+
+// QP는 전략당 수백 ms라 게임 시작 때 항상 돌릴 수는 없다. 레이스를 실제로 켤 때
+// 한 번만 풀고 SimulationState가 소유한다.
+bool CarSim::EnsureRaceLines()
+{
+    if (m_SimState.HasRaceLines())
+        return true;
+
+    Car::BuildSharedRaceLines(m_SimState);
+    if (!m_SimState.HasRaceLines())
+    {
+        DebugConsole::Log("Race: failed to build racing lines (no road loop?)");
+        return false;
+    }
+
+    // 차 선택과 무관하게 기준 라인(Apex)을 항상 그려 둔다.
+    if (const RaceLine *line = m_SimState.GetRaceLine(static_cast<int>(Car::ApexStrategy::Apex)))
+        Car::BuildRaceLineRenderObject(*line, "shared", m_RaceLineRender);
+    return true;
+}
+
+void CarSim::SetRaceModeForAll(bool on)
+{
+    if (on && !EnsureRaceLines())
+        return;
+
+    for (auto &car : m_CarObjects)
+        if (car != m_ManualCar) // 수동조작 차는 AI FSM을 타지 않는다
+            car->SetRaceMode(on);
+
+    if (!on)
+        m_RaceLineRender.SetModel(nullptr);
+}
+
+// 레이싱 라인 위에 일정 간격으로 세운다. 무작위 스폰을 쓰면 출발과 동시에 서로를 향해
+// 수렴해 첫 코너 전에 전부 엉킨다.
+void CarSim::SpawnRaceGrid(int carCount)
+{
+    if (!EnsureRaceLines())
+        return;
+
+    const RaceLine *line = m_SimState.GetRaceLine(static_cast<int>(Car::ApexStrategy::Apex));
+    if (line == nullptr || line->lapPoints < 2)
+        return;
+
+    RemoveAllCars();
+
+    constexpr float GRID_SPACING = 12.0f; // 앞뒤 간격(m)
+    constexpr float GRID_STAGGER = 1.6f;  // 좌우 엇갈림(m). 정렬 그리드처럼 두 줄로 세운다
+    static const float kCarTypeWeights[] = {3.0f, 3.0f, 1.0f, 1.5f, 1.5f};
+
+    const size_t lapPoints = line->lapPoints;
+
+    // 그리드 기준은 월드 원점에서 가장 가까운 라인 지점. 랩 시작점(arcLength[0])을 쓰면
+    // JSON에서 어느 도로가 먼저 읽히냐에 따라 스타트 위치가 트랙 반대편으로 튄다.
+    // 차는 레이싱 라인 위에 있어야 주행이 성립하므로 라인에 붙인 채로 원점에 맞춘다.
+    float anchorS = 0.0f;
+    {
+        float bestDistance = std::numeric_limits<float>::max();
+        for (size_t k = 0; k < lapPoints; ++k)
+        {
+            const Vec3 &p = line->points[k];
+            float distance = p.GetX() * p.GetX() + p.GetZ() * p.GetZ(); // 원점까지 (y는 무시)
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                anchorS = line->arcLength[k];
+            }
+        }
+    }
+
+    for (int i = 0; i < carCount; ++i)
+    {
+        // 폴포지션이 기준점에 서고, i가 커질수록 뒤(음의 s)에 놓는다.
+        float s = anchorS - static_cast<float>(i) * GRID_SPACING;
+        while (s < 0.0f)
+            s += line->lapLength;
+
+        size_t index = 0;
+        for (size_t k = 0; k + 1 < lapPoints; ++k)
+        {
+            if (line->arcLength[k] <= s && s < line->arcLength[k + 1])
+            {
+                index = k;
+                break;
+            }
+        }
+        size_t next = (index + 1) % lapPoints;
+
+        Vec3 position = line->points[index];
+        Vec3 direction = line->points[next] - line->points[index];
+        if (direction.LengthSq() < 1e-6f)
+            continue;
+        direction = direction.Normalized();
+
+        // 좌우 엇갈림. 라인 접선의 오른쪽 법선으로 민다.
+        Vec3 right(direction.GetZ(), 0.0f, -direction.GetX());
+        position = position + right * ((i % 2 == 0) ? GRID_STAGGER : -GRID_STAGGER);
+
+        CarType type = static_cast<CarType>(PickWeightedIndex(kCarTypeWeights, IM_ARRAYSIZE(kCarTypeWeights)));
+        auto car = std::make_shared<Car>();
+        // 앞줄일수록 잘 타는 드라이버. 스킬이 뒤로 갈수록 낮아져야 추월 압력이 생긴다.
+        float skill = carCount > 1 ? 1.0f - static_cast<float>(i) / static_cast<float>(carCount - 1) : 1.0f;
+        car->Init(GetCarSpec(type), MakeRacerPersonality(skill, static_cast<unsigned int>(i + 1)),
+                  &m_SimState, JPH::Vec3(position.GetX(), 0.1f, position.GetZ()));
+        car->SetRotation(direction);
+        car->SetRoaming(true);
+        car->SetId(m_carIDCounter);
+        car->SetName(car->GetName() + ToString(m_carIDCounter++));
+        car->SetRaceMode(true);
+
+        m_GameObjects.push_back(car);
+        m_CarObjects.push_back(car);
+    }
+
+    m_RaceMode = true;
+    DebugConsole::Log("Race: grid of " + ToString(carCount) + " cars");
+}
+
+void CarSim::DrawRaceWindow()
+{
+    ImGui::SetNextWindowPos(ImVec2(280.0f, 520.0f), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Race"))
+    {
+        if (ImGui::Checkbox("Race Mode", &m_RaceMode))
+            SetRaceModeForAll(m_RaceMode);
+        ImGui::TextWrapped("Race mode replaces signals/lane rules with a shared minimum-curvature "
+                           "racing line, slipstream, and an overtake FSM.");
+
+        ImGui::Separator();
+        ImGui::SliderInt("Grid Size", &m_RaceGridCount, 2, kMaxSpawnAllCount);
+        if (ImGui::Button("Spawn Race Grid"))
+            SpawnRaceGrid(m_RaceGridCount);
+        ImGui::SameLine();
+        if (ImGui::Button("Build Lines"))
+            EnsureRaceLines();
+
+        ImGui::Separator();
+        if (!m_SimState.HasRaceLines())
+        {
+            ImGui::Text("Racing lines: not built");
+        }
+        else
+        {
+            const RaceLine *line = m_SimState.GetRaceLine(static_cast<int>(Car::ApexStrategy::Apex));
+            ImGui::Text("Lap length: %.0f m", line != nullptr ? line->lapLength : 0.0f);
+
+            // 순위표. SimulationState가 이미 진행도 순으로 갱신해 두므로 여기선 정렬만 한다.
+            std::vector<std::shared_ptr<Car>> ordered;
+            for (const auto &car : m_CarObjects)
+                if (car->IsRaceMode())
+                    ordered.push_back(car);
+            std::sort(ordered.begin(), ordered.end(),
+                      [](const std::shared_ptr<Car> &a, const std::shared_ptr<Car> &b)
+                      { return a->GetRaceProgress() > b->GetRaceProgress(); });
+
+            if (ImGui::BeginTable("standings", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
+            {
+                ImGui::TableSetupColumn("P");
+                ImGui::TableSetupColumn("Car");
+                ImGui::TableSetupColumn("Lap");
+                ImGui::TableSetupColumn("Best");
+                ImGui::TableSetupColumn("+/-");
+                ImGui::TableHeadersRow();
+                for (size_t i = 0; i < ordered.size(); ++i)
+                {
+                    const std::shared_ptr<Car> &car = ordered[i];
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%d", static_cast<int>(i) + 1);
+                    ImGui::TableNextColumn();
+                    if (ImGui::Selectable(car->GetName().c_str(), car == m_pPickedObject.lock()))
+                        FocusOnObject(car);
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%d", car->GetLap());
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%.2f", car->GetBestLapTime());
+                    ImGui::TableNextColumn();
+                    ImGui::Text("+%d/-%d", car->GetOvertakes(), car->GetOvertakenBy());
+                }
+                ImGui::EndTable();
+            }
+        }
     }
     ImGui::End();
 }
@@ -582,6 +770,8 @@ void CarSim::DrawScene()
         m_GridYZ.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     for (auto &edgeRender : m_RoadEdgeRenders)
         edgeRender.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
+    if (m_RaceLineRender.GetModel())
+        m_RaceLineRender.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     m_BasicEffect.SetRenderDefault();
 
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());

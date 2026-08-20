@@ -1,3 +1,6 @@
+// Car.h를 먼저 넣는다. RoadDataManager.h가 using namespace std를 하기 때문에,
+// 그 뒤에 Windows/DirectX 헤더가 들어오면 std::byte와 rpcndr.h의 byte가 충돌한다.
+#include "Car/Car.h"
 #include "SimulationState.h"
 #include "RoadDataManager.h"
 
@@ -5,6 +8,31 @@ TrafficSignal::Color SimulationState::GetSignalColor(float phaseOffset, float gr
                                                      float redDuration) const
 {
     return TrafficSignal::GetColor(greenDuration, yellowDuration, redDuration, phaseOffset, m_simTime);
+}
+
+// 레이스 순위. 매 프레임 정렬할 이유가 없어서 주기를 둔다.
+void SimulationState::UpdateStandings()
+{
+    constexpr float STANDINGS_INTERVAL = 0.25f;
+
+    if (m_raceLines.empty() || m_cars.size() < 2 || m_simTime - m_lastStandingsTime < STANDINGS_INTERVAL)
+        return;
+    m_lastStandingsTime = m_simTime;
+
+    // 레이스 중인 차만 센다. 라인이 만들어져 있어도 일반 주행 차는 진행도가 없어서,
+    // 같이 넣으면 순위가 무의미하게 흔들리고 추월 카운트가 부풀려진다.
+    std::vector<Car *> ordered;
+    for (Car *car : m_cars)
+        if (car->IsRaceMode())
+            ordered.push_back(car);
+    if (ordered.size() < 2)
+        return;
+
+    std::sort(ordered.begin(), ordered.end(),
+              [](const Car *a, const Car *b) { return a->GetRaceProgress() > b->GetRaceProgress(); });
+
+    for (size_t i = 0; i < ordered.size(); ++i)
+        ordered[i]->UpdateRacePosition(static_cast<int>(i) + 1, m_simTime);
 }
 
 void SimulationState::UnregisterCar(Car *car)

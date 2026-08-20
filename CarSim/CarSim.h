@@ -45,6 +45,11 @@ private:
     void RemoveManualCar();
     void DrawManualCarWindow();
 
+    void DrawRaceWindow();
+    bool EnsureRaceLines();           // 아직 없으면 공유 라인을 푼다(수백 ms, 1회)
+    void SetRaceModeForAll(bool on);  // 등록된 모든 차의 레이스 모드 토글
+    void SpawnRaceGrid(int carCount); // 레이싱 라인 위에 그리드로 세운다
+
 private:
     static constexpr int kMaxSpawnAllCount = 30;
 
@@ -63,6 +68,10 @@ private:
 
     std::shared_ptr<Car> m_ManualCar;
     int m_ManualCarTypeIndex = 0;
+
+    bool m_RaceMode = false;
+    int m_RaceGridCount = 10;
+    RenderObject m_RaceLineRender; // 차 선택과 무관하게 항상 보이는 기준 라인
 
     std::vector<RenderObject> m_RoadRenders;
     std::vector<RenderObject> m_RoadEdgeRenders;
