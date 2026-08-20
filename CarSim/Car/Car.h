@@ -89,7 +89,8 @@ public:
     // 차 인스턴스 없이도 레이싱 라인을 그릴 수 있도록 렌더 오브젝트만 따로 뽑아내는 헬퍼.
     // Car::RebuildRacingLineRender와 CarSim의 상시 표시가 이 하나를 같이 쓴다.
     static void BuildRaceLineRenderObject(const RaceLine &line, const std::string &modelKey,
-                                          RenderObject &out);
+                                          RenderObject &out,
+                                          const DirectX::XMFLOAT4 &color = DirectX::XMFLOAT4(0.0f, 0.3f, 1.0f, 1.0f));
     // 공유 라인을 만들 때 쓴 횡방향 여유(차선 반폭 - 최대 차폭 - 여유).
     // 추월 오프셋 클램프도 같은 값을 써야 라인이 도로 밖으로 안 나간다.
     static float SharedLineRoom();

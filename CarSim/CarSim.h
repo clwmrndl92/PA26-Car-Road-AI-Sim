@@ -68,7 +68,7 @@ private:
     int m_ManualCarTypeIndex = 0;
 
     std::vector<RenderObject> m_RoadRenders;
-    RenderObject m_RaceLineRender; // 차가 한 대도 없어도 상시 표시(BuildSharedRaceLines 직후 채운다)
+    std::vector<RenderObject> m_RaceLineRenders; // 전략별(Early/Apex/Late) 상시 표시(BuildSharedRaceLines 직후 채운다)
     std::vector<RenderObject> m_RoadEdgeRenders;
     std::vector<RenderObject> m_MarkingRenders;
     std::vector<RenderObject> m_DynamicObstacleRenders;

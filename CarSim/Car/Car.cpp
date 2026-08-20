@@ -643,7 +643,8 @@ void Car::RebuildSplineRender()
     m_splineRender.SetModel(pModel);
 }
 
-void Car::BuildRaceLineRenderObject(const RaceLine &line, const std::string &modelKey, RenderObject &out)
+void Car::BuildRaceLineRenderObject(const RaceLine &line, const std::string &modelKey, RenderObject &out,
+                                    const DirectX::XMFLOAT4 &color)
 {
     if (line.points.size() < 2 || line.lapPoints < 2)
     {
@@ -672,7 +673,7 @@ void Car::BuildRaceLineRenderObject(const RaceLine &line, const std::string &mod
 
     Model *pModel = ModelManager::Get().CreateFromGeometry("__racing_line__:" + modelKey,
                                                            Geometry::CreatePolyline(points));
-    pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", DirectX::XMFLOAT4(0.0f, 0.3f, 1.0f, 1.0f));
+    pModel->materials[0].Set<DirectX::XMFLOAT4>("$DiffuseColor", color);
     pModel->materials[0].Set<float>("$Opacity", 1.0f);
     out.SetModel(pModel);
 }

@@ -287,18 +287,20 @@ namespace
         return out;
     }
 
-    // 전략 = 곡률 최소 <-> 거리 최소 사이의 가중치.
-    // 거리항을 키우면 안쪽을 파고들어(=이른 에이펙스) 짧게 가고, 0이면 순수 최소곡률(=늦은 에이펙스).
-    float StrategyLengthWeight(Car::ApexStrategy strategy)
+    // 전략 = 에이펙스를 코너의 앞/뒤 어디에 찍을지. 최소곡률 해의 오프셋 프로파일을
+    // 통째로 s축으로 밀어서 만든다. 거리항 가중치를 키우는 방식은 코너 전체를 안쪽으로
+    // 눌러 라인이 짜부되기만 하고 에이펙스 위치는 그대로라 쓰지 않는다.
+    // 앞으로 당기면(양수) 봉우리가 일찍 와서 이른 에이펙스가 된다. 1m 간격이라 단위는 m.
+    int StrategyApexShift(Car::ApexStrategy strategy)
     {
         switch (strategy)
         {
         case Car::ApexStrategy::Early:
-            return 0.20f;
-        case Car::ApexStrategy::Apex:
-            return 0.05f;
+            return 12;
+        case Car::ApexStrategy::Late:
+            return -12;
         default:
-            return 0.0f;
+            return 0; // Apex -- 최소곡률 해 그대로(곡률 정점)
         }
     }
 
@@ -446,14 +448,23 @@ namespace
         MedianFilterCurvature(ref.curvature, QP_CURVATURE_MEDIAN_HALF);
 
         std::vector<float> dPadded = RacingLineQP::SolveMinCurvatureCascade(
-            ref.curvature, SPACING, -lineRoom, lineRoom, StrategyLengthWeight(strategy));
+            ref.curvature, SPACING, -lineRoom, lineRoom, 0.0f);
 
         // 우리가 쓸 구간은 [pad, pad + lapCount + pad) -- 한 바퀴 + 겹침.
         // 겹침 구간 d를 랩 앞부분 값으로 맞춰야 결승선에서 좌표가 정확히 이어진다.
+        // 전략 시프트는 랩 인덱스를 구한 뒤에 걸어야(랩 길이로 감싸서) 겹침 구간이
+        // 랩 앞부분과 계속 같은 값을 갖는다.
         const size_t keep = lapCount + pad;
+        const int apexShift = StrategyApexShift(strategy);
         std::vector<float> d(keep);
         for (size_t i = 0; i < keep; ++i)
-            d[i] = dPadded[pad + (i < lapCount ? i : i - lapCount)];
+        {
+            const size_t lapIndex = (i < lapCount ? i : i - lapCount);
+            const size_t shifted = static_cast<size_t>(
+                (static_cast<long long>(lapIndex) + apexShift + static_cast<long long>(lapCount)) %
+                static_cast<long long>(lapCount));
+            d[i] = dPadded[pad + shifted];
+        }
 
         RacingPathData solved;
         solved.points.reserve(keep);

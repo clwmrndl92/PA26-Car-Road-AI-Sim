@@ -96,7 +96,7 @@ TEST_CASE(Benchmark_RacingLineQP_Scaling)
     std::printf("  points | average solve | time/point\n");
 
     float checksum = 0.0f;
-    for (size_t pointCount : {64u, 256u, 1024u, 4096u})
+    for (size_t pointCount : {64u, 256u, 1024u, 5100u, 4096u})
     {
         std::vector<float> reference = MakeSCurve(pointCount);
         const int repetitions = pointCount <= 256 ? 20 : 8;

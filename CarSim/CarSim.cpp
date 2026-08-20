@@ -133,12 +133,21 @@ bool CarSim::InitResource()
 
         // QP가 비싸므로 트랙 전체 레이싱 라인을 여기서 전략별로 한 번만 풀어 공유시킨다.
         Car::BuildSharedRaceLines(m_SimState);
-        // 차가 한 대도 스폰되지 않아도 레이싱 라인이 보이도록, 기본 전략(Late) 라인을
-        // 여기서 바로 렌더 오브젝트로 뽑아 둔다. 차가 생기면 각자의 RebuildRacingLineRender가
-        // 같은 모델 키를 써서 이 오브젝트와 같은 지오메트리를 그대로 재사용한다.
-        if (const RaceLine *defaultLine = m_SimState.GetRaceLine(static_cast<int>(Car::ApexStrategy::Late)))
-            Car::BuildRaceLineRenderObject(*defaultLine, std::to_string(static_cast<int>(Car::ApexStrategy::Late)),
-                                           m_RaceLineRender);
+        // 차가 한 대도 스폰되지 않아도 레이싱 라인이 보이도록, 세 전략(Early/Apex/Late) 라인을
+        // 모두 여기서 렌더 오브젝트로 뽑아 둔다. 차가 생기면 각자의 RebuildRacingLineRender가
+        // 같은 모델 키를 써서 이 오브젝트들과 같은 지오메트리를 그대로 재사용한다.
+        constexpr int STRATEGY_COUNT = static_cast<int>(Car::ApexStrategy::Count);
+        const DirectX::XMFLOAT4 STRATEGY_COLORS[STRATEGY_COUNT] = {
+            DirectX::XMFLOAT4(1.0f, 0.2f, 0.2f, 1.0f), // Early -- 빨강
+            DirectX::XMFLOAT4(0.2f, 1.0f, 0.2f, 1.0f), // Apex  -- 초록
+            DirectX::XMFLOAT4(0.0f, 0.3f, 1.0f, 1.0f), // Late  -- 파랑
+        };
+        m_RaceLineRenders.resize(STRATEGY_COUNT);
+        for (int i = 0; i < STRATEGY_COUNT; ++i)
+        {
+            if (const RaceLine *line = m_SimState.GetRaceLine(i))
+                Car::BuildRaceLineRenderObject(*line, std::to_string(i), m_RaceLineRenders[i], STRATEGY_COLORS[i]);
+        }
 
         InitRoadRenderer();
         InitMarkingRenderer();
@@ -623,9 +632,13 @@ void CarSim::DrawScene()
 
     m_BasicEffect.SetRenderLines();
     // 차가 생기면 각자 자기 전략의 레이싱 라인을 그리므로(Car::Draw), 여기서 또 그리면
-    // 기본 전략(Late) 라인이 중복으로 그려진다. 차가 없을 때만 이 상시 표시를 쓴다.
-    if (m_CarObjects.empty() && m_RaceLineRender.GetModel())
-        m_RaceLineRender.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
+    // 라인이 중복으로 그려진다. 차가 없을 때만 이 상시 표시(전략 3개 전부)를 쓴다.
+    if (m_CarObjects.empty())
+    {
+        for (auto &raceLineRender : m_RaceLineRenders)
+            if (raceLineRender.GetModel())
+                raceLineRender.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
+    }
     if (m_ShowGridXZ)
         m_GridXZ.Draw(m_pd3dImmediateContext.Get(), m_BasicEffect);
     if (m_ShowGridXY)
